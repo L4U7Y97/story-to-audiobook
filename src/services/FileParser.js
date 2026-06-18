@@ -1,5 +1,3 @@
-import * as pdfjs from 'pdfjs-dist'
-
 class FileParser {
   static async parse(file) {
     const extension = file.name.split('.').pop().toLowerCase()
@@ -32,7 +30,8 @@ class FileParser {
       const reader = new FileReader()
       reader.onload = async (e) => {
         try {
-          const pdf = await pdfjs.getDocument(e.target.result).promise
+          const { getDocument } = await import('pdfjs-dist')
+          const pdf = await getDocument(e.target.result).promise
           let text = ''
           for (let i = 1; i <= pdf.numPages; i++) {
             const page = await pdf.getPage(i)
@@ -41,7 +40,8 @@ class FileParser {
           }
           resolve(text)
         } catch (error) {
-          reject(error)
+          console.error('PDF parsing error:', error)
+          reject(new Error('Failed to parse PDF. Please ensure it contains extractable text.'))
         }
       }
       reader.onerror = reject
@@ -54,20 +54,30 @@ class FileParser {
       const reader = new FileReader()
       reader.onload = async (e) => {
         try {
-          const { default: EPub } = await import('epub')
-          const epub = new EPub(e.target.result)
-          await new Promise((resolveEpub) => epub.on('end', resolveEpub))
+          const JSZip = (await import('jszip')).default
+          const zip = new JSZip()
+          await zip.loadAsync(e.target.result)
           
           let text = ''
-          epub.spine.forEach((chapter) => {
-            chapter.on('end', (section) => {
-              text += section + ' '
-            })
+          const promises = []
+          
+          zip.forEach((relativePath, file) => {
+            if (relativePath.includes('.xhtml') || relativePath.includes('.html')) {
+              promises.push(
+                file.async('string').then(content => {
+                  const parser = new DOMParser()
+                  const doc = parser.parseFromString(content, 'text/html')
+                  text += doc.body.innerText + ' '
+                })
+              )
+            }
           })
           
+          await Promise.all(promises)
           resolve(text)
         } catch (error) {
-          reject(error)
+          console.error('EPUB parsing error:', error)
+          reject(new Error('Failed to parse EPUB file.'))
         }
       }
       reader.onerror = reject
@@ -80,14 +90,28 @@ class FileParser {
       const reader = new FileReader()
       reader.onload = async (e) => {
         try {
-          const { Document } = await import('docx')
-          const doc = await Document.load(new Uint8Array(e.target.result))
-          const text = doc.sections.map(section => 
-            section.children.map(p => p.text).join('\n')
-          ).join('\n')
+          const JSZip = (await import('jszip')).default
+          const zip = new JSZip()
+          await zip.loadAsync(e.target.result)
+          
+          const xmlContent = await zip.file('word/document.xml').async('string')
+          const parser = new DOMParser()
+          const doc = parser.parseFromString(xmlContent, 'text/xml')
+          
+          const paragraphs = doc.querySelectorAll('w\\:p, p')
+          let text = ''
+          paragraphs.forEach(p => {
+            const texts = p.querySelectorAll('w\\:t, t')
+            texts.forEach(t => {
+              text += t.textContent
+            })
+            text += '\n'
+          })
+          
           resolve(text)
         } catch (error) {
-          reject(error)
+          console.error('DOCX parsing error:', error)
+          reject(new Error('Failed to parse DOCX file.'))
         }
       }
       reader.onerror = reject

@@ -1,4 +1,4 @@
-import axios from 'axios'
+import * as pdfjs from 'pdfjs-dist'
 
 class FileParser {
   static async parse(file) {
@@ -32,9 +32,13 @@ class FileParser {
       const reader = new FileReader()
       reader.onload = async (e) => {
         try {
-          const { default: pdfParse } = await import('pdf-parse')
-          const data = await pdfParse(e.target.result)
-          const text = data.text
+          const pdf = await pdfjs.getDocument(e.target.result).promise
+          let text = ''
+          for (let i = 1; i <= pdf.numPages; i++) {
+            const page = await pdf.getPage(i)
+            const textContent = await page.getTextContent()
+            text += textContent.items.map(item => item.str).join(' ') + ' '
+          }
           resolve(text)
         } catch (error) {
           reject(error)
@@ -76,7 +80,7 @@ class FileParser {
       const reader = new FileReader()
       reader.onload = async (e) => {
         try {
-          const { Document } = await import('js-docx')
+          const { Document } = await import('docx')
           const doc = await Document.load(new Uint8Array(e.target.result))
           const text = doc.sections.map(section => 
             section.children.map(p => p.text).join('\n')

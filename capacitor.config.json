@@ -1,0 +1,14 @@
+{
+  "appId": "com.storytoaudiobook.app",
+  "appName": "Story to Audiobook",
+  "webDir": "dist",
+  "bundledWebRuntime": false,
+  "server": {
+    "androidScheme": "https"
+  },
+  "plugins": {
+    "SplashScreen": {
+      "launchShowDuration": 0
+    }
+  }
+}

@@ -16,18 +16,21 @@
   },
   "dependencies": {
     "vue": "^3.4.0",
-    "capacitor": "^6.0.0",
-    "@capacitor/core": "^6.0.0",
-    "@capacitor/filesystem": "^6.0.0",
+    "@capacitor/core": "^5.7.0",
+    "@capacitor/filesystem": "^5.2.0",
     "axios": "^1.6.0",
     "js-docx": "^0.5.1",
     "pdf-parse": "^1.1.1",
     "epub": "^1.2.0",
-    "compromise": "^14.0.0"
+    "compromise": "^14.10.0"
   },
   "devDependencies": {
     "vite": "^5.0.0",
     "@vitejs/plugin-vue": "^5.0.0",
-    "@capacitor/cli": "^6.0.0"
+    "@capacitor/cli": "^5.7.0"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
   }
 }

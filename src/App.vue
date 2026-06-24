@@ -94,8 +94,8 @@ export default {
     const storyText = ref({})
     const darkMode = ref(false)
 
-    // Apply dark mode to document element
-    watch(darkMode, (isDark) => {
+    // Apply dark mode to document element and save to localStorage
+    const applyDarkMode = (isDark) => {
       if (isDark) {
         document.documentElement.classList.add('dark-mode')
         document.body.style.background = '#1a1a1a'
@@ -105,6 +105,17 @@ export default {
         document.body.style.background = '#ffffff'
         document.body.style.color = '#333'
       }
+      localStorage.setItem('darkMode', isDark)
+    }
+
+    watch(darkMode, (isDark) => {
+      applyDarkMode(isDark)
+    })
+
+    // Load dark mode preference from localStorage on mount
+    onMounted(() => {
+      const savedDarkMode = localStorage.getItem('darkMode') === 'true'
+      darkMode.value = savedDarkMode
     })
 
     const triggerFileInput = () => {

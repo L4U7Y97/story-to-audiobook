@@ -1,13 +1,17 @@
 <template>
-  <div class="app-container">
+  <div class="app-container" :class="{ 'dark-mode': darkMode }">
     <header class="app-header">
-      <h1>📖 Story to Audiobook</h1>
-      <p>Transform your stories into immersive audiobooks with character voices</p>
+      <div class="header-content">
+        <h1>📖 StA</h1>
+        <button @click="darkMode = !darkMode" class="theme-toggle" :title="darkMode ? 'Light Mode' : 'Dark Mode'">
+          {{ darkMode ? '☀️' : '🌙' }}
+        </button>
+      </div>
     </header>
 
     <main class="app-main">
       <div class="upload-section">
-        <h2>Upload Your Story</h2>
+        <h2>Upload</h2>
         <div class="upload-area" @click="triggerFileInput" @dragover.prevent @drop.prevent="handleDrop">
           <input 
             ref="fileInput" 
@@ -26,7 +30,7 @@
 
       <div v-if="uploadedFile" class="processing-section">
         <h2>Processing</h2>
-        <button @click="analyzeStory" class="btn-primary">Analyze Story & Identify Characters</button>
+        <button @click="analyzeStory" class="btn-primary">Analyze & Identify Characters</button>
         
         <div v-if="loading" class="loading">
           <p>🔄 Processing...</p>
@@ -73,7 +77,7 @@
 </template>
 
 <script>
-import { ref } from 'vue'
+import { ref, watch, onMounted } from 'vue'
 import StoryAnalyzer from './services/StoryAnalyzer.js'
 import AudiobookGenerator from './services/AudiobookGenerator.js'
 import FileParser from './services/FileParser.js'
@@ -87,27 +91,37 @@ export default {
     const loading = ref(false)
     const audioGenerated = ref(false)
     const audioUrl = ref(null)
-    const storyText = ref('')
+    const storyText = ref({})
+    const darkMode = ref(false)
+
+    // Apply dark mode to document element
+    watch(darkMode, (isDark) => {
+      if (isDark) {
+        document.documentElement.classList.add('dark-mode')
+        document.body.style.background = '#1a1a1a'
+        document.body.style.color = '#e0e0e0'
+      } else {
+        document.documentElement.classList.remove('dark-mode')
+        document.body.style.background = '#ffffff'
+        document.body.style.color = '#333'
+      }
+    })
 
     const triggerFileInput = () => {
       fileInput.value.click()
     }
 
     const handleFileUpload = async (event) => {
-      const file = event.target.files[0]
-      if (file) {
-        uploadedFile.value = file
-        try {
-          storyText.value = await FileParser.parse(file)
-        } catch (error) {
-          console.error('File parsing error:', error)
-          alert('Error parsing file. Please try another.')
-        }
-      }
+      console.log('handleFileUpload')
+      await uploadStoryFile(event.target.files[0])
     }
 
     const handleDrop = async (event) => {
-      const file = event.dataTransfer.files[0]
+      await uploadStoryFile(event.dataTransfer.files[0])
+    }
+
+    const uploadStoryFile = async (file) => {
+      console.log(file)
       if (file) {
         uploadedFile.value = file
         try {
@@ -173,6 +187,7 @@ export default {
       loading,
       audioGenerated,
       audioUrl,
+      darkMode,
       triggerFileInput,
       handleFileUpload,
       handleDrop,
@@ -190,6 +205,15 @@ export default {
   margin: 0 auto;
   padding: 20px;
   font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  background: #ffffff;
+  color: #333;
+  transition: background-color 0.3s ease, color 0.3s ease;
+  min-height: 100vh;
+}
+
+.app-container.dark-mode {
+  background: #1a1a1a;
+  color: #e0e0e0;
 }
 
 .app-header {
@@ -199,11 +223,42 @@ export default {
   color: white;
   padding: 40px 20px;
   border-radius: 10px;
+  position: relative;
+}
+
+.header-content {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  position: relative;
 }
 
 .app-header h1 {
   font-size: 2.5em;
-  margin: 0 0 10px 0;
+  margin: 0;
+}
+
+.theme-toggle {
+  position: absolute;
+  right: 20px;
+  background: rgba(255, 255, 255, 0.2);
+  border: 2px solid rgba(255, 255, 255, 0.5);
+  color: white;
+  font-size: 1.5em;
+  width: 50px;
+  height: 50px;
+  border-radius: 50%;
+  cursor: pointer;
+  transition: all 0.3s ease;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.theme-toggle:hover {
+  background: rgba(255, 255, 255, 0.3);
+  border-color: rgba(255, 255, 255, 0.8);
+  transform: scale(1.1);
 }
 
 .app-header p {
@@ -223,6 +278,14 @@ export default {
   padding: 30px;
   border-radius: 10px;
   box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+}
+
+.dark-mode .upload-section,
+.dark-mode .processing-section,
+.dark-mode .conversion-section {
+  background: #2a2a2a;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.5);
 }
 
 .upload-area {
@@ -235,15 +298,29 @@ export default {
   background: #f8f9ff;
 }
 
+.dark-mode .upload-area {
+  background: #1e1e1e;
+  border-color: #764ba2;
+}
+
 .upload-area:hover {
   border-color: #764ba2;
   background: #f0f2ff;
+}
+
+.dark-mode .upload-area:hover {
+  background: #252525;
+  border-color: #667eea;
 }
 
 .file-formats {
   font-size: 0.9em;
   color: #666;
   margin-top: 10px;
+}
+
+.dark-mode .file-formats {
+  color: #aaa;
 }
 
 .file-info {
@@ -254,8 +331,22 @@ export default {
   border-radius: 4px;
 }
 
+.dark-mode .file-info {
+  background: #1b5e20;
+  border-left-color: #81c784;
+  color: #c8e6c9;
+}
+
 .characters-section {
   margin-top: 30px;
+}
+
+.characters-section h3 {
+  transition: color 0.3s ease;
+}
+
+.dark-mode .characters-section h3 {
+  color: #e0e0e0;
 }
 
 .characters-list {
@@ -270,6 +361,12 @@ export default {
   padding: 20px;
   border-radius: 8px;
   border: 1px solid #667eea30;
+  transition: all 0.3s ease;
+}
+
+.dark-mode .character-card {
+  background: linear-gradient(135deg, #667eea25 0%, #764ba225 100%);
+  border: 1px solid #667eea40;
 }
 
 .character-header {
@@ -282,6 +379,11 @@ export default {
 .character-header h4 {
   margin: 0;
   color: #333;
+  transition: color 0.3s ease;
+}
+
+.dark-mode .character-header h4 {
+  color: #e0e0e0;
 }
 
 .character-type {
@@ -302,6 +404,11 @@ export default {
   font-weight: 600;
   margin-bottom: 8px;
   color: #555;
+  transition: color 0.3s ease;
+}
+
+.dark-mode .voice-selector label {
+  color: #b0b0b0;
 }
 
 .voice-selector select {
@@ -310,12 +417,26 @@ export default {
   border: 1px solid #ddd;
   border-radius: 4px;
   font-size: 0.95em;
+  background: white;
+  color: #333;
+  transition: all 0.3s ease;
+}
+
+.dark-mode .voice-selector select {
+  background: #3a3a3a;
+  color: #e0e0e0;
+  border-color: #555;
 }
 
 .appearances {
   font-size: 0.9em;
   color: #666;
   margin: 10px 0 0 0;
+  transition: color 0.3s ease;
+}
+
+.dark-mode .appearances {
+  color: #aaa;
 }
 
 .btn-primary, .btn-secondary {
@@ -355,18 +476,33 @@ export default {
   font-weight: 600;
 }
 
+.dark-mode .loading {
+  color: #81d4fa;
+}
+
 .success-message {
   background: #e8f5e9;
   padding: 20px;
   border-left: 4px solid #4caf50;
   border-radius: 4px;
   margin-top: 20px;
+  transition: all 0.3s ease;
+}
+
+.dark-mode .success-message {
+  background: #1b5e20;
+  border-left-color: #81c784;
 }
 
 .success-message p {
   margin: 0 0 15px 0;
   color: #2e7d32;
   font-weight: 600;
+  transition: color 0.3s ease;
+}
+
+.dark-mode .success-message p {
+  color: #c8e6c9;
 }
 
 .audio-player {
@@ -385,6 +521,15 @@ export default {
   
   .upload-area {
     padding: 20px;
+  }
+  
+  .theme-toggle {
+    position: static;
+    margin-top: 15px;
+  }
+  
+  .header-content {
+    flex-direction: column;
   }
 }
 </style>

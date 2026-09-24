@@ -26,9 +26,20 @@
         <div v-if="uploadedFile" class="file-info">
           <p>✓ File: {{ uploadedFile.name }}</p>
         </div>
+
+        <div class="text-input">
+          <label for="story-text">Or paste your story directly</label>
+          <textarea
+            id="story-text"
+            v-model="textInput"
+            @input="handleTextInput"
+            rows="8"
+            placeholder="Paste the story you want to turn into an audiobook..."
+          ></textarea>
+        </div>
       </div>
 
-      <div v-if="uploadedFile" class="processing-section">
+      <div v-if="hasStory" class="processing-section">
         <h2>Processing</h2>
         <button @click="analyzeStory" class="btn-primary">Analyze & Identify Characters</button>
         
@@ -77,7 +88,7 @@
 </template>
 
 <script>
-import { ref, watch, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import StoryAnalyzer from './services/StoryAnalyzer.js'
 import AudiobookGenerator from './services/AudiobookGenerator.js'
 import FileParser from './services/FileParser.js'
@@ -87,12 +98,14 @@ export default {
   setup() {
     const fileInput = ref(null)
     const uploadedFile = ref(null)
+    const textInput = ref('')
     const characters = ref([])
     const loading = ref(false)
     const audioGenerated = ref(false)
     const audioUrl = ref(null)
-    const storyText = ref({})
+    const storyText = ref('')
     const darkMode = ref(false)
+    const hasStory = computed(() => storyText.value.trim().length > 0)
 
     // Apply dark mode to document element and save to localStorage
     const applyDarkMode = (isDark) => {
@@ -135,6 +148,7 @@ export default {
       console.log(file)
       if (file) {
         uploadedFile.value = file
+        textInput.value = ''
         try {
           storyText.value = await FileParser.parse(file)
         } catch (error) {
@@ -142,6 +156,11 @@ export default {
           alert('Error parsing file. Please try another.')
         }
       }
+    }
+
+    const handleTextInput = () => {
+      uploadedFile.value = null
+      storyText.value = textInput.value
     }
 
     const analyzeStory = async () => {
@@ -186,7 +205,10 @@ export default {
       if (audioUrl.value) {
         const a = document.createElement('a')
         a.href = audioUrl.value
-        a.download = `${uploadedFile.value.name.split('.')[0]}-audiobook.mp3`
+        const storyName = uploadedFile.value
+          ? uploadedFile.value.name.split('.')[0]
+          : 'story'
+        a.download = `${storyName}-audiobook.mp3`
         a.click()
       }
     }
@@ -194,14 +216,17 @@ export default {
     return {
       fileInput,
       uploadedFile,
+      textInput,
       characters,
       loading,
       audioGenerated,
       audioUrl,
+      hasStory,
       darkMode,
       triggerFileInput,
       handleFileUpload,
       handleDrop,
+      handleTextInput,
       analyzeStory,
       generateAudiobook,
       downloadAudio
@@ -332,6 +357,35 @@ export default {
 
 .dark-mode .file-formats {
   color: #aaa;
+}
+
+.text-input {
+  margin-top: 25px;
+}
+
+.text-input label {
+  display: block;
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.text-input textarea {
+  width: 100%;
+  padding: 12px;
+  border: 1px solid #ddd;
+  border-radius: 4px;
+  font: inherit;
+  line-height: 1.5;
+  resize: vertical;
+  background: white;
+  color: #333;
+  transition: all 0.3s ease;
+}
+
+.dark-mode .text-input textarea {
+  background: #3a3a3a;
+  color: #e0e0e0;
+  border-color: #555;
 }
 
 .file-info {

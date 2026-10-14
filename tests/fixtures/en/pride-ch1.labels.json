@@ -1,0 +1,208 @@
+{
+  "lang": "en",
+  "source": "Project Gutenberg",
+  "people": {
+    "Mrs. Bennet": [
+      "Mrs. Bennet",
+      "his lady",
+      "his wife"
+    ],
+    "Mr. Bennet": [
+      "Mr. Bennet"
+    ]
+  },
+  "speech": [
+    {
+      "start": 380,
+      "end": 401,
+      "speaker": "Mrs. Bennet",
+      "text": "“My dear Mr. Bennet,”"
+    },
+    {
+      "start": 432,
+      "end": 488,
+      "speaker": "Mrs. Bennet",
+      "text": "“have you heard that\nNetherfield Park is let at last?”\n\n"
+    },
+    {
+      "start": 525,
+      "end": 537,
+      "speaker": "Mrs. Bennet",
+      "text": "“But it is,”"
+    },
+    {
+      "start": 552,
+      "end": 619,
+      "speaker": "Mrs. Bennet",
+      "text": "“for Mrs. Long has just been here, and she\ntold me all about it.”\n\n"
+    },
+    {
+      "start": 647,
+      "end": 690,
+      "speaker": "Mrs. Bennet",
+      "text": "“Do not you want to know who has taken it?”"
+    },
+    {
+      "start": 721,
+      "end": 786,
+      "speaker": "Mr. Bennet",
+      "text": "“_You_ want to tell me, and I have no objection to hearing it.”\n\n"
+    },
+    {
+      "start": 815,
+      "end": 1214,
+      "speaker": "Mrs. Bennet",
+      "text": "“Why, my dear, you must know, Mrs. Long says that Netherfield is taken\nby a young man of large fortune from the north of England; that he came\ndown on Monday in a chaise and four to see the place, and was so much\ndelighted with it that he agreed with Mr. Morris immediately; that he is\nto take possession before Michaelmas, and some of his servants are to be\nin the house by the end of next week.”\n\n"
+    },
+    {
+      "start": 1214,
+      "end": 1235,
+      "speaker": "Mr. Bennet",
+      "text": "“What is his name?”\n\n"
+    },
+    {
+      "start": 1235,
+      "end": 1247,
+      "speaker": "Mrs. Bennet",
+      "text": "“Bingley.”\n\n"
+    },
+    {
+      "start": 1247,
+      "end": 1275,
+      "speaker": "Mr. Bennet",
+      "text": "“Is he married or single?”\n\n"
+    },
+    {
+      "start": 1275,
+      "end": 1405,
+      "speaker": "Mrs. Bennet",
+      "text": "“Oh, single, my dear, to be sure! A single man of large fortune; four or\nfive thousand a year. What a fine thing for our girls!”\n\n"
+    },
+    {
+      "start": 1405,
+      "end": 1440,
+      "speaker": "Mr. Bennet",
+      "text": "“How so? how can it affect them?”\n\n"
+    },
+    {
+      "start": 1440,
+      "end": 1461,
+      "speaker": "Mrs. Bennet",
+      "text": "“My dear Mr. Bennet,”"
+    },
+    {
+      "start": 1480,
+      "end": 1573,
+      "speaker": "Mrs. Bennet",
+      "text": "“how can you be so tiresome? You\nmust know that I am thinking of his marrying one of them.”\n\n"
+    },
+    {
+      "start": 1573,
+      "end": 1613,
+      "speaker": "Mr. Bennet",
+      "text": "“Is that his design in settling here?”\n\n"
+    },
+    {
+      "start": 1613,
+      "end": 1776,
+      "speaker": "Mrs. Bennet",
+      "text": "“Design? Nonsense, how can you talk so! But it is very likely that he\n_may_ fall in love with one of them, and therefore you must visit him as\nsoon as he comes.”\n\n"
+    },
+    {
+      "start": 1776,
+      "end": 1998,
+      "speaker": "Mr. Bennet",
+      "text": "“I see no occasion for that. You and the girls may go--or you may send\nthem by themselves, which perhaps will be still better; for as you are\nas handsome as any of them, Mr. Bingley might like you the best of the\nparty.”\n\n"
+    },
+    {
+      "start": 1998,
+      "end": 2217,
+      "speaker": "Mrs. Bennet",
+      "text": "“My dear, you flatter me. I certainly _have_ had my share of beauty, but\nI do not pretend to be anything extraordinary now. When a woman has five\ngrown-up daughters, she ought to give over thinking of her own beauty.”\n\n"
+    },
+    {
+      "start": 2217,
+      "end": 2282,
+      "speaker": "Mr. Bennet",
+      "text": "“In such cases, a woman has not often much beauty to think of.”\n\n"
+    },
+    {
+      "start": 2282,
+      "end": 2376,
+      "speaker": "Mrs. Bennet",
+      "text": "“But, my dear, you must indeed go and see Mr. Bingley when he comes into\nthe neighbourhood.”\n\n"
+    },
+    {
+      "start": 2376,
+      "end": 2423,
+      "speaker": "Mr. Bennet",
+      "text": "“It is more than I engage for, I assure you.”\n\n"
+    },
+    {
+      "start": 2423,
+      "end": 2726,
+      "speaker": "Mrs. Bennet",
+      "text": "“But consider your daughters. Only think what an establishment it would\nbe for one of them. Sir William and Lady Lucas are determined to go,\nmerely on that account; for in general, you know, they visit no new\ncomers. Indeed you must go, for it will be impossible for _us_ to visit\nhim, if you do not.”\n\n"
+    },
+    {
+      "start": 2726,
+      "end": 2992,
+      "speaker": "Mr. Bennet",
+      "text": "“You are over scrupulous, surely. I dare say Mr. Bingley will be very\nglad to see you; and I will send a few lines by you to assure him of my\nhearty consent to his marrying whichever he chooses of the girls--though\nI must throw in a good word for my little Lizzy.”\n\n"
+    },
+    {
+      "start": 2992,
+      "end": 3209,
+      "speaker": "Mrs. Bennet",
+      "text": "“I desire you will do no such thing. Lizzy is not a bit better than the\nothers: and I am sure she is not half so handsome as Jane, nor half so\ngood-humoured as Lydia. But you are always giving _her_ the preference.”\n\n"
+    },
+    {
+      "start": 3209,
+      "end": 3257,
+      "speaker": "Mr. Bennet",
+      "text": "“They have none of them much to recommend them,”"
+    },
+    {
+      "start": 3270,
+      "end": 3383,
+      "speaker": "Mr. Bennet",
+      "text": "“they are\nall silly and ignorant like other girls; but Lizzy has something more of\nquickness than her sisters.”\n\n"
+    },
+    {
+      "start": 3383,
+      "end": 3522,
+      "speaker": "Mrs. Bennet",
+      "text": "“Mr. Bennet, how can you abuse your own children in such a way? You take\ndelight in vexing me. You have no compassion on my poor nerves.”\n\n"
+    },
+    {
+      "start": 3522,
+      "end": 3692,
+      "speaker": "Mr. Bennet",
+      "text": "“You mistake me, my dear. I have a high respect for your nerves. They\nare my old friends. I have heard you mention them with consideration\nthese twenty years at least.”\n\n"
+    },
+    {
+      "start": 3692,
+      "end": 3730,
+      "speaker": "Mrs. Bennet",
+      "text": "“Ah, you do not know what I suffer.”\n\n"
+    },
+    {
+      "start": 3730,
+      "end": 3850,
+      "speaker": "Mr. Bennet",
+      "text": "“But I hope you will get over it, and live to see many young men of four\nthousand a year come into the neighbourhood.”\n\n"
+    },
+    {
+      "start": 3850,
+      "end": 3937,
+      "speaker": "Mrs. Bennet",
+      "text": "“It will be no use to us, if twenty such should come, since you will not\nvisit them.”\n\n"
+    },
+    {
+      "start": 3937,
+      "end": 4016,
+      "speaker": "Mr. Bennet",
+      "text": "“Depend upon it, my dear, that when there are twenty, I will visit them\nall.”\n\n"
+    }
+  ]
+}

@@ -1,0 +1,137 @@
+{
+  "lang": "es",
+  "source": "Project Gutenberg",
+  "people": {
+    "Golfín": [
+      "Golfín",
+      "Teodoro",
+      "Teodoro Golfín",
+      "el viajero",
+      "el doctor"
+    ],
+    "Pablo": [
+      "Pablo",
+      "el joven",
+      "el misterioso joven",
+      "el ciego",
+      "una voz de hombre",
+      "un hombre"
+    ]
+  },
+  "speech": [
+    {
+      "start": 0,
+      "end": 30,
+      "speaker": "Golfín",
+      "text": "--Esta es una situación divina"
+    },
+    {
+      "start": 120,
+      "end": 364,
+      "speaker": "Golfín",
+      "text": ". No hay mal que\ncien años dure. Aguardemos fumando. Me he lucido con querer venir solo y\na pie a las minas de Socartes. Mi equipaje habrá llegado primero, lo que\nprueba de un modo irrebatible las ventajas del _adelante_, _siempre\nadelante_.»\n\n"
+    },
+    {
+      "start": 610,
+      "end": 703,
+      "speaker": "Golfín",
+      "text": "--Muchacha, hombre, o quien quiera que seas, ¿se puede ir por aquí a las\nminas de Socartes?\n\n"
+    },
+    {
+      "start": 808,
+      "end": 835,
+      "speaker": "Pablo",
+      "text": "--Choto, Choto, ven aquí.\n\n"
+    },
+    {
+      "start": 835,
+      "end": 841,
+      "speaker": "Golfín",
+      "text": "--¡Eh!"
+    },
+    {
+      "start": 861,
+      "end": 985,
+      "speaker": "Golfín",
+      "text": ". Buen amigo, muchacho de todos los demonios,\no lo que quiera que seas, sujeta pronto ese perro, que yo soy hombre de\npaz!\n\n"
+    },
+    {
+      "start": 985,
+      "end": 1003,
+      "speaker": "Pablo",
+      "text": "--¡Choto, Choto!\n\n"
+    },
+    {
+      "start": 1550,
+      "end": 1787,
+      "speaker": "Golfín",
+      "text": "--¡Gracias a Dios!, al fin salió esa loca. Ya podemos saber dónde\nestamos. No sospechaba yo que tan cerca de mí existiera esta senda....\nPero si es un camino.... ¡Hola!, amiguito, ¿puede usted decirme si estoy\nen las minas de Socartes?\n\n"
+    },
+    {
+      "start": 1787,
+      "end": 1884,
+      "speaker": "Pablo",
+      "text": "--Sí, señor, estas son las minas de Socartes, aunque estamos un poco\nlejos del establecimiento.\n\n"
+    },
+    {
+      "start": 2234,
+      "end": 2246,
+      "speaker": "Golfín",
+      "text": "--_Fiat lux_"
+    },
+    {
+      "start": 2267,
+      "end": 2531,
+      "speaker": "Golfín",
+      "text": ". Me parece que acabo de salir del caos\nprimitivo. Ya estamos en la realidad.... Bien, amiguito, doy a usted\ngracias por las noticias que me ha dado y las que aún ha de darme....\nSalí de Villamojada al ponerse el sol. Dijéronme que adelante, siempre\nadelante....\n\n"
+    },
+    {
+      "start": 2531,
+      "end": 2562,
+      "speaker": "Pablo",
+      "text": "--¿Va usted al establecimiento?"
+    },
+    {
+      "start": 2669,
+      "end": 2718,
+      "speaker": "Golfín",
+      "text": "--Sí, señor; pero sin duda equivoqué el camino.\n\n"
+    },
+    {
+      "start": 2718,
+      "end": 3353,
+      "speaker": "Pablo",
+      "text": "--Esta no es la entrada de las minas. La entrada es por la pasadera de\nRabagones, donde está el camino y el ferro-carril en construcción. Por\nallá hubiera usted llegado en diez minutos al establecimiento. Por aquí\ntardaremos más, porque hay bastante distancia y muy mal camino. Estamos\nen la última zona de explotación, y hemos de atravesar algunas galerías\ny túneles, bajar escaleras, pasar trincheras, remontar taludes,\ndescender el plano inclinado; en fin, recorrer todas las minas de\nSocartes desde un extremo, que es este, hasta el otro extremo, donde\nestán los talleres, los hornos, las máquinas, el laboratorio y las\noficinas.\n\n"
+    },
+    {
+      "start": 3353,
+      "end": 3402,
+      "speaker": "Golfín",
+      "text": "--Pues a fe mía que ha sido floja mi equivocación"
+    },
+    {
+      "start": 3425,
+      "end": 3509,
+      "speaker": "Pablo",
+      "text": "--Yo le guiaré a usted con mucho gusto, porque conozco estos sitios\nperfectamente.\n\n"
+    },
+    {
+      "start": 3742,
+      "end": 3752,
+      "speaker": "Golfín",
+      "text": "--Usted..."
+    },
+    {
+      "start": 3764,
+      "end": 3786,
+      "speaker": "Pablo",
+      "text": "--Soy ciego, sí, señor"
+    },
+    {
+      "start": 3805,
+      "end": 4018,
+      "speaker": "Pablo",
+      "text": "; pero sin vista sé recorrer de\nun cabo a otro las minas de Socartes. El palo que uso me impide\ntropezar, y Choto me acompaña, cuando no lo hace la Nela, que es mi\nlazarillo. Con que sígame usted y déjese llevar.\n"
+    }
+  ]
+}

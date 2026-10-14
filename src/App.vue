@@ -1,11 +1,16 @@
 <script setup lang="ts">
+import { Capacitor } from '@capacitor/core';
 import { appName } from './appInfo';
+import SpikePanel from './spike/SpikePanel.vue';
+
+const isNative = Capacitor.isNativePlatform();
 </script>
 
 <template>
   <main class="app">
     <h1>{{ appName }}</h1>
-    <p>Scaffold is running.</p>
+    <SpikePanel v-if="isNative" />
+    <p v-else>Scaffold is running.</p>
   </main>
 </template>
 

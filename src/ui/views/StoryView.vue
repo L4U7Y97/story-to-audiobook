@@ -31,10 +31,11 @@ async function analyse(part: Pick<Part, 'id'>) {
   }
 }
 
-function onAdded(part: Part) {
+async function onAdded(added: Part[]) {
   adding.value = false;
   replacing.value = undefined;
-  void analyse(part);
+  // Analyses run one at a time, in reading order, so later parts reuse earlier characters.
+  for (const part of added) await analyse(part);
 }
 
 function startReplace(part: Part) {

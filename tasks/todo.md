@@ -221,49 +221,49 @@ npm test
 
 ## Phase 4: Story and cast management
 
-### - [ ] Task 15: EPUB import with preview
+### - [x] Task 15: EPUB import with preview
 
 **Description:** JSZip + DOMParser extraction following the spec rules (spine order, block → `\n`, paragraphs → `\n\n`, drop images/scripts/styles, `em`/`i` → emphasis hints). An import preview lists spine items with their extracted text, and the user can deselect items or group them into parts. Emphasis hints feed thought detection in the heuristic.
 **Acceptance criteria:**
 
-- [ ] A fixture EPUB extracts to exactly the expected canonical text, and hints land on the right ranges
-- [ ] Importing selected chapters creates one part per selected group, in order
+- [x] A fixture EPUB extracts to exactly the expected canonical text, and hints land on the right ranges
+- [x] Importing selected chapters creates one part per selected group, in order
       **Verification:** `npm test -- epub`; manual import on the phone.
       **Dependencies:** T9
       **Files:** `src/ingest/epub.ts`, `src/ui/components/EpubImportDialog.vue`, `src/analysis/heuristic/attribute.ts`, `tests/unit/ingest/epub.test.ts`, `tests/fixtures/*.epub`
       **Scope:** M
 
-### - [ ] Task 16: Part management
+### - [x] Task 16: Part management
 
 **Description:** Reorder (drag), insert above/below, rename, delete, and replace (new text and hash, old analysis discarded, same id and position, re-analysis with voices kept). Characters not referenced anywhere are flagged "unused".
 **Acceptance criteria:**
 
-- [ ] Replacing a part never changes any character's voice settings (test)
-- [ ] The unused flag appears or disappears correctly after delete and replace (test)
+- [x] Replacing a part never changes any character's voice settings (test)
+- [x] The unused flag appears or disappears correctly after delete and replace (test)
       **Verification:** `npm test -- parts`; manual check in the Story view.
       **Dependencies:** T9
       **Files:** `src/storage/parts.ts`, `src/cast/usage.ts`, `src/ui/views/StoryView.vue`, `tests/unit/storage/parts.test.ts`
       **Scope:** M
 
-### - [ ] Task 17: Cast operations
+### - [x] Task 17: Cast operations
 
 **Description:** Rename, edit aliases, and merge B → A in one Dexie transaction (aliases folded in, every segment in every part rewritten, B removed). UI in the Cast view.
 **Acceptance criteria:**
 
-- [ ] After a merge, no analysis references B, all analyses still validate, and A has B's name as an alias (test)
-- [ ] If the merge fails mid-way it rolls back fully (test with an injected failure)
+- [x] After a merge, no analysis references B, all analyses still validate, and A has B's name as an alias (test)
+- [x] If the merge fails mid-way it rolls back fully (test with an injected failure)
       **Verification:** `npm test -- cast`
       **Dependencies:** T10
       **Files:** `src/cast/merge.ts`, `src/cast/aliases.ts`, `src/ui/views/CastView.vue`, `tests/unit/cast/merge.test.ts`
       **Scope:** M
 
-### - [ ] Task 18: Manual segment reassignment
+### - [x] Task 18: Manual segment reassignment
 
 **Description:** Tap a segment in the Reader to pick a speaker (or create a new character). The segment is stored with `source: 'user'`, and adjacent segments are coalesced if they now match.
 **Acceptance criteria:**
 
-- [ ] The reassignment persists and plays with the new voice
-- [ ] Re-running analysis on the part keeps user segments whose ranges still match (test)
+- [x] The reassignment persists and plays with the new voice
+- [x] Re-running analysis on the part keeps user segments whose ranges still match (test)
       **Verification:** `npm test -- reassign`; manual check.
       **Dependencies:** T12, T17
       **Files:** `src/analysis/reassign.ts`, `src/ui/components/SpeakerPicker.vue`, `src/ui/views/ReaderView.vue`, `tests/unit/analysis/reassign.test.ts`

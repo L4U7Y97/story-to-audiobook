@@ -5,12 +5,13 @@ import { getAppDb } from '@/storage/db';
 import { addPart, replacePart } from '@/storage/parts';
 import { fromPaste } from '@/ingest/paste';
 import { readTxtFile } from '@/ingest/txt';
+import EpubImport from './EpubImport.vue';
 
 /** With `replacing`, the form swaps that part's text instead of adding a new part. */
 const props = defineProps<{ storyId: string; parts: Part[]; replacing?: Part }>();
-const emit = defineEmits<{ added: [part: Part]; cancel: [] }>();
+const emit = defineEmits<{ added: [parts: Part[]]; cancel: [] }>();
 
-const mode = ref<'paste' | 'file'>('paste');
+const mode = ref<'paste' | 'file' | 'epub'>('paste');
 const title = ref(props.replacing?.title ?? '');
 const pasted = ref('');
 const file = ref<{ name: string; text: string } | null>(null);
@@ -58,7 +59,7 @@ async function save() {
     const part = props.replacing
       ? await replacePart(db, props.storyId, props.replacing.id, input)
       : await addPart(db, props.storyId, input, position.value);
-    emit('added', part);
+    emit('added', [part]);
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   } finally {
@@ -93,41 +94,68 @@ async function save() {
       >
         .txt file
       </button>
-    </div>
-
-    <label v-if="mode === 'paste'">
-      Text
-      <textarea v-model="pasted" rows="10" placeholder="Paste a chapter or a few pages…" />
-    </label>
-    <label v-else>
-      File
-      <input type="file" accept=".txt,text/plain" @change="onFileChange" />
-    </label>
-    <p v-if="notice" class="notice">{{ notice }}</p>
-
-    <label>
-      Title
-      <input v-model="title" :placeholder="defaultTitle" autocomplete="off" />
-    </label>
-
-    <label v-if="parts.length && !replacing">
-      Position
-      <select v-model.number="position">
-        <option :value="0">At the beginning</option>
-        <option v-for="(p, i) in parts" :key="p.id" :value="i + 1">
-          {{ i + 1 === parts.length ? 'At the end' : `After “${p.title}”` }}
-        </option>
-      </select>
-    </label>
-
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
-
-    <div class="actions">
-      <button type="button" @click="emit('cancel')">Cancel</button>
-      <button class="primary" type="submit" :disabled="!canSave">
-        {{ replacing ? 'Replace' : 'Add part' }}
+      <button
+        v-if="!replacing"
+        type="button"
+        role="radio"
+        :aria-checked="mode === 'epub'"
+        :class="{ active: mode === 'epub' }"
+        @click="mode = 'epub'"
+      >
+        .epub
       </button>
     </div>
+
+    <template v-if="mode === 'epub'">
+      <label v-if="parts.length">
+        Position
+        <select v-model.number="position">
+          <option :value="0">At the beginning</option>
+          <option v-for="(p, i) in parts" :key="p.id" :value="i + 1">
+            {{ i + 1 === parts.length ? 'At the end' : `After “${p.title}”` }}
+          </option>
+        </select>
+      </label>
+      <EpubImport :story-id="storyId" :position="position" @imported="emit('added', $event)" />
+      <div class="actions">
+        <button type="button" @click="emit('cancel')">Cancel</button>
+      </div>
+    </template>
+    <template v-else>
+      <label v-if="mode === 'paste'">
+        Text
+        <textarea v-model="pasted" rows="10" placeholder="Paste a chapter or a few pages…" />
+      </label>
+      <label v-else>
+        File
+        <input type="file" accept=".txt,text/plain" @change="onFileChange" />
+      </label>
+      <p v-if="notice" class="notice">{{ notice }}</p>
+
+      <label>
+        Title
+        <input v-model="title" :placeholder="defaultTitle" autocomplete="off" />
+      </label>
+
+      <label v-if="parts.length && !replacing">
+        Position
+        <select v-model.number="position">
+          <option :value="0">At the beginning</option>
+          <option v-for="(p, i) in parts" :key="p.id" :value="i + 1">
+            {{ i + 1 === parts.length ? 'At the end' : `After “${p.title}”` }}
+          </option>
+        </select>
+      </label>
+
+      <p v-if="error" class="error" role="alert">{{ error }}</p>
+
+      <div class="actions">
+        <button type="button" @click="emit('cancel')">Cancel</button>
+        <button class="primary" type="submit" :disabled="!canSave">
+          {{ replacing ? 'Replace' : 'Add part' }}
+        </button>
+      </div>
+    </template>
   </form>
 </template>
 

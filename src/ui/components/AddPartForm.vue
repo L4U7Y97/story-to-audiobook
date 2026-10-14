@@ -2,15 +2,16 @@
 import { computed, ref } from 'vue';
 import type { Part } from '@/format/types';
 import { getAppDb } from '@/storage/db';
-import { addPart } from '@/storage/parts';
+import { addPart, replacePart } from '@/storage/parts';
 import { fromPaste } from '@/ingest/paste';
 import { readTxtFile } from '@/ingest/txt';
 
-const props = defineProps<{ storyId: string; parts: Part[] }>();
+/** With `replacing`, the form swaps that part's text instead of adding a new part. */
+const props = defineProps<{ storyId: string; parts: Part[]; replacing?: Part }>();
 const emit = defineEmits<{ added: [part: Part]; cancel: [] }>();
 
 const mode = ref<'paste' | 'file'>('paste');
-const title = ref('');
+const title = ref(props.replacing?.title ?? '');
 const pasted = ref('');
 const file = ref<{ name: string; text: string } | null>(null);
 const notice = ref('');
@@ -21,7 +22,7 @@ const saving = ref(false);
 
 const text = computed(() => (mode.value === 'paste' ? fromPaste(pasted.value) : file.value?.text));
 const canSave = computed(() => !!text.value && /\S/.test(text.value) && !saving.value);
-const defaultTitle = computed(() => `Part ${props.parts.length + 1}`);
+const defaultTitle = computed(() => props.replacing?.title ?? `Part ${props.parts.length + 1}`);
 
 async function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -45,17 +46,18 @@ async function save() {
   saving.value = true;
   error.value = '';
   try {
-    const part = await addPart(
-      getAppDb(),
-      props.storyId,
-      {
-        title: title.value.trim() || defaultTitle.value,
-        source:
-          mode.value === 'paste' ? { kind: 'paste' } : { kind: 'txt', fileName: file.value?.name },
-        text: text.value,
-      },
-      position.value,
-    );
+    const input = {
+      title: title.value.trim() || defaultTitle.value,
+      source:
+        mode.value === 'paste'
+          ? { kind: 'paste' as const }
+          : { kind: 'txt' as const, fileName: file.value?.name },
+      text: text.value,
+    };
+    const db = getAppDb();
+    const part = props.replacing
+      ? await replacePart(db, props.storyId, props.replacing.id, input)
+      : await addPart(db, props.storyId, input, position.value);
     emit('added', part);
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
@@ -67,7 +69,10 @@ async function save() {
 
 <template>
   <form class="card add-part" @submit.prevent="save">
-    <h2>Add a part</h2>
+    <h2>{{ replacing ? `Replace “${replacing.title}”` : 'Add a part' }}</h2>
+    <p v-if="replacing" class="muted">
+      The new text replaces this part. Voices and characters are kept.
+    </p>
 
     <div class="tabs" role="radiogroup" aria-label="Source">
       <button
@@ -105,7 +110,7 @@ async function save() {
       <input v-model="title" :placeholder="defaultTitle" autocomplete="off" />
     </label>
 
-    <label v-if="parts.length">
+    <label v-if="parts.length && !replacing">
       Position
       <select v-model.number="position">
         <option :value="0">At the beginning</option>
@@ -119,7 +124,9 @@ async function save() {
 
     <div class="actions">
       <button type="button" @click="emit('cancel')">Cancel</button>
-      <button class="primary" type="submit" :disabled="!canSave">Add part</button>
+      <button class="primary" type="submit" :disabled="!canSave">
+        {{ replacing ? 'Replace' : 'Add part' }}
+      </button>
     </div>
   </form>
 </template>

@@ -8,7 +8,12 @@ import { createStory, getStory } from '@/storage/stories';
 import { addPart } from '@/storage/parts';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 
-const seg = (start: number, end: number, speakerId: string, extra: Partial<Segment> = {}): Segment => ({
+const seg = (
+  start: number,
+  end: number,
+  speakerId: string,
+  extra: Partial<Segment> = {},
+): Segment => ({
   start,
   end,
   speakerId,

@@ -13,8 +13,8 @@ export interface NewPart {
 
 /**
  * Adds a part to a story. `index` is the position in reading order (default: at the end).
- * Note: there is deliberately no way to change a part's text once stored — replacing a part
- * (Task 16) creates new text with a new hash and discards the old analysis.
+ * Note: there is deliberately no way to edit a part's text once stored — replacePart swaps in a
+ * whole new upload with a new hash and discards the old analysis.
  */
 export async function addPart(
   db: StoryDb,
@@ -42,6 +42,44 @@ export async function addPart(
     await db.stories.update(storyId, { partIds, updatedAt: now() });
   });
   return part;
+}
+
+/**
+ * Replaces a part's content with new text (from a new upload). The part keeps its id and place in
+ * the story; its old analysis is discarded and it goes back to "pending". The story's cast — and so
+ * every voice — is untouched.
+ */
+export async function replacePart(
+  db: StoryDb,
+  storyId: string,
+  partId: string,
+  input: NewPart,
+): Promise<Part> {
+  const textHash = await sha256(input.text);
+  return db.transaction('rw', db.stories, db.parts, db.analyses, async () => {
+    const story = await db.stories.get(storyId);
+    const existing = await db.parts.get(partId);
+    if (!story || !existing || existing.storyId !== storyId) {
+      throw new Error(`part ${partId} not in story ${storyId}`);
+    }
+    const part: Part = {
+      id: partId,
+      storyId,
+      title: input.title,
+      source: input.source,
+      text: input.text,
+      textHash,
+      ...(input.hints?.length ? { hints: input.hints } : {}),
+      analysisStatus: 'pending',
+    };
+    // Replacing is the one sanctioned way to give a part different text: a whole new upload.
+    await db.parts.put(part);
+    await db.analyses.delete(partId);
+    if (story.position?.partId === partId) {
+      await db.stories.update(storyId, { position: { partId, segmentIndex: 0 }, updatedAt: now() });
+    }
+    return part;
+  });
 }
 
 export async function getPart(db: StoryDb, id: string): Promise<Part | undefined> {

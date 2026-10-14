@@ -15,6 +15,11 @@ export function getEngine(): SpeechEngine {
   return engine;
 }
 
+/** The player for a story if one exists, without creating it (or stopping another story). */
+export function existingPlayer(storyId: string) {
+  return current?.storyId === storyId ? current : undefined;
+}
+
 /**
  * The app-wide player for a story. Switching to another story stops the previous one; views of
  * the same story share one player, so playback continues across the reader and the cast view.

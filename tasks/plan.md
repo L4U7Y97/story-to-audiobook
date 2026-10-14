@@ -34,15 +34,15 @@ T1 scaffold ── T2 Android TTS spike ──► Checkpoint A (go/no-go on nati
 
 ## Phases
 
-| Phase | Tasks | Result |
-|---|---|---|
-| 0. Risk spike | T1–T2 | Project builds for web and Android; background TTS proven (or fallback chosen) |
-| 1. Foundation | T3–T6 | Create a story, add parts from paste or .txt, data persists |
-| 2. First playable slice (desktop) | T7–T12 | Paste a chapter → heuristic analysis → hear it in multiple voices with highlighting |
-| 3. Android | T13–T14 | Same on the phone, screen locked, notification controls |
-| 4. Story and cast management | T15–T18 | EPUB, part reordering and replacement, cast merge and rename, fix speakers |
-| 5. LLM analysis | T19–T21 | API key settings, Haiku 5.5 analysis with fallback, cost estimate |
-| 6. Data safety and polish | T22–T23 | Export/import, voice substitution, offline guarantee, theme and layout |
+| Phase                             | Tasks   | Result                                                                              |
+| --------------------------------- | ------- | ----------------------------------------------------------------------------------- |
+| 0. Risk spike                     | T1–T2   | Project builds for web and Android; background TTS proven (or fallback chosen)      |
+| 1. Foundation                     | T3–T6   | Create a story, add parts from paste or .txt, data persists                         |
+| 2. First playable slice (desktop) | T7–T12  | Paste a chapter → heuristic analysis → hear it in multiple voices with highlighting |
+| 3. Android                        | T13–T14 | Same on the phone, screen locked, notification controls                             |
+| 4. Story and cast management      | T15–T18 | EPUB, part reordering and replacement, cast merge and rename, fix speakers          |
+| 5. LLM analysis                   | T19–T21 | API key settings, Haiku 5.5 analysis with fallback, cost estimate                   |
+| 6. Data safety and polish         | T22–T23 | Export/import, voice substitution, offline guarantee, theme and layout              |
 
 ## Parallelization
 
@@ -50,14 +50,14 @@ Mostly a one-person, sequential build. If several sessions are available, these 
 
 ## Risks and mitigations
 
-| Risk | Impact | Mitigation |
-|---|---|---|
-| R1 Android stops TTS when locked | High | T2 spike before anything else; fallback is keep-awake mode, decided at Checkpoint A |
-| R2 Few device voices | Medium | Pitch and rate variation (T10); the user can install voice packs |
-| R3 Weak heuristic attribution | Medium | Fixture accuracy tests (T8), manual reassignment (T18), LLM (T20) |
-| R4 LLM span mismatch | Low | Per-unit fallback, property tests (T20) |
-| R5 Data loss on uninstall | Medium | `storage.persist()` + JSON export (T22) |
-| R6 EPUB edge cases | Medium | Import preview + fixture EPUBs (T15) |
+| Risk                             | Impact | Mitigation                                                                          |
+| -------------------------------- | ------ | ----------------------------------------------------------------------------------- |
+| R1 Android stops TTS when locked | High   | T2 spike before anything else; fallback is keep-awake mode, decided at Checkpoint A |
+| R2 Few device voices             | Medium | Pitch and rate variation (T10); the user can install voice packs                    |
+| R3 Weak heuristic attribution    | Medium | Fixture accuracy tests (T8), manual reassignment (T18), LLM (T20)                   |
+| R4 LLM span mismatch             | Low    | Per-unit fallback, property tests (T20)                                             |
+| R5 Data loss on uninstall        | Medium | `storage.persist()` + JSON export (T22)                                             |
+| R6 EPUB edge cases               | Medium | Import preview + fixture EPUBs (T15)                                                |
 
 ## Open questions
 

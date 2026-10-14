@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Story to Audiobook</string>
+    <string name="title_activity_main">Story to Audiobook</string>
+    <string name="package_name">com.storytoaudiobook.app</string>
+    <string name="custom_url_scheme">com.storytoaudiobook.app</string>
+</resources>

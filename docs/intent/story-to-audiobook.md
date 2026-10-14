@@ -14,10 +14,10 @@ Confirmed with the user on 2026-10-14 via an interview-me session.
 
 ## Decisions and why
 
-| Decision | Reason |
-|---|---|
-| Bring-your-own API key, no backend | Single user; a public app would need a paid proxy and abuse control, which conflicts with "no registration" and "client-side" |
-| Free device TTS | Zero running cost matters more than expressiveness for the MVP |
-| Free heuristic fallback when there's no key | The app must work with no paid services at all |
-| Capacitor, Android first | Browser TTS stops when a mobile screen locks; the user is on Android and Windows (iOS needs a Mac) |
-| No PDF | Extracting text from PDFs means rewriting it, which conflicts with "the text never changes" |
+| Decision                                    | Reason                                                                                                                        |
+| ------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| Bring-your-own API key, no backend          | Single user; a public app would need a paid proxy and abuse control, which conflicts with "no registration" and "client-side" |
+| Free device TTS                             | Zero running cost matters more than expressiveness for the MVP                                                                |
+| Free heuristic fallback when there's no key | The app must work with no paid services at all                                                                                |
+| Capacitor, Android first                    | Browser TTS stops when a mobile screen locks; the user is on Android and Windows (iOS needs a Mac)                            |
+| No PDF                                      | Extracting text from PDFs means rewriting it, which conflicts with "the text never changes"                                   |

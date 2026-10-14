@@ -24,35 +24,35 @@ A personal app that reads stories aloud with a distinct voice for the narrator a
 
 The modules are tightly coupled through one shared contract, the **story format**, so they live in one spec with a section each. Module ids are stable and are used by the plan and tasks.
 
-| Module id | Responsibility | Depends on |
-|---|---|---|
-| `format` | Types, invariants and validation of the story format (the contract every other module uses) | — |
-| `storage` | IndexedDB persistence, export and import, settings, API key | `format` |
-| `ingest` | .txt, .epub and pasted text → canonical part text | `format` |
-| `analysis` | Unit segmentation, heuristic analyser, LLM analyser, merging results into segments | `format` |
-| `cast` | Automatic voice assignment, merge, rename, alias handling | `format` |
-| `playback` | Speech engine adapters (web, Android native), queue, position tracking | `format`, `cast` |
-| `ui` | Vue screens: library, story, parts, cast, reader and player, settings | all |
+| Module id  | Responsibility                                                                              | Depends on       |
+| ---------- | ------------------------------------------------------------------------------------------- | ---------------- |
+| `format`   | Types, invariants and validation of the story format (the contract every other module uses) | —                |
+| `storage`  | IndexedDB persistence, export and import, settings, API key                                 | `format`         |
+| `ingest`   | .txt, .epub and pasted text → canonical part text                                           | `format`         |
+| `analysis` | Unit segmentation, heuristic analyser, LLM analyser, merging results into segments          | `format`         |
+| `cast`     | Automatic voice assignment, merge, rename, alias handling                                   | `format`         |
+| `playback` | Speech engine adapters (web, Android native), queue, position tracking                      | `format`, `cast` |
+| `ui`       | Vue screens: library, story, parts, cast, reader and player, settings                       | all              |
 
 **Build order:** `format` → `storage`, `ingest` → `analysis` (heuristic first, then LLM) → `cast` → `playback` (web, then Android) → `ui` (grows alongside, one vertical slice at a time).
 **Risk-first exception:** the Android background-playback spike (R1) runs **before** any module work. See [Risks](#risks).
 
 ## Tech stack
 
-| Concern | Choice | Notes |
-|---|---|---|
-| Language | TypeScript 5.x, `strict: true` | |
-| UI | Vue 3 (Composition API, `<script setup>`) | Same family as the earlier attempt in git history |
-| Build | Vite | Dev server on port **3000** to match `.claude/launch.json` |
-| Native shell | Capacitor 8, **Android only** | iOS out of scope |
-| Storage | IndexedDB via Dexie 4 | `navigator.storage.persist()` requested on first run |
-| Small settings / API key | `@capacitor/preferences` (Android SharedPreferences, `localStorage` on web) | |
-| EPUB | JSZip + `DOMParser` (no epub framework) | Full control over text extraction |
-| LLM | `@anthropic-ai/sdk` + `zod` (structured outputs via `output_config.format`) | Called straight from the client with the user's key (`dangerouslyAllowBrowser: true`). No proxy. |
-| TTS (web) | Web Speech API `speechSynthesis` | |
-| TTS (Android) | Native Android `TextToSpeech` behind a Capacitor plugin with a foreground media service | Decided by spike R1 |
-| Tests | Vitest, `fake-indexeddb`, `happy-dom`, `fast-check` (property tests for invariants) | |
-| Lint and format | ESLint (typescript-eslint + eslint-plugin-vue), Prettier | |
+| Concern                  | Choice                                                                                  | Notes                                                                                            |
+| ------------------------ | --------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| Language                 | TypeScript 5.x, `strict: true`                                                          |                                                                                                  |
+| UI                       | Vue 3 (Composition API, `<script setup>`)                                               | Same family as the earlier attempt in git history                                                |
+| Build                    | Vite                                                                                    | Dev server on port **3000** to match `.claude/launch.json`                                       |
+| Native shell             | Capacitor 8, **Android only**                                                           | iOS out of scope                                                                                 |
+| Storage                  | IndexedDB via Dexie 4                                                                   | `navigator.storage.persist()` requested on first run                                             |
+| Small settings / API key | `@capacitor/preferences` (Android SharedPreferences, `localStorage` on web)             |                                                                                                  |
+| EPUB                     | JSZip + `DOMParser` (no epub framework)                                                 | Full control over text extraction                                                                |
+| LLM                      | `@anthropic-ai/sdk` + `zod` (structured outputs via `output_config.format`)             | Called straight from the client with the user's key (`dangerouslyAllowBrowser: true`). No proxy. |
+| TTS (web)                | Web Speech API `speechSynthesis`                                                        |                                                                                                  |
+| TTS (Android)            | Native Android `TextToSpeech` behind a Capacitor plugin with a foreground media service | Decided by spike R1                                                                              |
+| Tests                    | Vitest, `fake-indexeddb`, `happy-dom`, `fast-check` (property tests for invariants)     |                                                                                                  |
+| Lint and format          | ESLint (typescript-eslint + eslint-plugin-vue), Prettier                                |                                                                                                  |
 
 **Prerequisites:** Node 22 LTS, JDK 21, Android Studio (SDK + platform tools), an Android phone with USB debugging.
 
@@ -117,43 +117,56 @@ export const SCHEMA_VERSION = 1;
 export type Lang = 'en' | 'es';
 export type Mode = 'narration' | 'speech' | 'thought' | 'written'; // written = letters, signs, notes read aloud
 export type ToneLabel =
-  | 'neutral' | 'whisper' | 'shout' | 'angry' | 'sad' | 'happy' | 'fearful'
-  | 'sarcastic' | 'tender' | 'excited' | 'tired' | 'urgent' | 'mocking' | 'pleading';
+  | 'neutral'
+  | 'whisper'
+  | 'shout'
+  | 'angry'
+  | 'sad'
+  | 'happy'
+  | 'fearful'
+  | 'sarcastic'
+  | 'tender'
+  | 'excited'
+  | 'tired'
+  | 'urgent'
+  | 'mocking'
+  | 'pleading';
 
 export interface Tone {
   label: ToneLabel;
-  intensity?: 1 | 2 | 3;     // mild / clear / extreme
-  notes?: string;            // free-form, e.g. "through tears", "drunk" — stored, not voiced in MVP
+  intensity?: 1 | 2 | 3; // mild / clear / extreme
+  notes?: string; // free-form, e.g. "through tears", "drunk" — stored, not voiced in MVP
 }
 
 export interface Story {
-  id: string;                // uuid
+  id: string; // uuid
   schemaVersion: number;
   title: string;
   lang: Lang;
-  partIds: string[];         // reading order
+  partIds: string[]; // reading order
   cast: Character[];
-  narratorId: string;        // always present; a Character with role 'narrator'
+  narratorId: string; // always present; a Character with role 'narrator'
   position?: { partId: string; segmentIndex: number };
-  createdAt: string; updatedAt: string; // ISO
+  createdAt: string;
+  updatedAt: string; // ISO
 }
 
 export interface Character {
   id: string;
   role: 'narrator' | 'character' | 'unknown'; // one 'unknown' bucket for unattributed speech
   name: string;
-  aliases: string[];         // "Liz", "Miss Bennet"
-  gender?: 'male' | 'female' | 'other';       // hint for voice choice only
-  description?: string;      // short, from the LLM; helps keep later parts consistent
+  aliases: string[]; // "Liz", "Miss Bennet"
+  gender?: 'male' | 'female' | 'other'; // hint for voice choice only
+  description?: string; // short, from the LLM; helps keep later parts consistent
   voice: VoiceSettings;
   firstSeenPartId?: string;
 }
 
 export interface VoiceSettings {
-  voiceName?: string;        // device voice id; may be missing on another device
-  lang: string;              // BCP-47, e.g. 'es-AR'; used when voiceName is unavailable
-  pitch: number;             // 0.5–2.0
-  rate: number;              // 0.5–2.0, multiplied by the player's global speed
+  voiceName?: string; // device voice id; may be missing on another device
+  lang: string; // BCP-47, e.g. 'es-AR'; used when voiceName is unavailable
+  pitch: number; // 0.5–2.0
+  rate: number; // 0.5–2.0, multiplied by the player's global speed
 }
 
 export interface Part {
@@ -161,26 +174,30 @@ export interface Part {
   storyId: string;
   title: string;
   source: { kind: 'txt' | 'epub' | 'paste'; fileName?: string; epubHref?: string };
-  text: string;              // canonical text — immutable after creation
-  textHash: string;          // SHA-256 of text
-  hints?: Hint[];            // non-text metadata from the source, e.g. EPUB italics
+  text: string; // canonical text — immutable after creation
+  textHash: string; // SHA-256 of text
+  hints?: Hint[]; // non-text metadata from the source, e.g. EPUB italics
   analysisStatus: 'pending' | 'running' | 'done' | 'failed';
 }
 
-export interface Hint { start: number; end: number; kind: 'emphasis' }
+export interface Hint {
+  start: number;
+  end: number;
+  kind: 'emphasis';
+}
 
 export interface Analysis {
   partId: string;
-  textHash: string;          // must equal Part.textHash or the analysis is stale
+  textHash: string; // must equal Part.textHash or the analysis is stale
   analyzer: { kind: 'llm' | 'heuristic' | 'mixed'; model?: string; version: number };
   createdAt: string;
   segments: Segment[];
 }
 
 export interface Segment {
-  start: number;             // UTF-16 code-unit offset into Part.text, inclusive
-  end: number;               // exclusive
-  speakerId: string;         // Character.id
+  start: number; // UTF-16 code-unit offset into Part.text, inclusive
+  end: number; // exclusive
+  speakerId: string; // Character.id
   mode: Mode;
   tone?: Tone;
   source: 'llm' | 'heuristic' | 'user'; // 'user' = manual correction, never overwritten by re-analysis of other parts
@@ -217,7 +234,7 @@ No Unicode normalisation, no whitespace collapsing, no hyphen repair. After crea
 
 - paragraph breaks (`\n`)
 - quoted speech: `"…"`, `“…”`, `«…»`, `‘…’` (straight `'` only when clearly a quote and not an apostrophe)
-- Spanish dash dialogue: a paragraph starting with `—` opens speech; a later `—` followed by a narration cue (lowercase word, or a speech verb) switches to narration (the *inciso*); the next `—` returns to speech
+- Spanish dash dialogue: a paragraph starting with `—` opens speech; a later `—` followed by a narration cue (lowercase word, or a speech verb) switches to narration (the _inciso_); the next `—` returns to speech
 
 Units tile the text (same invariants as segments). Each unit has a provisional mode: `speech` if inside quotes or dash dialogue, otherwise `narration`.
 
@@ -275,12 +292,18 @@ Unit labels become segments. Adjacent units with the same speaker, mode and tone
 ## Module `playback`
 
 ```ts
-export interface Utterance { id: string; text: string; voice: VoiceSettings }
+export interface Utterance {
+  id: string;
+  text: string;
+  voice: VoiceSettings;
+}
 export interface SpeechEngine {
   listVoices(lang?: string): Promise<DeviceVoice[]>;
   // Plays the utterances in order; resolves when all are done or stop() is called.
   play(queue: Utterance[], onProgress: (utteranceId: string) => void): Promise<void>;
-  pause(): Promise<void>; resume(): Promise<void>; stop(): Promise<void>;
+  pause(): Promise<void>;
+  resume(): Promise<void>;
+  stop(): Promise<void>;
 }
 ```
 
@@ -297,13 +320,13 @@ export interface SpeechEngine {
 
 Mobile-first, works at 360 px wide, dark and light theme (follows the system, with a manual override stored locally).
 
-| View | Content |
-|---|---|
-| Library | List of stories (title, number of parts, analysis status), create, import JSON |
-| Story | Ordered parts list (drag to reorder, insert above/below, replace, rename, delete), add part (file/paste), per-part analysis status with progress and cost estimate, export |
+| View            | Content                                                                                                                                                                                         |
+| --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Library         | List of stories (title, number of parts, analysis status), create, import JSON                                                                                                                  |
+| Story           | Ordered parts list (drag to reorder, insert above/below, replace, rename, delete), add part (file/paste), per-part analysis status with progress and cost estimate, export                      |
 | Reader / player | Text of the current part with segments coloured by speaker; current segment highlighted and kept in view; tap paragraph to play; tap segment → reassign speaker; player bar fixed at the bottom |
-| Cast | Characters with role, aliases, usage count, voice controls (voice picker, pitch, rate), preview button, merge, rename |
-| Settings | API key (masked, test button), model choice, default speed, theme, storage usage |
+| Cast            | Characters with role, aliases, usage count, voice controls (voice picker, pitch, rate), preview button, merge, rename                                                                           |
+| Settings        | API key (masked, test button), model choice, default speed, theme, storage usage                                                                                                                |
 
 ## Code style
 
@@ -317,32 +340,39 @@ Mobile-first, works at 360 px wide, dark and light theme (follows the system, wi
 // src/format/validate.ts
 export type ValidationResult = { ok: true } | { ok: false; reason: string };
 
-export function validateSegments(text: string, segments: Segment[], castIds: Set<string>): ValidationResult {
-  if (segments.length === 0) return text.length === 0 ? { ok: true } : { ok: false, reason: 'no segments' };
+export function validateSegments(
+  text: string,
+  segments: Segment[],
+  castIds: Set<string>,
+): ValidationResult {
+  if (segments.length === 0)
+    return text.length === 0 ? { ok: true } : { ok: false, reason: 'no segments' };
   if (segments[0].start !== 0) return { ok: false, reason: 'does not start at 0' };
 
   for (let i = 0; i < segments.length; i++) {
     const s = segments[i];
     if (s.start >= s.end) return { ok: false, reason: `empty segment at ${i}` };
-    if (i > 0 && segments[i - 1].end !== s.start) return { ok: false, reason: `gap or overlap at ${i}` };
+    if (i > 0 && segments[i - 1].end !== s.start)
+      return { ok: false, reason: `gap or overlap at ${i}` };
     if (!castIds.has(s.speakerId)) return { ok: false, reason: `unknown speaker ${s.speakerId}` };
   }
 
-  if (segments.at(-1)!.end !== text.length) return { ok: false, reason: 'does not reach end of text' };
+  if (segments.at(-1)!.end !== text.length)
+    return { ok: false, reason: 'does not reach end of text' };
   return { ok: true };
 }
 ```
 
 ## Testing strategy
 
-| Level | What | Where |
-|---|---|---|
-| Unit | Canonicalisation, EPUB extraction, unit splitting (en quotes, es dashes, apostrophes, nested quotes), heuristic attribution, LLM span → offset conversion and fallback, merge, voice assignment, cast merge | `tests/unit/**` |
-| Property | For random text and random analyser output (including malformed LLM spans), the stored analysis either satisfies the invariants or is rejected. **Text preservation never fails.** | `tests/unit/format/*.property.test.ts` (fast-check) |
-| Integration | Dexie repositories against `fake-indexeddb`; export → import round-trip is byte-identical; cast merge rewrites segments across parts | `tests/unit/storage/**` |
-| Fixture accuracy | Hand-labelled public-domain excerpts (en: *Pride and Prejudice*; es: Galdós, *Marianela*), ~150 units each. Heuristic: speech vs narration ≥ 95%, speaker attribution ≥ 70%. | `tests/fixtures/`, run in CI |
-| LLM accuracy (manual) | Same fixtures through the real API, speaker attribution ≥ 90%. Not in CI (costs money). | `npm run eval:llm` |
-| Manual device | Checklist on the Android phone: background playback with the screen locked for 30 min, notification controls, resume after app kill, voice substitution | `docs/manual-test-checklist.md` |
+| Level                 | What                                                                                                                                                                                                        | Where                                               |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
+| Unit                  | Canonicalisation, EPUB extraction, unit splitting (en quotes, es dashes, apostrophes, nested quotes), heuristic attribution, LLM span → offset conversion and fallback, merge, voice assignment, cast merge | `tests/unit/**`                                     |
+| Property              | For random text and random analyser output (including malformed LLM spans), the stored analysis either satisfies the invariants or is rejected. **Text preservation never fails.**                          | `tests/unit/format/*.property.test.ts` (fast-check) |
+| Integration           | Dexie repositories against `fake-indexeddb`; export → import round-trip is byte-identical; cast merge rewrites segments across parts                                                                        | `tests/unit/storage/**`                             |
+| Fixture accuracy      | Hand-labelled public-domain excerpts (en: _Pride and Prejudice_; es: Galdós, _Marianela_), ~150 units each. Heuristic: speech vs narration ≥ 95%, speaker attribution ≥ 70%.                                | `tests/fixtures/`, run in CI                        |
+| LLM accuracy (manual) | Same fixtures through the real API, speaker attribution ≥ 90%. Not in CI (costs money).                                                                                                                     | `npm run eval:llm`                                  |
+| Manual device         | Checklist on the Android phone: background playback with the screen locked for 30 min, notification controls, resume after app kill, voice substitution                                                     | `docs/manual-test-checklist.md`                     |
 
 **Coverage:** ≥ 90% lines for `format` and `analysis`, ≥ 80% for `ingest`, `cast` and `storage`. UI isn't held to a coverage number.
 
@@ -381,14 +411,14 @@ export function validateSegments(text: string, segments: Segment[], castIds: Set
 
 ## Risks
 
-| Id | Risk | Mitigation |
-|---|---|---|
-| R1 | Android stops TTS or kills the WebView when the screen is locked | **Spike first:** a minimal Capacitor app with a native plugin, `TextToSpeech` in a foreground service with a media notification, playing a 30-minute queue with the screen locked. Record the result in ADR-001. If it fails, the fallback is a keep-awake mode (screen dimmed on). |
-| R2 | Few distinct device voices (often 1–3 per language on Android) | Pitch and rate variation per character; the user can install more voices (Google TTS voice packs); the Cast view makes overrides easy |
-| R3 | Heuristic attribution is weak on unattributed dialogue | Manual segment reassignment; LLM path; fixture tests that track accuracy over time |
-| R4 | The LLM returns spans that don't match the unit text | Per-unit fallback to the heuristic label, so analysis never fails because of the model |
-| R5 | IndexedDB is evicted or data is lost on uninstall | `storage.persist()`; JSON export; Settings shows storage usage |
-| R6 | EPUB edge cases (odd spines, nested markup, footnotes) | Import preview showing the extracted text per spine item before saving; fixture EPUBs |
+| Id  | Risk                                                             | Mitigation                                                                                                                                                                                                                                                                          |
+| --- | ---------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| R1  | Android stops TTS or kills the WebView when the screen is locked | **Spike first:** a minimal Capacitor app with a native plugin, `TextToSpeech` in a foreground service with a media notification, playing a 30-minute queue with the screen locked. Record the result in ADR-001. If it fails, the fallback is a keep-awake mode (screen dimmed on). |
+| R2  | Few distinct device voices (often 1–3 per language on Android)   | Pitch and rate variation per character; the user can install more voices (Google TTS voice packs); the Cast view makes overrides easy                                                                                                                                               |
+| R3  | Heuristic attribution is weak on unattributed dialogue           | Manual segment reassignment; LLM path; fixture tests that track accuracy over time                                                                                                                                                                                                  |
+| R4  | The LLM returns spans that don't match the unit text             | Per-unit fallback to the heuristic label, so analysis never fails because of the model                                                                                                                                                                                              |
+| R5  | IndexedDB is evicted or data is lost on uninstall                | `storage.persist()`; JSON export; Settings shows storage usage                                                                                                                                                                                                                      |
+| R6  | EPUB edge cases (odd spines, nested markup, footnotes)           | Import preview showing the extracted text per spine item before saving; fixture EPUBs                                                                                                                                                                                               |
 
 ## Decisions (resolved open questions, 2026-10-14)
 

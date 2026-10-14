@@ -1,0 +1,6 @@
+* text=auto eol=lf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Test fixtures must stay byte-exact: the app's "text never changes" guarantee is tested against them.
+tests/fixtures/** -text

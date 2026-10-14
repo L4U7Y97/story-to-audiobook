@@ -4,6 +4,9 @@ import type { Character, VoiceSettings } from '@/format/types';
 import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
 import { defaultLocale, getStory, updateStory } from '@/storage/stories';
+import { mergeCharactersInStory } from '@/storage/cast';
+import { castUsage, renameCharacter, setAliases } from '@/cast/castOps';
+import CharacterEditor from '../components/CharacterEditor.vue';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
 import { speakerColorIndex } from '../speakerColors';
@@ -16,14 +19,9 @@ const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.
 /** Segment count per character across all analysed parts. */
 const { data: usage } = useLiveQuery(async () => {
   const s = await getStory(db, props.id);
-  const analyses = await db.analyses.bulkGet(s?.partIds ?? []);
-  const counts = new Map<string, number>();
-  for (const a of analyses) {
-    for (const seg of a?.segments ?? [])
-      counts.set(seg.speakerId, (counts.get(seg.speakerId) ?? 0) + 1);
-  }
-  return counts;
+  return castUsage(await db.analyses.bulkGet(s?.partIds ?? []));
 }, [() => props.id]);
+const error = ref('');
 
 const deviceVoices = ref<DeviceVoice[]>([]);
 onMounted(async () => {
@@ -69,6 +67,32 @@ async function preview(character: Character) {
   await player.preview(sample, character.voice);
 }
 
+async function saveNames(character: Character, changes: { name: string; aliases: string[] }) {
+  const s = story.value;
+  if (!s) return;
+  const renamed = renameCharacter(s.cast, character.id, changes.name);
+  if (!renamed.ok) return void (error.value = renamed.reason);
+  // Keep the alias renameCharacter adds for the old name alongside the edited list.
+  const added = renamed.value
+    .find((c) => c.id === character.id)!
+    .aliases.filter((a) => !character.aliases.includes(a));
+  const aliases = [...new Set([...changes.aliases, ...added])];
+  const result = setAliases(renamed.value, character.id, aliases);
+  if (!result.ok) return void (error.value = result.reason);
+  error.value = '';
+  await updateStory(db, s.id, { cast: result.value });
+}
+
+async function merge(character: Character, intoId: string) {
+  try {
+    await mergeCharactersInStory(db, props.id, character.id, intoId);
+    error.value = '';
+    player.castChanged();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 function roleLabel(c: Character): string {
   return c.role === 'narrator' ? 'Narrator' : c.role === 'unknown' ? 'Unattributed lines' : '';
 }
@@ -84,6 +108,7 @@ function roleLabel(c: Character): string {
     </nav>
     <h1>Cast</h1>
     <p class="muted">Voices apply from the next line that is read.</p>
+    <p v-if="error" class="error" role="alert">{{ error }}</p>
 
     <ul class="cast">
       <li
@@ -98,7 +123,8 @@ function roleLabel(c: Character): string {
             <h2>{{ c.name }}</h2>
             <p class="muted small">
               <template v-if="roleLabel(c)">{{ roleLabel(c) }} · </template>
-              {{ usage?.get(c.id) ?? 0 }} lines
+              <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
+              <template v-else>{{ usage?.get(c.id) ?? 0 }} lines</template>
               <template v-if="c.aliases.length"> · also “{{ c.aliases.join('”, “') }}”</template>
             </p>
           </div>
@@ -141,6 +167,17 @@ function roleLabel(c: Character): string {
             />
           </label>
         </div>
+
+        <details>
+          <summary>Edit names or merge</summary>
+          <CharacterEditor
+            :key="c.name + c.aliases.join()"
+            :character="c"
+            :cast="story?.cast ?? []"
+            @save="saveNames(c, $event)"
+            @merge="merge(c, $event)"
+          />
+        </details>
       </li>
     </ul>
   </main>
@@ -193,6 +230,19 @@ function roleLabel(c: Character): string {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 12px;
+}
+
+summary {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.9rem;
+  min-height: 32px;
+  display: flex;
+  align-items: center;
+}
+
+.error {
+  color: var(--danger);
 }
 
 .sliders input {

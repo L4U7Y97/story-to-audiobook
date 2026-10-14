@@ -56,10 +56,22 @@ function wordCount(text: string): number {
         {{ story.lang === 'es' ? 'Español' : 'English' }} · {{ characterCount }}
         {{ characterCount === 1 ? 'character' : 'characters' }}
       </p>
+      <div v-if="parts?.length" class="story-actions">
+        <RouterLink class="button primary" :to="{ name: 'reader', params: { id: story.id } }">
+          {{ story.position ? 'Continue listening' : 'Read &amp; listen' }}
+        </RouterLink>
+        <RouterLink class="button" :to="{ name: 'cast', params: { id: story.id } }"
+          >Cast</RouterLink
+        >
+      </div>
 
       <ol v-if="parts?.length" class="parts">
         <li v-for="part in parts" :key="part.id" class="card part">
-          <span class="part-title">{{ part.title }}</span>
+          <RouterLink
+            class="part-title"
+            :to="{ name: 'reader', params: { id: story.id, partId: part.id } }"
+            >{{ part.title }}</RouterLink
+          >
           <span class="muted">{{ wordCount(part.text).toLocaleString() }} words</span>
           <span class="status" :data-status="part.analysisStatus">
             {{ STATUS_LABEL[part.analysisStatus] }}
@@ -114,6 +126,18 @@ function wordCount(text: string): number {
 
 .part-title {
   font-weight: 600;
+  color: inherit;
+  text-decoration: none;
+}
+
+.story-actions {
+  display: flex;
+  gap: 8px;
+  margin: 12px 0;
+}
+
+.story-actions .button {
+  flex: 1;
 }
 
 .part-title::before {

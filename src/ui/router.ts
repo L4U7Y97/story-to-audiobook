@@ -12,6 +12,18 @@ export const router = createRouter({
       component: () => import('./views/StoryView.vue'),
       props: true,
     },
+    {
+      path: '/story/:id/read/:partId?',
+      name: 'reader',
+      component: () => import('./views/ReaderView.vue'),
+      props: true,
+    },
+    {
+      path: '/story/:id/cast',
+      name: 'cast',
+      component: () => import('./views/CastView.vue'),
+      props: true,
+    },
     { path: '/spike', name: 'spike', component: () => import('@/spike/SpikePanel.vue') },
   ],
 });

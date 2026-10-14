@@ -106,75 +106,75 @@ npm test
 
 ## Phase 2: First playable slice (desktop)
 
-### - [ ] Task 7: Unit segmentation
+### - [x] Task 7: Unit segmentation
 
 **Description:** `splitUnits(text, lang)` splits on paragraphs, the four quote styles (handling apostrophes) and Spanish dash dialogue with incisos. Gives each unit a provisional mode.
 **Acceptance criteria:**
 
-- [ ] Units always tile the text (property test, reusing the T3 validator)
-- [ ] Table tests for: `“Hi,” she said, “bye.”` → 3 units; `—Hola —dijo Ana—. ¿Vienes?` → 3 units; `don't`/`l'eau` are not quotes; nested quotes; a quote spanning paragraphs
+- [x] Units always tile the text (property test, reusing the T3 validator)
+- [x] Table tests for: `“Hi,” she said, “bye.”` → 3 units; `—Hola —dijo Ana—. ¿Vienes?` → 3 units; `don't`/`l'eau` are not quotes; nested quotes; a quote spanning paragraphs
       **Verification:** `npm test -- units`
       **Dependencies:** T3
       **Files:** `src/analysis/units.ts`, `tests/unit/analysis/units.test.ts`
       **Scope:** S
 
-### - [ ] Task 8: Heuristic analyser with fixtures
+### - [x] Task 8: Heuristic analyser with fixtures
 
 **Description:** Speech-verb lists (en/es), speaker attribution (name, pronoun → gender, alternation, unknown), new-character detection, thought cues, and tone from speech verbs. Add hand-labelled fixtures: a _Pride and Prejudice_ excerpt (en) and a _Marianela_ excerpt (es), ~150 units each.
 **Acceptance criteria:**
 
-- [ ] Deterministic output (same input gives deep-equal output)
-- [ ] Fixtures: speech vs narration ≥ 95%, speaker attribution ≥ 70%, asserted in tests
-- [ ] Coverage ≥ 90% for `src/analysis/heuristic`
+- [x] Deterministic output (same input gives deep-equal output)
+- [x] Fixtures: speech vs narration ≥ 95%, speaker attribution ≥ 70%, asserted in tests
+- [x] Coverage ≥ 90% for `src/analysis/heuristic`
       **Verification:** `npm test -- heuristic`
       **Dependencies:** T7
       **Files:** `src/analysis/heuristic/{speechVerbs.en,speechVerbs.es,attribute,tone,index}.ts`, `tests/fixtures/{en,es}/*`, `tests/unit/analysis/heuristic.test.ts`
       **Scope:** M
 
-### - [ ] Task 9: Analysis pipeline wired to uploads
+### - [x] Task 9: Analysis pipeline wired to uploads
 
 **Description:** `merge.ts` (unit labels → coalesced segments) and `analyzer.ts` (run the heuristic on a part with the current cast, append new characters, validate, store). Adding a part triggers analysis; the Story view shows status (pending/running/done/failed).
 **Acceptance criteria:**
 
-- [ ] Adding a part produces a stored, valid analysis and updates the story's cast
-- [ ] Analysing part 2 with part 1's cast reuses the existing character ids (fixture split into two parts)
-- [ ] A 5,000-word chapter is analysed in < 1 s on desktop (benchmark test)
+- [x] Adding a part produces a stored, valid analysis and updates the story's cast
+- [x] Analysing part 2 with part 1's cast reuses the existing character ids (fixture split into two parts)
+- [x] A 5,000-word chapter is analysed in < 1 s on desktop (benchmark test)
       **Verification:** `npm test -- analysis`; manual check in the dev server.
       **Dependencies:** T4, T6, T8
       **Files:** `src/analysis/merge.ts`, `src/analysis/analyzer.ts`, `src/ui/views/StoryView.vue`, `tests/unit/analysis/{merge,analyzer}.test.ts`
       **Scope:** M
 
-### - [ ] Task 10: Automatic voice assignment and basic Cast view
+### - [x] Task 10: Automatic voice assignment and basic Cast view
 
 **Description:** `assignVoices` (narrator gets the default voice; characters rotate through voices; deterministic pitch and rate variation from the id hash, nudged by gender; no duplicate combinations). Cast view lists characters with a voice picker, pitch and rate sliders, and a preview button (web engine).
 **Acceptance criteria:**
 
-- [ ] With 1 device voice and 10 characters, all 11 (voice, pitch, rate) combinations are distinct (test)
-- [ ] Changing a voice in the Cast view persists and previews immediately
+- [x] With 1 device voice and 10 characters, all 11 (voice, pitch, rate) combinations are distinct (test)
+- [x] Changing a voice in the Cast view persists and previews immediately
       **Verification:** `npm test -- cast`; manual check in the Cast view.
       **Dependencies:** T3, T9
       **Files:** `src/cast/assignVoices.ts`, `src/ui/views/CastView.vue`, `tests/unit/cast/assignVoices.test.ts`
       **Scope:** M
 
-### - [ ] Task 11: Speech engine interface, web engine and player
+### - [x] Task 11: Speech engine interface, web engine and player
 
 **Description:** The `SpeechEngine` interface, `WebSpeechEngine`, a `FakeSpeechEngine` for tests, and `player.ts` (build utterances from segments, skip unspeakable ones, apply global speed, emit current segment, persist position throttled to 2 s plus on pause, advance to the next analysed part, stop at an unanalysed one).
 **Acceptance criteria:**
 
-- [ ] Player tests with the fake engine: order, skipping, part advance, stop on unanalysed part, position saving, resume from a saved position
-- [ ] A voice change takes effect at the next utterance of that character
+- [x] Player tests with the fake engine: order, skipping, part advance, stop on unanalysed part, position saving, resume from a saved position
+- [x] A voice change takes effect at the next utterance of that character
       **Verification:** `npm test -- playback`
       **Dependencies:** T4, T10
       **Files:** `src/playback/{engine,webEngine,fakeEngine,player}.ts`, `tests/unit/playback/player.test.ts`
       **Scope:** M
 
-### - [ ] Task 12: Reader and player UI
+### - [x] Task 12: Reader and player UI
 
 **Description:** Reader view showing the part text with segments tinted by speaker, the current segment highlighted and scrolled into view, tap a paragraph to play from it. A fixed player bar with play/pause, previous/next segment, paragraph and part, and speed.
 **Acceptance criteria:**
 
-- [ ] On desktop: paste a chapter → it plays with distinct voices for narrator and characters, and the highlight follows
-- [ ] Reload → play resumes from the saved segment
+- [x] On desktop: paste a chapter → it plays with distinct voices for narrator and characters, and the highlight follows
+- [x] Reload → play resumes from the saved segment
       **Verification:** manual check in the dev server with the en and es fixtures.
       **Dependencies:** T11
       **Files:** `src/ui/views/ReaderView.vue`, `src/ui/components/PlayerBar.vue`, `src/ui/components/SegmentText.vue`, `src/ui/composables/usePlayer.ts`

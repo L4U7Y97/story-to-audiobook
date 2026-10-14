@@ -1,4 +1,4 @@
-import type { Analysis, Part, Story } from '@/format/types';
+import type { Analysis, Part, Story, VoiceSettings } from '@/format/types';
 import type { SpeechEngine } from './engine';
 import { buildUtterances, paragraphStarts, segmentIndexOf } from './utterances';
 
@@ -97,6 +97,12 @@ export class Player {
     if (this.snapshot.state === 'playing' && this.snapshot.position) {
       await this.restart(this.snapshot.position);
     }
+  }
+
+  /** Stops playback (keeping the position) and speaks a sample line, e.g. to try a voice. */
+  async preview(text: string, voice: VoiceSettings): Promise<void> {
+    await this.stop();
+    await this.engine.play([{ id: 'preview', text, voice }], () => {});
   }
 
   /** Call after the cast changes: new voices apply from the next segment that starts. */

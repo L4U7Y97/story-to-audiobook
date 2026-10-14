@@ -90,7 +90,12 @@ textarea {
   resize: vertical;
 }
 
-button {
+button,
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  text-decoration: none;
   min-height: 44px;
   padding: 0 16px;
   border: 1px solid var(--border);
@@ -99,7 +104,8 @@ button {
   cursor: pointer;
 }
 
-button.primary {
+button.primary,
+.button.primary {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--accent-fg);
@@ -151,4 +157,40 @@ label {
   overflow: hidden;
   clip: rect(0 0 0 0);
   white-space: nowrap;
+}
+
+/* Speaker tints for the reader and cast view (narrator has none). */
+:root {
+  --speaker-0: #2f5fd0;
+  --speaker-1: #b4472a;
+  --speaker-2: #2e7d4f;
+  --speaker-3: #8a3fb0;
+  --speaker-4: #a86b00;
+  --speaker-5: #0f7a8a;
+  --speaker-6: #c03a6b;
+  --speaker-7: #5a6b1f;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --speaker-0: #8fb0ff;
+    --speaker-1: #ff9b7a;
+    --speaker-2: #7fd6a2;
+    --speaker-3: #d39bf2;
+    --speaker-4: #f2c46b;
+    --speaker-5: #6fd3e0;
+    --speaker-6: #ff8fb7;
+    --speaker-7: #bcd36f;
+  }
+}
+
+:root[data-theme='dark'] {
+  --speaker-0: #8fb0ff;
+  --speaker-1: #ff9b7a;
+  --speaker-2: #7fd6a2;
+  --speaker-3: #d39bf2;
+  --speaker-4: #f2c46b;
+  --speaker-5: #6fd3e0;
+  --speaker-6: #ff8fb7;
+  --speaker-7: #bcd36f;
 }

@@ -48,51 +48,51 @@ npm test
 
 ## Phase 1: Foundation
 
-### - [ ] Task 3: Story format types, validator and property tests
+### - [x] Task 3: Story format types, validator and property tests
 
 **Description:** Implement `src/format` exactly as specified: types, `SCHEMA_VERSION`, `validateSegments` (invariants 1–4), `isSpeakable` (invariant 5), and helpers (`sliceSegment`, `sha256`).
 **Acceptance criteria:**
 
-- [ ] Unit tests cover each invariant violation with a clear `reason`
-- [ ] A fast-check property test shows that any segments passing validation reproduce the text exactly, and that random corruptions are rejected
-- [ ] Coverage ≥ 90% for `src/format`
+- [x] Unit tests cover each invariant violation with a clear `reason`
+- [x] A fast-check property test shows that any segments passing validation reproduce the text exactly, and that random corruptions are rejected
+- [x] Coverage ≥ 90% for `src/format`
       **Verification:** `npm test -- format`
       **Dependencies:** T1
       **Files:** `src/format/types.ts`, `src/format/validate.ts`, `src/format/hash.ts`, `tests/unit/format/validate.test.ts`, `tests/unit/format/validate.property.test.ts`
       **Scope:** S
 
-### - [ ] Task 4: Storage layer
+### - [x] Task 4: Storage layer
 
 **Description:** Dexie database (`stories`, `parts`, `analyses` tables) and repository functions: create/list/get story, add/insert/reorder parts (updating `partIds`), save an analysis (rejecting invalid ones via `validateSegments`), and a settings wrapper over Capacitor Preferences. Request `navigator.storage.persist()` on start.
 **Acceptance criteria:**
 
-- [ ] Repository tests run against `fake-indexeddb` and cover create, insert at a position, reorder and delete
-- [ ] Saving an analysis whose `textHash` doesn't match, or that fails validation, throws and stores nothing
-- [ ] `Part.text` has no update path in the repository API
+- [x] Repository tests run against `fake-indexeddb` and cover create, insert at a position, reorder and delete
+- [x] Saving an analysis whose `textHash` doesn't match, or that fails validation, throws and stores nothing
+- [x] `Part.text` has no update path in the repository API
       **Verification:** `npm test -- storage`
       **Dependencies:** T3
       **Files:** `src/storage/db.ts`, `src/storage/stories.ts`, `src/storage/parts.ts`, `src/storage/settings.ts`, `tests/unit/storage/*.test.ts`
       **Scope:** M
 
-### - [ ] Task 5: Ingest .txt and pasted text
+### - [x] Task 5: Ingest .txt and pasted text
 
 **Description:** `canonicalize` (BOM strip, CRLF/CR → LF only), a .txt decoder (UTF-8, fallback to windows-1252 with a notice), and paste.
 **Acceptance criteria:**
 
-- [ ] Tests: CRLF/CR/BOM handling; non-ASCII en/es text unchanged; tabs, double spaces and unusual whitespace preserved byte-for-byte
-- [ ] A windows-1252 file decodes correctly and returns a notice
+- [x] Tests: CRLF/CR/BOM handling; non-ASCII en/es text unchanged; tabs, double spaces and unusual whitespace preserved byte-for-byte
+- [x] A windows-1252 file decodes correctly and returns a notice
       **Verification:** `npm test -- ingest`
       **Dependencies:** T3
       **Files:** `src/ingest/canonicalize.ts`, `src/ingest/txt.ts`, `src/ingest/paste.ts`, `tests/unit/ingest/*.test.ts`
       **Scope:** S
 
-### - [ ] Task 6: Library and "add part" UI slice
+### - [x] Task 6: Library and "add part" UI slice
 
 **Description:** Library view (list and create stories, choose language en/es) and Story view (ordered parts list, add a part by paste or .txt file, at the end or after a chosen part). Parts show `analysisStatus: pending`.
 **Acceptance criteria:**
 
-- [ ] Creating a story and adding two parts works on desktop; data survives a reload
-- [ ] Layout works at 360 px wide
+- [x] Creating a story and adding two parts works on desktop; data survives a reload
+- [x] Layout works at 360 px wide
       **Verification:** run the dev server; create a story, add a pasted part and a .txt part, reload, and check both are still there.
       **Dependencies:** T4, T5
       **Files:** `src/ui/views/LibraryView.vue`, `src/ui/views/StoryView.vue`, `src/ui/components/AddPartDialog.vue`, `src/App.vue`, `src/ui/router.ts`

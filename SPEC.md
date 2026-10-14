@@ -221,7 +221,7 @@ Offsets are UTF-16 code units, the native unit of both JS strings and Java/Kotli
 - Strip a leading BOM.
 - Convert `\r\n` and `\r` to `\n`.
 - **.txt:** decode as UTF-8. If that fails, fall back to windows-1252 and show a notice.
-- **.epub:** read `META-INF/container.xml` → OPF → spine order. For each XHTML document, extract text nodes in document order. Block elements (`p`, `div`, `h1–h6`, `li`, `blockquote`, `br`) produce `\n` boundaries, and paragraphs are separated by `\n\n`. Images, scripts and styles are dropped. `<em>`/`<i>` ranges become `Hint{kind:'emphasis'}` (a common marker for thoughts). Spine items become suggested parts, which the user can deselect or group in a preview before importing.
+- **.epub:** read `META-INF/container.xml` → OPF → spine order. For each XHTML document, extract text nodes in document order, collapsing source whitespace (spaces, tabs, newlines) the way a browser renders it; U+00A0 is kept. Block elements (`p`, `div`, `h1–h6`, `li`, `blockquote`, …) are separated by `\n\n`, and `br` becomes `\n`. Images, scripts and styles are dropped. `<em>`/`<i>` ranges become `Hint{kind:'emphasis'}` (a common marker for thoughts). Each spine document is split at its `h1`–`h3` headings (files often hold several chapters), and each section becomes a suggested part, which the user can deselect or combine in a preview before importing. Title pages, licences and tables of contents start unselected.
 - **Paste:** taken verbatim (after the two normalisations above).
 
 No Unicode normalisation, no whitespace collapsing, no hyphen repair. After creation `Part.text` is **never written again**. "Replace part" creates new text and a new hash, discards the old analysis, and keeps the part id and position.
@@ -279,7 +279,7 @@ Unit labels become segments. Adjacent units with the same speaker, mode and tone
 
 - **New part:** analysed with the current cast as context; new characters are appended to the cast.
 - **Replaced part:** only that part is re-analysed. Voice settings are untouched. Characters that are no longer referenced anywhere are flagged "unused", not deleted.
-- **Re-run analysis** on an existing part (for example after adding an API key): segments with `source: 'user'` keep their speaker wherever their range still matches a resulting segment's range exactly.
+- **Re-run analysis** on an existing part (for example after adding an API key): segments with `source: 'user'` are re-applied: every new segment that lies inside a range the user corrected takes the user's speaker and mode.
 
 ## Module `cast`
 
@@ -323,7 +323,7 @@ Mobile-first, works at 360 px wide, dark and light theme (follows the system, wi
 | View            | Content                                                                                                                                                                                         |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Library         | List of stories (title, number of parts, analysis status), create, import JSON                                                                                                                  |
-| Story           | Ordered parts list (drag to reorder, insert above/below, replace, rename, delete), add part (file/paste), per-part analysis status with progress and cost estimate, export                      |
+| Story           | Ordered parts list (move up/down, insert at a position, replace, rename, re-analyse, delete), add part (file/paste), per-part analysis status with progress and cost estimate, export           |
 | Reader / player | Text of the current part with segments coloured by speaker; current segment highlighted and kept in view; tap paragraph to play; tap segment → reassign speaker; player bar fixed at the bottom |
 | Cast            | Characters with role, aliases, usage count, voice controls (voice picker, pitch, rate), preview button, merge, rename                                                                           |
 | Settings        | API key (masked, test button), model choice, default speed, theme, storage usage                                                                                                                |

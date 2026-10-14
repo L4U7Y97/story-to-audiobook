@@ -1,16 +1,21 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import type { Segment } from '@/format/types';
+import type { Character, Mode, Segment } from '@/format/types';
+import { reassignSegment } from '@/analysis/reassign';
+import { assignVoice } from '@/cast/assignVoices';
 import { paragraphStarts } from '@/playback/utterances';
 import { getAppDb } from '@/storage/db';
-import { getAnalysis } from '@/storage/analyses';
+import { getAnalysis, saveAnalysis } from '@/storage/analyses';
+import { newId } from '@/storage/ids';
+import { defaultLocale } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
 import { getStory } from '@/storage/stories';
 import { useLiveQuery } from '../composables/useLiveQuery';
-import { usePlayer } from '../composables/usePlayer';
+import { getEngine, usePlayer } from '../composables/usePlayer';
 import { speakerColorIndex } from '../speakerColors';
 import PlayerBar from '../components/PlayerBar.vue';
+import SpeakerPicker from '../components/SpeakerPicker.vue';
 
 const props = defineProps<{ id: string; partId?: string }>();
 const db = getAppDb();
@@ -84,6 +89,55 @@ function playFrom(index: number) {
   void player.play({ partId: partId.value, segmentIndex: index });
 }
 
+// "Fix speakers" mode: tapping a line opens the speaker picker instead of playing it.
+const editing = ref(false);
+const picking = ref<number | null>(null);
+const editError = ref('');
+const pickedSegment = computed(() =>
+  picking.value === null ? undefined : analysis.value?.segments[picking.value],
+);
+
+async function toggleEditing() {
+  editing.value = !editing.value;
+  // Segment indices can shift while editing, so playback pauses.
+  if (editing.value) await player.pause();
+}
+
+function onSegmentClick(index: number) {
+  if (editing.value) picking.value = index;
+  else playFrom(index);
+}
+
+async function applySpeaker(speakerId: string, mode?: Mode, added: Character[] = []) {
+  const a = analysis.value;
+  const p = part.value;
+  const s = story.value;
+  if (!a || !p || !s || picking.value === null) return;
+  const segments = reassignSegment(
+    p.text,
+    a.segments,
+    picking.value,
+    speakerId,
+    s.narratorId,
+    mode,
+  );
+  try {
+    await saveAnalysis(db, { ...a, segments }, { added, aliasAdditions: [] });
+    editError.value = '';
+    picking.value = null;
+  } catch (e) {
+    editError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+async function createSpeaker(name: string, mode?: Mode) {
+  const s = story.value;
+  if (!s) return;
+  const base = { id: newId(), role: 'character' as const, name, aliases: [] };
+  const voice = assignVoice(base, s.cast, await getEngine().listVoices(), defaultLocale(s.lang));
+  await applySpeaker(base.id, mode, [{ ...base, voice }]);
+}
+
 function selectPart(event: Event) {
   const id = (event.target as HTMLSelectElement).value;
   void player.jump({ partId: id, segmentIndex: 0 });
@@ -97,8 +151,20 @@ function selectPart(event: Event) {
       <RouterLink :to="{ name: 'story', params: { id } }"
         >← {{ story?.title ?? 'Story' }}</RouterLink
       >
-      <RouterLink :to="{ name: 'cast', params: { id } }">Cast</RouterLink>
+      <span class="top-actions">
+        <button
+          v-if="paragraphs.length"
+          class="link"
+          :aria-pressed="editing"
+          @click="toggleEditing"
+        >
+          {{ editing ? 'Done' : 'Fix speakers' }}
+        </button>
+        <RouterLink :to="{ name: 'cast', params: { id } }">Cast</RouterLink>
+      </span>
     </nav>
+    <p v-if="editing" class="hint">Tap a line to choose who reads it.</p>
+    <p v-if="editError" class="error" role="alert">{{ editError }}</p>
 
     <label v-if="parts?.length" class="part-picker">
       <span class="sr-only">Part</span>
@@ -111,7 +177,7 @@ function selectPart(event: Event) {
       This part has not been analysed yet. Analyse it from the story page to hear it.
     </p>
 
-    <article ref="textEl" class="text" :lang="story?.lang">
+    <article ref="textEl" :class="['text', { editing }]" :lang="story?.lang">
       <p v-for="(paragraph, i) in paragraphs" :key="i">
         <span
           v-for="s in paragraph.segments"
@@ -131,13 +197,23 @@ function selectPart(event: Event) {
               : undefined
           "
           :title="names.get(s.segment.speakerId)"
-          @click="playFrom(s.index)"
+          @click="onSegmentClick(s.index)"
           >{{ s.text }}</span
         >
       </p>
     </article>
 
-    <PlayerBar :player="player" :snapshot="snapshot" />
+    <PlayerBar v-if="!editing" :player="player" :snapshot="snapshot" />
+    <SpeakerPicker
+      v-if="pickedSegment && part && story"
+      :segment="pickedSegment"
+      :text="part.text.slice(pickedSegment.start, pickedSegment.end)"
+      :cast="story.cast"
+      :colors="colors"
+      @pick="applySpeaker($event.speakerId, $event.mode)"
+      @create="createSpeaker($event.name, $event.mode)"
+      @close="picking = null"
+    />
   </main>
 </template>
 
@@ -145,7 +221,37 @@ function selectPart(event: Event) {
 .top {
   display: flex;
   justify-content: space-between;
+  align-items: center;
   margin-bottom: 12px;
+}
+
+.top-actions {
+  display: flex;
+  gap: 16px;
+  align-items: center;
+}
+
+.link {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.hint {
+  color: var(--muted);
+  font-size: 0.9rem;
+}
+
+.error {
+  color: var(--danger);
+}
+
+.text.editing .segment {
+  text-decoration: underline dotted;
+  text-underline-offset: 4px;
 }
 
 .part-picker {

@@ -2,12 +2,13 @@ import type { Analysis, Character } from '@/format/types';
 import { assignVoices } from '@/cast/assignVoices';
 import type { DeviceVoice } from '@/playback/engine';
 import type { StoryDb } from '@/storage/db';
-import { saveAnalysis } from '@/storage/analyses';
+import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { getPart, setAnalysisStatus } from '@/storage/parts';
 import { defaultLocale, getStory } from '@/storage/stories';
 import { newId, now } from '@/storage/ids';
 import { analyzeHeuristic, HEURISTIC_VERSION } from './heuristic';
 import { mergeLabels } from './merge';
+import { applyUserCorrections } from './reassign';
 import { splitUnits } from './units';
 
 export interface AnalyzeOptions {
@@ -47,12 +48,20 @@ async function runAnalysis(db: StoryDb, partId: string, options: AnalyzeOptions)
       defaultLocale(story.lang),
     );
 
+    // Manual speaker corrections survive a re-analysis of the same text.
+    const previous = await getAnalysis(db, partId);
+    const speakers = new Set([...story.cast, ...voiced].map((c) => c.id));
+    const segments =
+      previous?.textHash === part.textHash
+        ? applyUserCorrections(part.text, merged.segments, previous.segments, speakers)
+        : merged.segments;
+
     const analysis: Analysis = {
       partId,
       textHash: part.textHash,
       analyzer: { kind: 'heuristic', version: HEURISTIC_VERSION },
       createdAt: now(),
-      segments: merged.segments,
+      segments,
     };
     await saveAnalysis(db, analysis, {
       added: voiced,

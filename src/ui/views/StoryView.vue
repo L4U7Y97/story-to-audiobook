@@ -1,6 +1,8 @@
 <script setup lang="ts">
-import { ref } from 'vue';
-import type { AnalysisStatus } from '@/format/types';
+import { computed, ref } from 'vue';
+import type { AnalysisStatus, Part } from '@/format/types';
+import { analyzePart } from '@/analysis/analyzer';
+import { listWebVoices } from '@/playback/webVoices';
 import { getAppDb } from '@/storage/db';
 import { getStory } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
@@ -13,6 +15,24 @@ const db = getAppDb();
 const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
 const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
 const adding = ref(false);
+const errors = ref<Record<string, string>>({});
+const characterCount = computed(
+  () => story.value?.cast.filter((c) => c.role === 'character').length ?? 0,
+);
+
+async function analyse(part: Pick<Part, 'id'>) {
+  delete errors.value[part.id];
+  try {
+    await analyzePart(db, part.id, { voices: await listWebVoices() });
+  } catch (e) {
+    errors.value[part.id] = e instanceof Error ? e.message : String(e);
+  }
+}
+
+function onAdded(part: Part) {
+  adding.value = false;
+  void analyse(part);
+}
 
 const STATUS_LABEL: Record<AnalysisStatus, string> = {
   pending: 'Waiting for analysis',
@@ -33,7 +53,8 @@ function wordCount(text: string): number {
     <template v-if="story">
       <h1>{{ story.title }}</h1>
       <p class="muted">
-        {{ story.lang === 'es' ? 'Español' : 'English' }} · {{ story.cast.length - 2 }} characters
+        {{ story.lang === 'es' ? 'Español' : 'English' }} · {{ characterCount }}
+        {{ characterCount === 1 ? 'character' : 'characters' }}
       </p>
 
       <ol v-if="parts?.length" class="parts">
@@ -42,7 +63,15 @@ function wordCount(text: string): number {
           <span class="muted">{{ wordCount(part.text).toLocaleString() }} words</span>
           <span class="status" :data-status="part.analysisStatus">
             {{ STATUS_LABEL[part.analysisStatus] }}
+            <button
+              v-if="part.analysisStatus === 'pending' || part.analysisStatus === 'failed'"
+              class="analyse"
+              @click="analyse(part)"
+            >
+              {{ part.analysisStatus === 'failed' ? 'Retry' : 'Analyse' }}
+            </button>
           </span>
+          <p v-if="errors[part.id]" class="error" role="alert">{{ errors[part.id] }}</p>
         </li>
       </ol>
       <p v-else-if="parts" class="muted">No parts yet. Add the first chapter or a few pages.</p>
@@ -51,7 +80,7 @@ function wordCount(text: string): number {
         v-if="adding"
         :story-id="story.id"
         :parts="parts ?? []"
-        @added="adding = false"
+        @added="onAdded"
         @cancel="adding = false"
       />
       <button v-else class="primary add" @click="adding = true">Add a part</button>
@@ -110,5 +139,23 @@ function wordCount(text: string): number {
 
 .add {
   width: 100%;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.analyse {
+  min-height: 36px;
+  padding: 0 12px;
+}
+
+.error {
+  grid-column: 1 / -1;
+  margin: 4px 0 0;
+  color: var(--danger);
+  font-size: 0.85rem;
 }
 </style>

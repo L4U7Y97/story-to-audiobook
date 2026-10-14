@@ -1,11 +1,18 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { Player, PlayerSnapshot } from '@/playback/player';
+import { setSetting } from '@/storage/settings';
+import { SPEEDS } from '../speeds';
 
 const props = defineProps<{ player: Player; snapshot: PlayerSnapshot }>();
 
-const SPEEDS = [0.75, 1, 1.25, 1.5, 1.75, 2];
 const playing = computed(() => props.snapshot.state === 'playing');
+
+/** The chosen speed also becomes the default for the next session. */
+function changeSpeed(speed: number) {
+  void props.player.setSpeed(speed);
+  void setSetting('speed', speed);
+}
 
 function toggle() {
   const p = props.player;
@@ -30,7 +37,7 @@ function toggle() {
         <span class="sr-only">Speed</span>
         <select
           :value="snapshot.speed"
-          @change="player.setSpeed(Number(($event.target as HTMLSelectElement).value))"
+          @change="changeSpeed(Number(($event.target as HTMLSelectElement).value))"
         >
           <option v-for="s in SPEEDS" :key="s" :value="s">{{ s }}×</option>
         </select>

@@ -35,7 +35,10 @@ function formatDate(iso: string): string {
 
 <template>
   <main class="page">
-    <h1>{{ appName }}</h1>
+    <header class="top">
+      <h1>{{ appName }}</h1>
+      <RouterLink :to="{ name: 'settings' }" class="button">Settings</RouterLink>
+    </header>
 
     <section aria-labelledby="stories-heading" class="stories">
       <h2 id="stories-heading" class="sr-only">Stories</h2>
@@ -78,6 +81,13 @@ function formatDate(iso: string): string {
 </template>
 
 <style scoped>
+.top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
 .story-list {
   list-style: none;
   padding: 0;

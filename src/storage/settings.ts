@@ -36,3 +36,9 @@ export async function setSetting<K extends keyof Settings>(
 ): Promise<void> {
   await Preferences.set({ key, value: JSON.stringify(value) });
 }
+
+export async function getAllSettings(): Promise<Settings> {
+  const keys = Object.keys(DEFAULT_SETTINGS) as Array<keyof Settings>;
+  const values = await Promise.all(keys.map((k) => getSetting(k)));
+  return Object.fromEntries(keys.map((k, i) => [k, values[i]])) as unknown as Settings;
+}

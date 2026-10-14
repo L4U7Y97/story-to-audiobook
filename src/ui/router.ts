@@ -24,6 +24,11 @@ export const router = createRouter({
       component: () => import('./views/CastView.vue'),
       props: true,
     },
+    {
+      path: '/settings',
+      name: 'settings',
+      component: () => import('./views/SettingsView.vue'),
+    },
     { path: '/spike', name: 'spike', component: () => import('@/spike/SpikePanel.vue') },
   ],
 });

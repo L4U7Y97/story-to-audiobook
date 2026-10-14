@@ -194,3 +194,11 @@ label {
   --speaker-6: #ff8fb7;
   --speaker-7: #bcd36f;
 }
+
+:root[data-theme='light'] {
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  color-scheme: dark;
+}

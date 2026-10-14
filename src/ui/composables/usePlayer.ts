@@ -6,6 +6,7 @@ import { getAppDb } from '@/storage/db';
 import { getAnalysis } from '@/storage/analyses';
 import { getPart } from '@/storage/parts';
 import { getStory, updateStory } from '@/storage/stories';
+import { getSetting } from '@/storage/settings';
 
 let engine: SpeechEngine | undefined;
 let current: { storyId: string; player: Player; snapshot: Ref<PlayerSnapshot> } | undefined;
@@ -39,6 +40,7 @@ export function usePlayer(storyId: string): { player: Player; snapshot: Ref<Play
   });
   const snapshot = shallowRef<PlayerSnapshot>(player.state);
   player.subscribe((s) => (snapshot.value = s));
+  void getSetting('speed').then((speed) => player.setSpeed(speed));
   current = { storyId, player, snapshot };
   return current;
 }

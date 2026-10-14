@@ -2,12 +2,13 @@
 import { ref } from 'vue';
 import type { Part } from '@/format/types';
 
-const props = defineProps<{ part: Part; first: boolean; last: boolean }>();
+const props = defineProps<{ part: Part; first: boolean; last: boolean; hasKey: boolean }>();
 const emit = defineEmits<{
   rename: [title: string];
   move: [delta: number];
   replace: [];
-  reanalyse: [];
+  /** No method: Claude when a key is set (after a cost estimate), otherwise the free method. */
+  reanalyse: [method?: 'heuristic'];
   remove: [];
 }>();
 
@@ -58,13 +59,14 @@ function remove() {
         Move down
       </button>
       <button role="menuitem" @click="act(() => emit('replace'))">Replace text…</button>
-      <button
-        v-if="part.analysisStatus === 'done'"
-        role="menuitem"
-        @click="act(() => emit('reanalyse'))"
-      >
-        Analyse again
-      </button>
+      <template v-if="part.analysisStatus === 'done'">
+        <button role="menuitem" @click="act(() => emit('reanalyse'))">
+          {{ hasKey ? 'Analyse again with Claude…' : 'Analyse again' }}
+        </button>
+        <button v-if="hasKey" role="menuitem" @click="act(() => emit('reanalyse', 'heuristic'))">
+          Analyse again (free method)
+        </button>
+      </template>
       <button role="menuitem" :class="{ danger: confirmDelete }" @click="remove">
         {{ confirmDelete ? 'Tap again to delete' : 'Delete' }}
       </button>

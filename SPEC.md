@@ -67,6 +67,7 @@ Format:         npm run format              # prettier --write .
 Test:           npm test                    # vitest run
 Test (watch):   npm run test:watch          # vitest
 Coverage:       npm run test:coverage       # vitest run --coverage
+LLM eval:       npm run eval:llm            # needs ANTHROPIC_API_KEY; real API calls, costs money
 Build (web):    npm run build               # vue-tsc --noEmit && vite build
 Android sync:   npm run android:sync        # npm run build && npx cap sync android
 Android APK:    npm run android:apk         # android:sync, then android\gradlew.bat assembleDebug
@@ -265,10 +266,12 @@ Units tile the text (same invariants as segments). Each unit has a provisional m
   ```
   - `speaker` is an existing character id or a `ref` from `newCharacters`.
   - One span means "the whole unit" (`text` omitted). Several spans split the unit, and **their `text` values concatenated must equal the unit text exactly**.
-- **The model never returns offsets or rewritten text that is stored.** The client converts spans to offsets by walking the unit text. If concatenation fails, a unit is missing, or a speaker is unknown, that unit falls back to its heuristic label (`analyzer.kind = 'mixed'`). This keeps the guarantee with any model behaviour.
-- **Cost shown before running:** estimated input and output tokens and price for the part, from a local token estimate and a price table in `cost.ts`.
-- **Refusals:** a response with `stop_reason: 'refusal'` (Haiku 5.5 has no server-side fallback) is treated like a failed chunk: that chunk's units get heuristic labels and the part is marked `mixed`.
-- **Errors:** 401 → "API key rejected", no retry. 429/5xx/network → retry with backoff (the SDK default plus the app's own resume per chunk). On final failure, the part is marked `failed` with a "retry" and an "analyse without LLM" button.
+  - The prompt shows the cast under short codes (`N` narrator, `U` unknown, `c1`… characters, `x1`… characters found earlier in the same part) instead of ids, which keeps output short; units are shown trimmed, as JSON strings.
+- **The model never returns offsets or rewritten text that is stored.** The client converts spans to offsets by walking the unit text: each span's `text` must appear in order, whitespace between spans may be skipped (it stays with the earlier span), and a span that is only whitespace is rejected. If that fails, a unit is missing, or a speaker is unknown, that unit falls back to its heuristic label (`analyzer.kind = 'mixed'`). This keeps the guarantee with any model behaviour.
+- **New characters** whose name matches the cast (same rules as `matchCast`) are mapped to the existing character instead of duplicated. Heuristic characters used by fallback units are matched the same way.
+- **Cost shown before running:** with a key set, new parts wait for a confirmation that shows the model, the number of requests, the estimated tokens and the price (local token estimate and a price table in `cost.ts`). The user can run Claude, use the free method, or decide later. After a run the actual cost from the API's usage is shown.
+- **Refusals:** a response with `stop_reason: 'refusal'` (Haiku 5.5 has no server-side fallback) is treated like a failed chunk: that chunk's units get heuristic labels and the part is marked `mixed`. A response cut off at `max_tokens` is split in half and retried; below 8 units it falls back to the heuristic.
+- **Errors:** 401 → "API key rejected", no retry. 429/5xx/network → retry with backoff (the SDK's own, 4 retries). Finished chunk responses are kept in memory until the part is stored, so "Retry" resumes without paying again for them. On final failure, the part is marked `failed` with a "Retry" and an "Analyse without Claude" button.
 - **The API key** is stored in Preferences, never written to exports, never logged, and only sent to `api.anthropic.com`.
 
 ### Step 3: Merge
@@ -365,14 +368,14 @@ export function validateSegments(
 
 ## Testing strategy
 
-| Level                 | What                                                                                                                                                                                                        | Where                                               |
-| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------- |
-| Unit                  | Canonicalisation, EPUB extraction, unit splitting (en quotes, es dashes, apostrophes, nested quotes), heuristic attribution, LLM span → offset conversion and fallback, merge, voice assignment, cast merge | `tests/unit/**`                                     |
-| Property              | For random text and random analyser output (including malformed LLM spans), the stored analysis either satisfies the invariants or is rejected. **Text preservation never fails.**                          | `tests/unit/format/*.property.test.ts` (fast-check) |
-| Integration           | Dexie repositories against `fake-indexeddb`; export → import round-trip is byte-identical; cast merge rewrites segments across parts                                                                        | `tests/unit/storage/**`                             |
-| Fixture accuracy      | Hand-labelled public-domain excerpts (en: _Pride and Prejudice_; es: Galdós, _Marianela_), ~150 units each. Heuristic: speech vs narration ≥ 95%, speaker attribution ≥ 70%.                                | `tests/fixtures/`, run in CI                        |
-| LLM accuracy (manual) | Same fixtures through the real API, speaker attribution ≥ 90%. Not in CI (costs money).                                                                                                                     | `npm run eval:llm`                                  |
-| Manual device         | Checklist on the Android phone: background playback with the screen locked for 30 min, notification controls, resume after app kill, voice substitution                                                     | `docs/manual-test-checklist.md`                     |
+| Level                 | What                                                                                                                                                                                                        | Where                                                                 |
+| --------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| Unit                  | Canonicalisation, EPUB extraction, unit splitting (en quotes, es dashes, apostrophes, nested quotes), heuristic attribution, LLM span → offset conversion and fallback, merge, voice assignment, cast merge | `tests/unit/**`                                                       |
+| Property              | For random text and random analyser output (including malformed LLM spans), the stored analysis either satisfies the invariants or is rejected. **Text preservation never fails.**                          | `tests/unit/format/*.property.test.ts` (fast-check)                   |
+| Integration           | Dexie repositories against `fake-indexeddb`; export → import round-trip is byte-identical; cast merge rewrites segments across parts                                                                        | `tests/unit/storage/**`                                               |
+| Fixture accuracy      | Hand-labelled public-domain excerpts (en: _Pride and Prejudice_; es: Galdós, _Marianela_), ~150 units each. Heuristic: speech vs narration ≥ 95%, speaker attribution ≥ 70%.                                | `tests/fixtures/`, run in CI                                          |
+| LLM accuracy (manual) | Same fixtures through the real API, speaker attribution ≥ 90%. Not in CI (costs money).                                                                                                                     | `npm run eval:llm` (`tests/eval/`, results in `docs/eval-results.md`) |
+| Manual device         | Checklist on the Android phone: background playback with the screen locked for 30 min, notification controls, resume after app kill, voice substitution                                                     | `docs/manual-test-checklist.md`                                       |
 
 **Coverage:** ≥ 90% lines for `format` and `analysis`, ≥ 80% for `ingest`, `cast` and `storage`. UI isn't held to a coverage number.
 

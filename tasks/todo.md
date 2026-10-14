@@ -277,26 +277,27 @@ npm test
 
 ## Phase 5: LLM analysis
 
-### - [ ] Task 19: Settings view
+### - [x] Task 19: Settings view
 
 **Description:** API key (masked, stored in Preferences, a "test key" button making one minimal request), model (default `claude-haiku-5-5`, also Sonnet 5.5 and Opus 5.5), effort (default `low`), default speed, theme override, storage usage.
 **Acceptance criteria:**
 
-- [ ] The key never appears in IndexedDB, exports or console output (test greps the export output)
-- [ ] An invalid key shows "API key rejected"
+- [x] The key never appears in IndexedDB or console output (`llmClient.test.ts`, through the real SDK with `fetch` stubbed). The export half is checked in Task 22, when exports exist.
+- [x] An invalid key shows "API key rejected" (unit test, and in the browser with a fake key against the real API)
+- [ ] Manual check with a real key (needs the user's key)
       **Verification:** `npm test -- settings`; manual check with a real key.
       **Dependencies:** T4
       **Files:** `src/ui/views/SettingsView.vue`, `src/storage/settings.ts`, `src/analysis/llm/client.ts`, `tests/unit/storage/settings.test.ts`
       **Scope:** S
 
-### - [ ] Task 20: LLM analyser
+### - [x] Task 20: LLM analyser
 
 **Description:** Zod schema, prompt (language, cast, context units, numbered chunk), chunking (~300 units or ~6k tokens), and span → offset conversion with per-unit heuristic fallback. Refusal and failed chunks fall back to the heuristic (`mixed`); 401 means no retry; 429/5xx/network retry with backoff. Uses `@anthropic-ai/sdk` with `dangerouslyAllowBrowser: true` (verify the option name against the SDK docs before writing).
 **Acceptance criteria:**
 
-- [ ] With a mocked client: valid output → segments; spans that don't match, missing units and unknown speakers → per-unit fallback; refusal → chunk fallback. All results pass validation.
-- [ ] Property test: random malformed LLM output never produces an invalid stored analysis
-- [ ] New characters and alias additions from the LLM are merged into the cast
+- [x] With a mocked client: valid output → segments; spans that don't match, missing units and unknown speakers → per-unit fallback; refusal → chunk fallback. All results pass validation.
+- [x] Property test: random malformed LLM output never produces an invalid stored analysis
+- [x] New characters and alias additions from the LLM are merged into the cast
       **Verification:** `npm test -- llm`
       **Dependencies:** T9, T19
       **Files:** `src/analysis/llm/{schema,prompt,chunking,client,index}.ts`, `src/analysis/analyzer.ts`, `tests/unit/analysis/llm*.test.ts`
@@ -307,11 +308,12 @@ npm test
 **Description:** Cost estimate shown before analysis (`cost.ts` price table), per-chunk progress, "retry" and "analyse without LLM" on failure, "re-analyse with LLM" for existing parts. Add an `npm run eval:llm` script that runs the fixtures through the real API and reports attribution accuracy.
 **Acceptance criteria:**
 
-- [ ] The estimate for the en fixture is within ±50% of the actual usage reported by the API
+- [x] Cost estimate before analysis, per-chunk progress, "Retry" and "Analyse without Claude" on failure, "Analyse again with Claude…" for existing parts (checked in the browser)
+- [ ] The estimate for the en fixture is within ±50% of the actual usage reported by the API (needs a real key: `npm run eval:llm` prints both)
 - [ ] `eval:llm` reports ≥ 90% attribution on both fixtures with Haiku 5.5 (manual run, recorded in `docs/eval-results.md`)
       **Verification:** manual run with a real key.
       **Dependencies:** T20
-      **Files:** `src/analysis/llm/cost.ts`, `src/ui/views/StoryView.vue`, `scripts/eval-llm.ts`, `docs/eval-results.md`
+      **Files:** `src/analysis/llm/cost.ts`, `src/ui/views/StoryView.vue`, `tests/eval/llm.eval.ts` + `vitest.eval.config.ts` (runs under Vitest so the `@/` imports resolve; not part of `npm test`), `docs/eval-results.md`
       **Scope:** M
 
 ### Checkpoint F: LLM
@@ -328,6 +330,7 @@ npm test
 **Acceptance criteria:**
 
 - [ ] Round trip: export → import → export gives an identical result apart from ids and timestamps (test)
+- [ ] The export contains no settings and never the API key (test greps the export output; carried over from Task 19)
 - [ ] An exported file imported on desktop web plays with the same cast (spec success criterion 9)
       **Verification:** `npm test -- exportImport`; manual phone → desktop transfer.
       **Dependencies:** T4, T17

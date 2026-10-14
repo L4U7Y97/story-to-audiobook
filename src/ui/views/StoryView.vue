@@ -1,12 +1,13 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import type { AnalysisStatus, Part } from '@/format/types';
-import { analyzePart } from '@/analysis/analyzer';
+import { formatUsd } from '@/analysis/llm/cost';
 import { getAppDb } from '@/storage/db';
 import { getStory } from '@/storage/stories';
 import { deletePart, listParts, movePart, renamePart } from '@/storage/parts';
 import { useLiveQuery } from '../composables/useLiveQuery';
-import { existingPlayer, getEngine } from '../composables/usePlayer';
+import { existingPlayer } from '../composables/usePlayer';
+import { modelLabel, useAnalysis, type Method } from '../composables/useAnalysis';
 import AddPartForm from '../components/AddPartForm.vue';
 import PartActions from '../components/PartActions.vue';
 
@@ -17,25 +18,36 @@ const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.
 const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
 const adding = ref(false);
 const replacing = ref<Part | undefined>();
-const errors = ref<Record<string, string>>({});
+const { settings, progress, errors, notes, loadSettings, hasKey, estimate, run } = useAnalysis(db);
+/** Parts waiting for the user to accept the cost of analysing them with Claude. */
+const confirming = ref<Part[]>([]);
+const confirmEstimate = computed(() =>
+  story.value && confirming.value.length ? estimate(story.value, confirming.value) : undefined,
+);
+
+onMounted(loadSettings);
 const characterCount = computed(
   () => story.value?.cast.filter((c) => c.role === 'character').length ?? 0,
 );
 
-async function analyse(part: Pick<Part, 'id'>) {
-  delete errors.value[part.id];
-  try {
-    await analyzePart(db, part.id, { voices: await getEngine().listVoices() });
-  } catch (e) {
-    errors.value[part.id] = e instanceof Error ? e.message : String(e);
+/**
+ * Analyses parts in reading order (analyses run one at a time, so later parts reuse earlier
+ * characters). With an API key, Claude is used only after the user has seen the cost estimate.
+ */
+async function analyse(parts: Part[], method?: Method) {
+  await loadSettings();
+  if (!method && hasKey()) {
+    confirming.value = parts;
+    return;
   }
+  confirming.value = [];
+  for (const part of parts) await run(part, method ?? 'heuristic');
 }
 
 async function onAdded(added: Part[]) {
   adding.value = false;
   replacing.value = undefined;
-  // Analyses run one at a time, in reading order, so later parts reuse earlier characters.
-  for (const part of added) await analyse(part);
+  await analyse(added);
 }
 
 function startReplace(part: Part) {
@@ -61,6 +73,12 @@ const STATUS_LABEL: Record<AnalysisStatus, string> = {
   done: 'Ready',
   failed: 'Analysis failed',
 };
+
+function statusLabel(part: Part): string {
+  const p = progress.value[part.id];
+  if (part.analysisStatus === 'running' && p?.total) return `Analysing… ${p.done}/${p.total}`;
+  return STATUS_LABEL[part.analysisStatus];
+}
 
 function wordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
@@ -95,11 +113,14 @@ function wordCount(text: string): number {
           >
           <span class="muted">{{ wordCount(part.text).toLocaleString() }} words</span>
           <span class="status" :data-status="part.analysisStatus">
-            {{ STATUS_LABEL[part.analysisStatus] }}
+            {{ statusLabel(part) }}
             <button
-              v-if="part.analysisStatus === 'pending' || part.analysisStatus === 'failed'"
+              v-if="
+                (part.analysisStatus === 'pending' && !confirming.some((p) => p.id === part.id)) ||
+                (part.analysisStatus === 'failed' && !errors[part.id])
+              "
               class="analyse"
-              @click="analyse(part)"
+              @click="analyse([part])"
             >
               {{ part.analysisStatus === 'failed' ? 'Retry' : 'Analyse' }}
             </button>
@@ -109,16 +130,68 @@ function wordCount(text: string): number {
             :part="part"
             :first="i === 0"
             :last="i === parts.length - 1"
+            :has-key="Boolean(settings?.apiKey)"
             @rename="renamePart(db, part.id, $event)"
             @move="move(part, $event)"
             @replace="startReplace(part)"
-            @reanalyse="analyse(part)"
+            @reanalyse="analyse([part], $event)"
             @remove="remove(part)"
           />
-          <p v-if="errors[part.id]" class="error" role="alert">{{ errors[part.id] }}</p>
+          <div v-if="errors[part.id]" class="error" role="alert">
+            <span>{{ errors[part.id]!.message }}</span>
+            <span class="error-actions">
+              <button class="analyse" @click="analyse([part], errors[part.id]!.method)">
+                Retry
+              </button>
+              <button
+                v-if="errors[part.id]!.method === 'llm'"
+                class="analyse"
+                @click="analyse([part], 'heuristic')"
+              >
+                Analyse without Claude
+              </button>
+              <RouterLink
+                v-if="errors[part.id]!.message === 'API key rejected'"
+                :to="{ name: 'settings' }"
+                >Settings</RouterLink
+              >
+            </span>
+          </div>
+          <p v-else-if="notes[part.id]" class="note muted">{{ notes[part.id] }}</p>
         </li>
       </ol>
       <p v-else-if="parts" class="muted">No parts yet. Add the first chapter or a few pages.</p>
+
+      <section
+        v-if="confirming.length && confirmEstimate"
+        class="card confirm"
+        aria-labelledby="confirm-heading"
+      >
+        <h2 id="confirm-heading">
+          Analyse
+          {{ confirming.length === 1 ? `“${confirming[0]!.title}”` : `${confirming.length} parts` }}
+          with Claude?
+        </h2>
+        <p class="muted">
+          {{ modelLabel(settings?.model ?? '') }} · {{ confirmEstimate.requests }}
+          {{ confirmEstimate.requests === 1 ? 'request' : 'requests' }} · about
+          {{ Math.round((confirmEstimate.inputTokens + confirmEstimate.outputTokens) / 1000) }}k
+          tokens
+        </p>
+        <p>
+          Estimated cost:
+          <strong>{{
+            confirmEstimate.usd === undefined
+              ? 'unknown for this model'
+              : formatUsd(confirmEstimate.usd)
+          }}</strong>
+        </p>
+        <div class="confirm-actions">
+          <button class="primary" @click="analyse(confirming, 'llm')">Analyse with Claude</button>
+          <button @click="analyse(confirming, 'heuristic')">Use the free method</button>
+          <button class="link" @click="confirming = []">Not now</button>
+        </div>
+      </section>
 
       <AddPartForm
         v-if="adding || replacing"
@@ -216,10 +289,52 @@ function wordCount(text: string): number {
   padding: 0 12px;
 }
 
-.error {
+.error,
+.note {
   grid-column: 1 / -1;
   margin: 4px 0 0;
-  color: var(--danger);
   font-size: 0.85rem;
+}
+
+.error {
+  color: var(--danger);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.error-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.confirm {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.confirm h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.confirm p {
+  margin: 0;
+}
+
+.confirm-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.link {
+  border: none;
+  background: none;
+  color: var(--accent);
 }
 </style>

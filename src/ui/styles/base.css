@@ -8,7 +8,7 @@
   --accent-fg: #ffffff;
   --danger: #c4372f;
   --ok: #2e7d4f;
-  --warn: #a86b00;
+  --warn: #8f5c00;
   --radius: 10px;
   --gutter: 16px;
   color-scheme: light dark;
@@ -201,4 +201,28 @@ label {
 
 :root[data-theme='dark'] {
   color-scheme: dark;
+}
+
+/* Touch targets: navigation links and form controls are at least 44px tall to tap. */
+.back,
+nav.top a {
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+
+input[type='range'] {
+  height: 44px;
+  padding: 0;
+  border: none;
+  background: none;
+  accent-color: var(--accent);
+}
+
+input[type='checkbox'],
+input[type='radio'] {
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  accent-color: var(--accent);
 }

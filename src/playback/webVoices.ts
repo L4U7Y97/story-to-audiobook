@@ -14,10 +14,9 @@ export async function listWebVoices(timeoutMs = 1500): Promise<DeviceVoice[]> {
       setTimeout(done, timeoutMs);
     });
   }
-  return voices.map((v) => ({
-    name: v.voiceURI,
-    lang: v.lang,
-    isDefault: v.default,
-    network: !v.localService,
-  }));
+  return voices.map(toDeviceVoice);
+}
+
+export function toDeviceVoice(v: SpeechSynthesisVoice): DeviceVoice {
+  return { name: v.voiceURI, lang: v.lang, isDefault: v.default, network: !v.localService };
 }

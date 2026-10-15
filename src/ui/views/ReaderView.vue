@@ -232,7 +232,7 @@ function selectPart(event: Event) {
 }
 
 .link {
-  min-height: 0;
+  min-height: 44px;
   padding: 0;
   border: 0;
   background: none;

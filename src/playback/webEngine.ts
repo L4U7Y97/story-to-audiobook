@@ -1,5 +1,6 @@
 import type { DeviceVoice, SpeechEngine, Utterance } from './engine';
-import { listWebVoices } from './webVoices';
+import { resolveVoice } from '@/cast/resolveVoice';
+import { listWebVoices, toDeviceVoice } from './webVoices';
 
 /** SpeechEngine on the Web Speech API (desktop browsers). */
 export class WebSpeechEngine implements SpeechEngine {
@@ -14,17 +15,17 @@ export class WebSpeechEngine implements SpeechEngine {
     await this.stop();
     const generation = ++this.generation;
     const voices = speechSynthesis.getVoices();
+    const deviceVoices = voices.map(toDeviceVoice);
 
     for (const item of queue) {
       if (generation !== this.generation) return;
       await new Promise<void>((resolve) => {
         const u = new SpeechSynthesisUtterance(item.text);
-        const voice =
-          voices.find((v) => v.voiceURI === item.voice.voiceName) ??
-          voices.find((v) => v.lang === item.voice.lang) ??
-          voices.find((v) => v.lang.startsWith(item.voice.lang.split('-')[0]!));
+        // A voice missing on this device is replaced by the best one for the language.
+        const resolved = resolveVoice(item.voice, deviceVoices);
+        const voice = voices.find((v) => v.voiceURI === resolved.voiceName);
         if (voice) u.voice = voice;
-        u.lang = voice?.lang ?? item.voice.lang;
+        u.lang = voice?.lang ?? resolved.lang;
         u.pitch = item.voice.pitch;
         u.rate = item.voice.rate;
         u.onstart = () => {

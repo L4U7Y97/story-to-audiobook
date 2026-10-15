@@ -343,8 +343,11 @@ npm test
 **Description:** Voice substitution with a "substituted" badge; a test that no network request happens without a key; dark/light theme following the system with an override; a 360 px layout pass; accessibility basics (labels, focus, contrast).
 **Acceptance criteria:**
 
-- [ ] A story with a missing `voiceName` plays using a voice for the same language with the same pitch and rate, and shows the badge
-- [ ] A test with `fetch` stubbed to throw shows the full no-key flow (import → analyse → play) makes no network call
+- [x] A story with a missing `voiceName` plays using a voice for the same language with the same pitch and rate, and shows the badge (web engine; `resolveVoice.test.ts`; badge checked in the browser)
+- [ ] The production native engine (Task 13) resolves voices with `resolveVoice` too
+- [x] A test with `fetch` stubbed to throw shows the full no-key flow (import → analyse → play) makes no network call (`offline.test.ts`, also XMLHttpRequest, WebSocket, EventSource and sendBeacon)
+- [x] 360 px pass: no horizontal overflow on any view; every control labelled; tap targets ≥ 44 px; theme colours ≥ 4.5:1 contrast in light and dark
+- [ ] Manual check on the phone
       **Verification:** `npm test`; manual check on the phone and in desktop Chrome.
       **Dependencies:** T13, T22
       **Files:** `src/cast/resolveVoice.ts`, `src/ui/styles/theme.css`, `src/ui/components/*`, `tests/unit/cast/resolveVoice.test.ts`, `tests/unit/offline.test.ts`
@@ -353,5 +356,5 @@ npm test
 ### Final checkpoint
 
 - [ ] Spec success criteria 1–10 all verified
-- [ ] Coverage thresholds met
+- [x] Coverage thresholds met (format 100%, analysis 97.8%, ingest 96.4%, cast 100%, storage 96.2% lines on 2026-10-15)
 - [ ] Manual device checklist passed

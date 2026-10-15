@@ -6,6 +6,7 @@ import { getAppDb } from '@/storage/db';
 import { defaultLocale, getStory, updateStory } from '@/storage/stories';
 import { mergeCharactersInStory } from '@/storage/cast';
 import { castUsage, renameCharacter, setAliases } from '@/cast/castOps';
+import { resolveVoice } from '@/cast/resolveVoice';
 import CharacterEditor from '../components/CharacterEditor.vue';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
@@ -41,6 +42,14 @@ const sorted = computed(() =>
       ROLE_ORDER[a.role] - ROLE_ORDER[b.role] ||
       (usage.value?.get(b.id) ?? 0) - (usage.value?.get(a.id) ?? 0),
   ),
+);
+
+/** How each character's voice plays on this device (a missing voice is substituted). */
+const resolved = computed(
+  () =>
+    new Map(
+      (story.value?.cast ?? []).map((c) => [c.id, resolveVoice(c.voice, deviceVoices.value)]),
+    ),
 );
 
 async function setVoice(character: Character, changes: Partial<VoiceSettings>) {
@@ -138,11 +147,20 @@ function roleLabel(c: Character): string {
             @change="onVoicePicked(c, ($event.target as HTMLSelectElement).value)"
           >
             <option value="">Device default ({{ c.voice.lang }})</option>
+            <option v-if="resolved.get(c.id)?.substituted" :value="c.voice.voiceName">
+              {{ c.voice.voiceName }} (not on this device)
+            </option>
             <option v-for="v in voiceChoices" :key="v.name" :value="v.name">
               {{ v.name }}{{ v.network ? ' (online)' : '' }}
             </option>
           </select>
         </label>
+        <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
+          <span class="badge">Substituted</span>
+          This voice isn't installed here, so
+          {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads instead,
+          with the same pitch and speed.
+        </p>
         <div class="sliders">
           <label>
             Pitch {{ c.voice.pitch.toFixed(2) }}
@@ -184,6 +202,21 @@ function roleLabel(c: Character): string {
 </template>
 
 <style scoped>
+.substituted {
+  margin: 0;
+  color: var(--muted);
+}
+
+.badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 0 8px;
+  border-radius: 999px;
+  border: 1px solid var(--warn);
+  color: var(--warn);
+  font-weight: 600;
+}
+
 .top {
   display: flex;
   justify-content: space-between;

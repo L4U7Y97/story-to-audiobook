@@ -35,6 +35,9 @@ public class NarratorPlugin extends Plugin implements NarratorService.Listener {
     @Override
     public void load() {
         NarratorService.setListener(this);
+        // Binding to the TTS engine takes seconds on first use; start now so the voice list (which
+        // analysing a new part waits for) is ready by the time the user adds one.
+        ensureVoiceTts();
     }
 
     @Override
@@ -108,15 +111,18 @@ public class NarratorPlugin extends Plugin implements NarratorService.Listener {
             return;
         }
         waitingForVoices.add(call);
-        if (voiceTts == null) {
-            voiceTts = new TextToSpeech(getContext(), status -> getBridge().executeOnMainThread(() -> {
-                voiceTtsReady = status == TextToSpeech.SUCCESS;
-                for (PluginCall waiting : waitingForVoices) {
-                    resolveVoices(waiting, voiceTtsReady ? voiceTts.getVoices() : null);
-                }
-                waitingForVoices.clear();
-            }));
-        }
+        ensureVoiceTts();
+    }
+
+    private void ensureVoiceTts() {
+        if (voiceTts != null) return;
+        voiceTts = new TextToSpeech(getContext(), status -> getBridge().executeOnMainThread(() -> {
+            voiceTtsReady = status == TextToSpeech.SUCCESS;
+            for (PluginCall waiting : waitingForVoices) {
+                resolveVoices(waiting, voiceTtsReady ? voiceTts.getVoices() : null);
+            }
+            waitingForVoices.clear();
+        }));
     }
 
     /** The last utterance the service started, saved natively so a killed app can resume there. */

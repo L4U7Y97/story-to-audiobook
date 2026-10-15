@@ -364,6 +364,17 @@ describe('Player with the native engine', () => {
     });
   });
 
+  it('shares one native voice request between callers asking at the same time', async () => {
+    const narrator = new FakeNarrator([{ name: 'v', lang: 'en-US', network: false, quality: 400 }]);
+    const getVoices = vi.spyOn(narrator, 'getVoices');
+    const engine = new NativeSpeechEngine(narrator); // prefetches
+    const [a, b] = await Promise.all([engine.listVoices(), engine.listVoices()]);
+    expect(getVoices).toHaveBeenCalledTimes(1);
+    expect(a).toEqual(b);
+    await engine.listVoices(); // a later call asks again (voices can be installed meanwhile)
+    expect(getVoices).toHaveBeenCalledTimes(2);
+  });
+
   it('resumes after the app was killed from the last line the service started', async () => {
     const narrator = new FakeNarrator();
     const engine = new NativeSpeechEngine(narrator);

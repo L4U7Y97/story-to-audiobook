@@ -16,6 +16,7 @@ export class NativeSpeechEngine implements SpeechEngine {
   private batchCount = 0;
   private current?: { batch: string; onStart: (id: string) => void; done: () => void };
   private voices?: DeviceVoice[];
+  private voicesRequest?: Promise<DeviceVoice[]>;
   private permissionAsked = false;
   private readonly externalListeners = new Set<(state: ExternalState) => void>();
 
@@ -28,10 +29,16 @@ export class NativeSpeechEngine implements SpeechEngine {
     void this.listVoices().catch(() => undefined);
   }
 
-  async listVoices(): Promise<DeviceVoice[]> {
-    const { voices } = await this.narrator.getVoices();
-    this.voices = voices.map((v) => ({ name: v.name, lang: v.lang, network: v.network }));
-    return this.voices;
+  listVoices(): Promise<DeviceVoice[]> {
+    // Callers asking at the same time (the prefetch and an analysis) share one native call.
+    this.voicesRequest ??= this.narrator
+      .getVoices()
+      .then(({ voices }) => {
+        this.voices = voices.map((v) => ({ name: v.name, lang: v.lang, network: v.network }));
+        return this.voices;
+      })
+      .finally(() => (this.voicesRequest = undefined));
+    return this.voicesRequest;
   }
 
   play(queue: Utterance[], onStart: (utteranceId: string) => void): Promise<void> {

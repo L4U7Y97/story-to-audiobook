@@ -21,7 +21,8 @@ npm test
 
 - [x] `npm run dev` serves a placeholder page on port 3000
 - [x] `npm run typecheck`, `lint`, `test` (one trivial test) and `build` all pass
-- [ ] `npm run android:apk` produces a debug APK that opens on the phone — APK builds; **install on phone pending (no device connected)**
+- [x] `npm run android:apk` produces a debug APK that opens on the Android 15 emulator (needs JDK 21, installed 2026-10-15)
+- [ ] Opens on the phone (USB connection not working yet)
       **Verification:** run all commands above; install the APK on the phone.
       **Dependencies:** None
       **Files:** `package.json`, `vite.config.ts`, `tsconfig*.json`, `eslint.config.js`, `.prettierrc`, `capacitor.config.ts`, `src/main.ts`, `src/App.vue`, `.claude/launch.json`, `.gitignore`, `android/` (generated)
@@ -32,9 +33,9 @@ npm test
 **Description:** A minimal Capacitor plugin (Kotlin) that accepts a list of `{id, text, pitch, rate, voiceName}`, speaks them in order with Android `TextToSpeech` inside a foreground media-playback service with a notification (play/pause, next), and emits `progress(id)` events to JS. A test button queues ~30 minutes of text.
 **Acceptance criteria:**
 
-- [ ] With the screen locked, playback continues for 30 minutes on the phone
-- [ ] Notification play/pause and next work; progress events arrive in JS after unlocking
-- [ ] `docs/adr/001-android-tts.md` records the result and the chosen approach (or the keep-awake fallback)
+- [x] With the screen off, playback continues for 30 minutes (emulator, deep Doze forced; phone pending)
+- [x] Notification play/pause and next work; progress events arrive in JS after unlocking (emulator)
+- [x] `docs/adr/001-android-tts.md` records the result and the chosen approach
       **Verification:** manual device test (screen locked, app in background, 30 min).
       **Dependencies:** T1
       **Files:** `android/app/src/main/java/.../narrator/NarratorPlugin.kt`, `NarratorService.kt`, `AndroidManifest.xml`, `src/playback/nativeBridge.ts`, `docs/adr/001-android-tts.md`
@@ -42,7 +43,7 @@ npm test
 
 ### Checkpoint A: go/no-go on background playback
 
-- [ ] ADR-001 written; human confirms the native-service approach (or accepts the fallback)
+- [x] ADR-001 written; human confirmed the native-service approach by going ahead with Phase 3 after the emulator result (2026-10-15)
 
 ---
 
@@ -194,11 +195,12 @@ npm test
 **Description:** Turn the spike into the production plugin, with batch queue, pause/resume/stop, progress events, notification controls (play/pause, previous/next segment) and voice listing. Add `NativeSpeechEngine` implementing `SpeechEngine`, selected automatically on Android. The player sends the rest of the current part plus the next analysed part as one batch.
 **Acceptance criteria:**
 
-- [ ] The same player tests pass with the engine swapped (the interface contract is unchanged)
-- [ ] On the phone, the Reader highlight follows playback, and notification controls work
+- [x] The same player tests pass with the engine swapped (`player.test.ts` runs every player test against both engines; the native one against a fake plugin)
+- [x] The Reader highlight follows playback, and notification controls work (emulator, `docs/manual-test-checklist.md`)
+- [ ] The same on the phone
       **Verification:** `npm test`; manual device test.
       **Dependencies:** T2, T11, T12
-      **Files:** `android/.../narrator/{NarratorPlugin,NarratorService}.kt`, `src/playback/nativeEngine.ts`, `src/playback/index.ts`
+      **Files:** `android/.../narrator/{NarratorPlugin,NarratorService,Utterance}.java` (Java, see ADR-001), `src/playback/{nativeEngine,nativeBridge,player,resume}.ts`, `src/ui/composables/usePlayer.ts`
       **Scope:** M
 
 ### - [ ] Task 14: Device checklist and resume after kill
@@ -206,8 +208,8 @@ npm test
 **Description:** Write `docs/manual-test-checklist.md` (spec success criterion 7) and make sure position is saved natively as well, so a killed app resumes correctly.
 **Acceptance criteria:**
 
-- [ ] Locked-screen playback for ≥ 30 min passes on the phone
-- [ ] Force-stopping the app and reopening it resumes within one segment
+- [ ] Locked-screen playback for ≥ 30 min passes on the phone (passes on the emulator)
+- [x] Force-stopping the app and reopening it resumes within one segment (emulator: exact segment, also with a stale saved position)
       **Verification:** run the checklist on the device and record the results in the doc.
       **Dependencies:** T13
       **Files:** `docs/manual-test-checklist.md`, `android/.../narrator/NarratorService.kt`, `src/playback/player.ts`

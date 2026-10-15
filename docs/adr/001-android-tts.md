@@ -47,7 +47,11 @@ Install with `npm run android:apk`, then `adb install -r android/app/build/outpu
 | Device voices for en / es (Count voices button, after starting) | 467 in total; 51 en, 18 es (11 of them offline)                                                                                                                       |       |
 | Battery optimisation setting needed?                            | No (stock Android). Vendor battery savers (Samsung, Xiaomi…) can only be checked on a real phone                                                                      |       |
 
-**Emulator findings to act on in Task 13:**
+**Task 13 follow-up (production engine, 2026-10-15):** the notification is now a `MediaStyle` notification backed by a `MediaSession`, showing the story and part as the media card in the shade (and on the lock screen), with pause, play, previous and next. The player batches the rest of the part plus the next analysed part, so the service crosses into the next part without JS (verified with the screen off and Doze forced). Results are tracked in `docs/manual-test-checklist.md`.
+
+**Known limitation: headset and Bluetooth media buttons.** `dumpsys media_session` reports "Media button session is null" during playback: Android routes media buttons to the app it sees playing audio, and TextToSpeech audio is played by the TTS engine's process, not ours. Fixing it would mean playing audio from our own process (for example synthesising to a file and playing it with `MediaPlayer`, or a silent `AudioTrack` alongside TTS). Deferred until it's wanted.
+
+**Emulator findings to act on in Task 13** (done):
 
 - The notification sits collapsed in the "Silent" section, so its buttons only appear after expanding it, and it isn't a media notification. Use `MediaStyle` with a `MediaSession` so the controls show inline, on the lock screen and to headphones and Bluetooth buttons.
 - JS kept receiving progress events while the screen was off (the spike screen counted all 349), but the production player must still treat native events as the source of truth.

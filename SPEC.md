@@ -313,6 +313,8 @@ export interface SpeechEngine {
 
 - **Web engine:** `speechSynthesis`, one `SpeechSynthesisUtterance` per segment.
 - **Android engine:** a native Capacitor plugin that receives a **batch** of utterances (the rest of the current part plus the next one, if analysed) and plays them inside a **foreground service with a media notification** (play/pause, next and previous segment). Progress events are emitted back to JS. Because the queue lives natively, playback doesn't depend on the WebView being active while the screen is locked. Exact approach decided by spike R1 and recorded in `docs/adr/001-android-tts.md`.
+  - The notification is a media notification backed by a `MediaSession` (story and part as titles), so the same controls appear on the lock screen. Pause and play pressed there are reported to the player. Headset buttons are not supported yet (ADR-001).
+  - The service saves the last utterance it started; when a story is opened and that record is newer than the story's saved position, playback resumes from it (covers an app killed while the WebView was asleep).
 - **Player:**
   - Builds utterances from segments (skipping whitespace- or punctuation-only ones).
   - Applies the global speed multiplier.

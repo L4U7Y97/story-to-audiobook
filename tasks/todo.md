@@ -357,6 +357,16 @@ npm test
 
 ### Final checkpoint
 
-- [ ] Spec success criteria 1–10 all verified
+- [ ] Spec success criteria 1–10 all verified. Status on 2026-10-15:
+  - [x] 1. Fixtures import byte for byte as .txt (also a BOM + CRLF copy) and as .epub (`tests/unit/ingest/fixtures.test.ts`; expected EPUB text in `tests/fixtures/*/*.epub.txt`)
+  - [x] 2. Text preservation asserted on every save and in property tests (`validate.property.test.ts`, `llm.property.test.ts`)
+  - [ ] 3. Heuristic: fixture thresholds met (`heuristicFixtures.test.ts`); 5,000 words in ~20–30 ms of analysis on the dev machine (`performance.test.ts`). Emulator, paste to "Ready": 0.6 s warm, 1.5 s on a fresh app start. **Phone timing still to measure.**
+  - [ ] 4. Cost estimate shown before Claude analysis (browser check). **Accuracy ≥ 90% needs `npm run eval:llm` with an API key.**
+  - [x] 5. Part 2 reuses part 1's character ids and voices (`analyzer.test.ts`, Marianela split in two)
+  - [x] 6. Merging rewrites every part and those lines play with the surviving voice (`castOps.test.ts`)
+  - [ ] 7. Passes on the emulator (`docs/manual-test-checklist.md`). **Phone still to check.**
+  - [x] 8. A voice change applies from the next segment, no re-analysis (`player.test.ts`, both engines)
+  - [ ] 9. Export → import keeps the cast and analyses (`exportImport.test.ts`); substitution badge checked in the browser. **Phone → desktop transfer still to do.**
+  - [x] 10. No network access without a key (`offline.test.ts`)
 - [x] Coverage thresholds met (format 100%, analysis 97.8%, ingest 96.4%, cast 100%, storage 96.2% lines on 2026-10-15)
 - [ ] Manual device checklist passed

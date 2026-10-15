@@ -15,6 +15,7 @@ import { createStory, getStory } from '@/storage/stories';
 import { addPart, getPart } from '@/storage/parts';
 import { getAnalysis } from '@/storage/analyses';
 import { mergeCharactersInStory } from '@/storage/cast';
+import { buildUtterances } from '@/playback/utterances';
 import { baseCast, loadFixture } from '../../helpers/fixtures';
 
 const voice = { lang: 'en-US', pitch: 1, rate: 1 };
@@ -134,6 +135,16 @@ describe('mergeCharactersInStory', () => {
     const { db, story, parts, id } = await marianela();
     const doctor = id('el doctor');
     const golfin = id('Golfín');
+    // Where "el doctor" spoke before the merge, per part (segment start offsets).
+    const doctorLines = new Map<string, number[]>();
+    for (const p of parts) {
+      const a = (await getAnalysis(db, p.id))!;
+      doctorLines.set(
+        p.id,
+        a.segments.filter((s) => s.speakerId === doctor).map((s) => s.start),
+      );
+    }
+    expect([...doctorLines.values()].flat().length).toBeGreaterThan(0);
     await mergeCharactersInStory(db, story.id, doctor, golfin);
 
     const after = (await getStory(db, story.id))!;
@@ -144,6 +155,17 @@ describe('mergeCharactersInStory', () => {
       const a = (await getAnalysis(db, p.id))!;
       expect(a.segments.some((s) => s.speakerId === doctor)).toBe(false);
       expect(validateAnalysis((await getPart(db, p.id))!, a, ids)).toEqual({ ok: true });
+
+      // Playback reads those lines with the surviving character's voice.
+      const part = (await getPart(db, p.id))!;
+      const queue = buildUtterances(part, a, after.cast, 0, 1);
+      const golfinVoice = after.cast.find((c) => c.id === golfin)!.voice;
+      for (const start of doctorLines.get(p.id)!) {
+        const index = a.segments.findIndex((s) => s.start <= start && start < s.end);
+        const spoken = queue.filter((u) => u.segmentIndex === index);
+        expect(spoken.length).toBeGreaterThan(0);
+        for (const u of spoken) expect(u.voice).toEqual(golfinVoice);
+      }
     }
   });
 

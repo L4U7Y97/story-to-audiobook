@@ -2,6 +2,8 @@
 import { computed, onMounted, ref } from 'vue';
 import type { AnalysisStatus, Part } from '@/format/types';
 import { formatUsd } from '@/analysis/llm/cost';
+import { exportFileName, exportStory } from '@/storage/exportImport';
+import { saveTextFile } from '../files';
 import { getAppDb } from '@/storage/db';
 import { getStory } from '@/storage/stories';
 import { deletePart, listParts, movePart, renamePart } from '@/storage/parts';
@@ -26,6 +28,23 @@ const confirmEstimate = computed(() =>
 );
 
 onMounted(loadSettings);
+
+const exporting = ref(false);
+const exportError = ref('');
+
+async function exportFile() {
+  if (!story.value) return;
+  exporting.value = true;
+  exportError.value = '';
+  try {
+    const data = await exportStory(db, story.value.id);
+    await saveTextFile(exportFileName(story.value), JSON.stringify(data));
+  } catch (e) {
+    exportError.value = `Export failed: ${e instanceof Error ? e.message : String(e)}`;
+  } finally {
+    exporting.value = false;
+  }
+}
 const characterCount = computed(
   () => story.value?.cast.filter((c) => c.role === 'character').length ?? 0,
 );
@@ -203,6 +222,19 @@ function wordCount(text: string): number {
         @cancel="((adding = false), (replacing = undefined))"
       />
       <button v-else class="primary add" @click="adding = true">Add a part</button>
+
+      <section v-if="parts?.length" class="backup" aria-labelledby="backup-heading">
+        <h2 id="backup-heading">Backup</h2>
+        <p class="muted">
+          Stories live only on this device. Export one to a file to keep a copy or open it on
+          another device (Library → Import a story). The file has the text, analysis and voices,
+          never your API key.
+        </p>
+        <button :disabled="exporting" @click="exportFile">
+          {{ exporting ? 'Exporting…' : 'Export story' }}
+        </button>
+        <p v-if="exportError" class="error" role="alert">{{ exportError }}</p>
+      </section>
     </template>
 
     <p v-else-if="story === undefined" class="muted">Loading…</p>
@@ -235,6 +267,22 @@ function wordCount(text: string): number {
   font-weight: 600;
   color: inherit;
   text-decoration: none;
+}
+
+.backup {
+  margin-top: 32px;
+  display: grid;
+  gap: 8px;
+  justify-items: start;
+}
+
+.backup h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.backup p {
+  margin: 0;
 }
 
 .story-actions {

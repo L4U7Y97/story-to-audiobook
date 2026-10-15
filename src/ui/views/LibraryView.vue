@@ -6,6 +6,7 @@ import type { Lang } from '@/format/types';
 import { appName } from '@/appInfo';
 import { getAppDb } from '@/storage/db';
 import { createStory, listStories } from '@/storage/stories';
+import { importStory, parseExport } from '@/storage/exportImport';
 import { useLiveQuery } from '../composables/useLiveQuery';
 
 const db = getAppDb();
@@ -16,6 +17,31 @@ const title = ref('');
 const lang = ref<Lang>('en');
 const creating = ref(false);
 const isNative = Capacitor.isNativePlatform();
+
+const importing = ref(false);
+const importError = ref('');
+
+async function importFile(event: Event) {
+  const input = event.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  importing.value = true;
+  importError.value = '';
+  try {
+    const parsed = parseExport(await file.text());
+    if (!parsed.ok) {
+      importError.value = parsed.reason;
+      return;
+    }
+    const { story } = await importStory(db, parsed.data);
+    await router.push({ name: 'story', params: { id: story.id } });
+  } catch (e) {
+    importError.value = e instanceof Error ? e.message : String(e);
+  } finally {
+    importing.value = false;
+    input.value = '';
+  }
+}
 
 async function create() {
   creating.value = true;
@@ -74,6 +100,20 @@ function formatDate(iso: string): string {
       <button class="primary" type="submit" :disabled="creating">Create story</button>
     </form>
 
+    <section class="card import" aria-labelledby="import-heading">
+      <h2 id="import-heading">Import a story</h2>
+      <p class="muted">Open a story exported from this app (a .story.json file).</p>
+      <input
+        type="file"
+        accept=".json,application/json"
+        aria-labelledby="import-heading"
+        :disabled="importing"
+        @change="importFile"
+      />
+      <p v-if="importing" class="muted" role="status">Importing…</p>
+      <p v-if="importError" class="error" role="alert">{{ importError }}</p>
+    </section>
+
     <p v-if="isNative" class="dev-link">
       <RouterLink :to="{ name: 'spike' }">Background playback test</RouterLink>
     </p>
@@ -110,6 +150,21 @@ function formatDate(iso: string): string {
 .create {
   display: grid;
   gap: 12px;
+}
+
+.import {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.import h2,
+.import p {
+  margin: 0;
+}
+
+.error {
+  color: var(--danger);
 }
 
 .dev-link {

@@ -324,14 +324,15 @@ npm test
 
 ## Phase 6: Data safety and polish
 
-### - [ ] Task 22: Export and import
+### - [x] Task 22: Export and import
 
 **Description:** Export a story (story + parts + analyses, no settings or key) to one JSON file (Capacitor Filesystem/Share on Android, download on web). Import it with a schema version check and new ids if the story already exists.
 **Acceptance criteria:**
 
-- [ ] Round trip: export → import → export gives an identical result apart from ids and timestamps (test)
-- [ ] The export contains no settings and never the API key (test greps the export output; carried over from Task 19)
-- [ ] An exported file imported on desktop web plays with the same cast (spec success criterion 9)
+- [x] Round trip: export → import → export gives an identical result apart from ids and timestamps (test)
+- [x] The export contains no settings and never the API key (test greps the export output; carried over from Task 19)
+- [x] An exported file imported into another library keeps the same cast and analyses (test; export → import checked in the browser)
+- [ ] Manual phone → desktop transfer (needs the phone)
       **Verification:** `npm test -- exportImport`; manual phone → desktop transfer.
       **Dependencies:** T4, T17
       **Files:** `src/storage/exportImport.ts`, `src/ui/views/LibraryView.vue`, `src/ui/views/StoryView.vue`, `tests/unit/storage/exportImport.test.ts`

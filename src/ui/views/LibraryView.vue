@@ -2,12 +2,13 @@
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { Capacitor } from '@capacitor/core';
-import type { Lang } from '@/format/types';
+import type { Lang, Story } from '@/format/types';
 import { appName } from '@/appInfo';
 import { getAppDb } from '@/storage/db';
-import { createStory, listStories } from '@/storage/stories';
+import { createStory, deleteStory, listStories } from '@/storage/stories';
 import { importStory, parseExport } from '@/storage/exportImport';
 import { useLiveQuery } from '../composables/useLiveQuery';
+import { existingPlayer } from '../composables/usePlayer';
 
 const db = getAppDb();
 const router = useRouter();
@@ -43,6 +44,25 @@ async function importFile(event: Event) {
   }
 }
 
+/** The story whose delete button was tapped once; a second tap deletes it. */
+const confirmingDelete = ref<string>();
+const deleteError = ref('');
+
+async function remove(story: Story) {
+  if (confirmingDelete.value !== story.id) {
+    confirmingDelete.value = story.id;
+    return;
+  }
+  confirmingDelete.value = undefined;
+  deleteError.value = '';
+  try {
+    await existingPlayer(story.id)?.player.stop();
+    await deleteStory(db, story.id);
+  } catch (e) {
+    deleteError.value = `Could not delete “${story.title}”: ${e instanceof Error ? e.message : String(e)}`;
+  }
+}
+
 async function create() {
   creating.value = true;
   try {
@@ -72,16 +92,34 @@ function formatDate(iso: string): string {
         No stories yet. Create one below, then add its first chapter.
       </p>
       <ul v-else class="story-list">
-        <li v-for="story in stories" :key="story.id">
-          <RouterLink :to="{ name: 'story', params: { id: story.id } }" class="card story">
+        <li v-for="story in stories" :key="story.id" class="card story-row">
+          <RouterLink :to="{ name: 'story', params: { id: story.id } }" class="story">
             <span class="story-title">{{ story.title }}</span>
             <span class="muted">
               {{ story.partIds.length }} {{ story.partIds.length === 1 ? 'part' : 'parts' }} ·
               {{ story.lang === 'es' ? 'Español' : 'English' }} · {{ formatDate(story.updatedAt) }}
             </span>
           </RouterLink>
+          <button
+            class="delete"
+            :class="{ confirming: confirmingDelete === story.id }"
+            :aria-label="
+              confirmingDelete === story.id
+                ? `Tap again to delete “${story.title}”`
+                : `Delete “${story.title}”`
+            "
+            @click="remove(story)"
+            @blur="confirmingDelete === story.id && (confirmingDelete = undefined)"
+          >
+            {{ confirmingDelete === story.id ? 'Tap again to delete' : 'Delete' }}
+          </button>
+          <p v-if="confirmingDelete === story.id" class="delete-warning" role="status">
+            This removes every part, the analysis and the voices from this device. Export the story
+            first if you may want it back.
+          </p>
         </li>
       </ul>
+      <p v-if="deleteError" class="error" role="alert">{{ deleteError }}</p>
     </section>
 
     <form class="card create" @submit.prevent="create">
@@ -136,11 +174,35 @@ function formatDate(iso: string): string {
   gap: 8px;
 }
 
+.story-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 4px 12px;
+  align-items: center;
+}
+
 .story {
   display: grid;
   gap: 2px;
+  min-height: 44px;
   text-decoration: none;
   color: inherit;
+}
+
+.delete {
+  color: var(--muted);
+}
+
+.delete.confirming {
+  color: var(--danger);
+  border-color: var(--danger);
+}
+
+.delete-warning {
+  grid-column: 1 / -1;
+  margin: 0;
+  font-size: 0.85rem;
+  color: var(--danger);
 }
 
 .story-title {

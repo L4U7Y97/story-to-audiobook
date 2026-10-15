@@ -326,7 +326,7 @@ Mobile-first, works at 360 px wide, dark and light theme (follows the system, wi
 
 | View            | Content                                                                                                                                                                                         |
 | --------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Library         | List of stories (title, number of parts, analysis status), create, import JSON                                                                                                                  |
+| Library         | List of stories (title, number of parts, analysis status), create, import JSON, delete (tap twice)                                                                                              |
 | Story           | Ordered parts list (move up/down, insert at a position, replace, rename, re-analyse, delete), add part (file/paste), per-part analysis status with progress and cost estimate, export           |
 | Reader / player | Text of the current part with segments coloured by speaker; current segment highlighted and kept in view; tap paragraph to play; tap segment → reassign speaker; player bar fixed at the bottom |
 | Cast            | Characters with role, aliases, usage count, voice controls (voice picker, pitch, rate), preview button, merge, rename                                                                           |

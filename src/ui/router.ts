@@ -29,6 +29,5 @@ export const router = createRouter({
       name: 'settings',
       component: () => import('./views/SettingsView.vue'),
     },
-    { path: '/spike', name: 'spike', component: () => import('@/spike/SpikePanel.vue') },
   ],
 });

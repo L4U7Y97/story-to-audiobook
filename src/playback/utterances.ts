@@ -103,3 +103,17 @@ function withSpeed(voice: VoiceSettings, speed: number): VoiceSettings {
 function fallbackVoice(cast: readonly Character[]): VoiceSettings {
   return cast.find((c) => c.role === 'narrator')?.voice ?? { lang: 'en-US', pitch: 1, rate: 1 };
 }
+
+/** Utterance ids in a player batch carry the part, since one batch can span two parts. */
+export function batchUtteranceId(partId: string, utteranceId: string): string {
+  return `${partId}|${utteranceId}`;
+}
+
+export function parseBatchUtteranceId(
+  id: string,
+): { partId: string; segmentIndex: number } | undefined {
+  const sep = id.lastIndexOf('|');
+  if (sep <= 0) return undefined;
+  const segmentIndex = segmentIndexOf(id.slice(sep + 1));
+  return Number.isNaN(segmentIndex) ? undefined : { partId: id.slice(0, sep), segmentIndex };
+}

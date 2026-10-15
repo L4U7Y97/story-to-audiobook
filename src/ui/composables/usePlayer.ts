@@ -1,5 +1,8 @@
 import { shallowRef, type Ref } from 'vue';
+import { Capacitor } from '@capacitor/core';
 import type { SpeechEngine } from '@/playback/engine';
+import { NativeSpeechEngine } from '@/playback/nativeEngine';
+import { newerEnginePosition } from '@/playback/resume';
 import { WebSpeechEngine } from '@/playback/webEngine';
 import { Player, type PlayerSnapshot } from '@/playback/player';
 import { getAppDb } from '@/storage/db';
@@ -11,8 +14,9 @@ import { getSetting } from '@/storage/settings';
 let engine: SpeechEngine | undefined;
 let current: { storyId: string; player: Player; snapshot: Ref<PlayerSnapshot> } | undefined;
 
+/** The native Android engine in the app, Web Speech in a browser. */
 export function getEngine(): SpeechEngine {
-  engine ??= new WebSpeechEngine();
+  engine ??= Capacitor.isNativePlatform() ? new NativeSpeechEngine() : new WebSpeechEngine();
   return engine;
 }
 
@@ -30,8 +34,18 @@ export function usePlayer(storyId: string): { player: Player; snapshot: Ref<Play
   void current?.player.stop();
 
   const db = getAppDb();
+  // After the app was killed mid-story, the engine may know a later position than the one saved.
+  const restored = (async () => {
+    const story = await getStory(db, storyId);
+    const position = story && (await newerEnginePosition(getEngine(), story));
+    if (position) await updateStory(db, storyId, { position });
+  })().catch(() => undefined);
+
   const player = new Player(getEngine(), {
-    story: () => getStory(db, storyId),
+    story: async () => {
+      await restored;
+      return getStory(db, storyId);
+    },
     part: async (partId) => {
       const part = await getPart(db, partId);
       return part ? { part, analysis: await getAnalysis(db, partId) } : undefined;

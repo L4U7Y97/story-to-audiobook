@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import { Capacitor } from '@capacitor/core';
 import type { Lang, Story } from '@/format/types';
 import { appName } from '@/appInfo';
 import { getAppDb } from '@/storage/db';
@@ -17,7 +16,6 @@ const { data: stories } = useLiveQuery(() => listStories(db));
 const title = ref('');
 const lang = ref<Lang>('en');
 const creating = ref(false);
-const isNative = Capacitor.isNativePlatform();
 
 const importing = ref(false);
 const importError = ref('');
@@ -151,10 +149,6 @@ function formatDate(iso: string): string {
       <p v-if="importing" class="muted" role="status">Importing…</p>
       <p v-if="importError" class="error" role="alert">{{ importError }}</p>
     </section>
-
-    <p v-if="isNative" class="dev-link">
-      <RouterLink :to="{ name: 'spike' }">Background playback test</RouterLink>
-    </p>
   </main>
 </template>
 
@@ -227,10 +221,5 @@ function formatDate(iso: string): string {
 
 .error {
   color: var(--danger);
-}
-
-.dev-link {
-  margin-top: 24px;
-  font-size: 0.9rem;
 }
 </style>

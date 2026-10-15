@@ -16,7 +16,13 @@ export interface Utterance {
   id: string;
   text: string;
   voice: VoiceSettings;
+  /** Shown by engines with a media notification: the story… */
+  title?: string;
+  /** …and the part being read. */
+  subtitle?: string;
 }
+
+export type ExternalState = 'playing' | 'paused';
 
 export interface SpeechEngine {
   listVoices(): Promise<DeviceVoice[]>;
@@ -28,6 +34,13 @@ export interface SpeechEngine {
   pause(): Promise<void>;
   resume(): Promise<void>;
   stop(): Promise<void>;
+  /**
+   * Engines with system media controls (notification, lock screen, headset buttons) report the
+   * pauses and resumes the user makes there. Skips there show up as onStart calls.
+   */
+  onExternalState?(listener: (state: ExternalState) => void): void;
+  /** The last utterance the engine started, saved outside the WebView so a killed app can resume. */
+  lastSpoken?(): Promise<{ utteranceId: string; at: number } | undefined>;
 }
 
 /** Voices whose language matches a locale's language ("es" matches "es-AR"). */

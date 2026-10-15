@@ -7,11 +7,15 @@ import android.app.PendingIntent;
 import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.ServiceInfo;
+import android.graphics.drawable.Icon;
 import android.media.AudioAttributes;
 import android.media.AudioFocusRequest;
 import android.media.AudioManager;
-import android.os.Build;
+import android.media.MediaMetadata;
+import android.media.session.MediaSession;
+import android.media.session.PlaybackState;
 import android.os.Handler;
 import android.os.IBinder;
 import android.os.Looper;
@@ -20,7 +24,6 @@ import android.speech.tts.TextToSpeech;
 import android.speech.tts.UtteranceProgressListener;
 import android.speech.tts.Voice;
 import androidx.annotation.Nullable;
-import androidx.core.app.NotificationCompat;
 import androidx.core.app.ServiceCompat;
 import com.storytoaudiobook.app.MainActivity;
 import java.util.ArrayList;
@@ -32,13 +35,15 @@ import java.util.Set;
  * Plays a queue of utterances with Android TextToSpeech inside a foreground media service, so
  * playback continues while the screen is locked and does not depend on the WebView running.
  * Utterances are spoken one at a time; the next one starts from the TTS completion callback.
+ * A MediaSession exposes the controls on the lock screen, in the media notification and to
+ * headset and Bluetooth buttons.
  */
 public class NarratorService extends Service {
 
     public interface Listener {
-        void onUtteranceStart(String id, int index);
-        void onUtteranceDone(String id, int index);
-        void onStateChange(String state); // "playing" | "paused" | "stopped" | "finished"
+        void onUtteranceStart(String batch, String id, int index);
+        void onUtteranceDone(String batch, String id, int index);
+        void onStateChange(String batch, String state); // "playing" | "paused" | "stopped" | "finished"
         void onError(String message);
     }
 
@@ -48,12 +53,19 @@ public class NarratorService extends Service {
     static final String ACTION_PREVIOUS = "narrator.PREVIOUS";
     static final String ACTION_STOP = "narrator.STOP";
 
+    /** Where the last utterance that started is remembered, to resume after the app is killed. */
+    static final String PREFS = "narrator";
+    static final String PREF_LAST_ID = "lastId";
+    static final String PREF_LAST_AT = "lastAt";
+
     private static final String CHANNEL_ID = "narrator_playback";
     private static final int NOTIFICATION_ID = 1;
+    private static final String DEFAULT_TITLE = "Story to Audiobook";
 
     // Handed over by the plugin before starting the service; avoids Intent extra size limits.
     private static List<Utterance> pendingQueue = new ArrayList<>();
     private static int pendingStartIndex = 0;
+    private static String pendingBatch = "";
     @Nullable private static Listener listener;
     @Nullable private static NarratorService instance;
 
@@ -61,15 +73,19 @@ public class NarratorService extends Service {
     private TextToSpeech tts;
     private boolean ttsReady = false;
     private List<Utterance> queue = new ArrayList<>();
+    private String batch = "";
     private int index = 0;
     private boolean playing = false;
     private PowerManager.WakeLock wakeLock;
     private AudioManager audioManager;
     private AudioFocusRequest focusRequest;
+    private MediaSession session;
+    private SharedPreferences prefs;
 
-    static synchronized void setQueue(List<Utterance> q, int startIndex) {
+    static synchronized void setQueue(List<Utterance> q, int startIndex, String batchId) {
         pendingQueue = q;
         pendingStartIndex = startIndex;
+        pendingBatch = batchId;
     }
 
     static void setListener(@Nullable Listener l) {
@@ -86,10 +102,14 @@ public class NarratorService extends Service {
         super.onCreate();
         instance = this;
         createChannel();
+        prefs = getSharedPreferences(PREFS, Context.MODE_PRIVATE);
         audioManager = (AudioManager) getSystemService(Context.AUDIO_SERVICE);
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "storytoaudiobook:narrator");
         wakeLock.setReferenceCounted(false);
+        session = new MediaSession(this, "Narrator");
+        session.setCallback(sessionCallback);
+        session.setSessionActivity(openAppIntent());
         tts = new TextToSpeech(this, status -> {
             ttsReady = status == TextToSpeech.SUCCESS;
             if (!ttsReady) {
@@ -112,6 +132,7 @@ public class NarratorService extends Service {
             case ACTION_PLAY:
                 synchronized (NarratorService.class) {
                     queue = pendingQueue;
+                    batch = pendingBatch;
                     index = Math.max(0, Math.min(pendingStartIndex, queue.size()));
                 }
                 play();
@@ -145,8 +166,9 @@ public class NarratorService extends Service {
         }
         playing = true;
         wakeLock.acquire(6 * 60 * 60 * 1000L); // safety timeout: 6 h
+        session.setActive(true);
         emitState("playing");
-        updateNotification();
+        updateSession();
         if (ttsReady) speakCurrent();
     }
 
@@ -157,7 +179,7 @@ public class NarratorService extends Service {
         tts.stop();
         releaseWakeLock();
         emitState("paused");
-        updateNotification();
+        updateSession();
     }
 
     void resume() {
@@ -166,13 +188,13 @@ public class NarratorService extends Service {
     }
 
     void skip(int delta) {
-        int target = Math.max(0, Math.min(index + delta, queue.size() - 1));
-        index = target;
+        if (queue.isEmpty()) return;
+        index = Math.max(0, Math.min(index + delta, queue.size() - 1));
         if (playing) {
             tts.stop();
             speakCurrent();
         }
-        updateNotification();
+        updateSession();
     }
 
     void stopPlayback() {
@@ -181,8 +203,7 @@ public class NarratorService extends Service {
         releaseWakeLock();
         abandonFocus();
         emitState("stopped");
-        ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
-        stopSelf();
+        end();
     }
 
     private void finish() {
@@ -190,6 +211,11 @@ public class NarratorService extends Service {
         releaseWakeLock();
         abandonFocus();
         emitState("finished");
+        end();
+    }
+
+    private void end() {
+        session.setActive(false);
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE);
         stopSelf();
     }
@@ -223,7 +249,14 @@ public class NarratorService extends Service {
             main.post(() -> {
                 int i = indexOf(utteranceId);
                 if (i != index || i >= queue.size()) return;
-                if (listener != null) listener.onUtteranceStart(queue.get(i).id, i);
+                Utterance u = queue.get(i);
+                // Saved natively so a killed app can resume here even if the WebView never ran.
+                prefs.edit()
+                    .putString(PREF_LAST_ID, u.id)
+                    .putLong(PREF_LAST_AT, System.currentTimeMillis())
+                    .apply();
+                if (listener != null) listener.onUtteranceStart(batch, u.id, i);
+                updateSession();
             });
         }
 
@@ -232,10 +265,9 @@ public class NarratorService extends Service {
             main.post(() -> {
                 int i = indexOf(utteranceId);
                 if (i != index || !playing) return; // stale (skipped or paused)
-                if (listener != null) listener.onUtteranceDone(queue.get(i).id, i);
+                if (listener != null) listener.onUtteranceDone(batch, queue.get(i).id, i);
                 index++;
                 if (index >= queue.size()) finish(); else speakCurrent();
-                updateNotification();
             });
         }
 
@@ -272,6 +304,66 @@ public class NarratorService extends Service {
     @Nullable
     Set<Voice> getVoices() {
         return ttsReady ? tts.getVoices() : null;
+    }
+
+    // --- Media session ------------------------------------------------------------------------
+
+    private final MediaSession.Callback sessionCallback = new MediaSession.Callback() {
+        @Override
+        public void onPlay() {
+            resume();
+        }
+
+        @Override
+        public void onPause() {
+            pause();
+        }
+
+        @Override
+        public void onSkipToNext() {
+            skip(1);
+        }
+
+        @Override
+        public void onSkipToPrevious() {
+            skip(-1);
+        }
+
+        @Override
+        public void onStop() {
+            stopPlayback();
+        }
+    };
+
+    /** Publishes state and metadata to the media session, then redraws the notification. */
+    private void updateSession() {
+        long actions = PlaybackState.ACTION_PLAY | PlaybackState.ACTION_PAUSE
+            | PlaybackState.ACTION_PLAY_PAUSE | PlaybackState.ACTION_SKIP_TO_NEXT
+            | PlaybackState.ACTION_SKIP_TO_PREVIOUS | PlaybackState.ACTION_STOP;
+        session.setPlaybackState(new PlaybackState.Builder()
+            .setActions(actions)
+            .setState(playing ? PlaybackState.STATE_PLAYING : PlaybackState.STATE_PAUSED,
+                PlaybackState.PLAYBACK_POSITION_UNKNOWN, 1f)
+            .build());
+        Utterance u = current();
+        session.setMetadata(new MediaMetadata.Builder()
+            .putString(MediaMetadata.METADATA_KEY_TITLE, subtitle(u))
+            .putString(MediaMetadata.METADATA_KEY_ARTIST, title(u))
+            .build());
+        getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, buildNotification());
+    }
+
+    @Nullable
+    private Utterance current() {
+        return queue.isEmpty() ? null : queue.get(Math.min(index, queue.size() - 1));
+    }
+
+    private static String title(@Nullable Utterance u) {
+        return u != null && u.title != null ? u.title : DEFAULT_TITLE;
+    }
+
+    private static String subtitle(@Nullable Utterance u) {
+        return u != null && u.subtitle != null ? u.subtitle : "";
     }
 
     // --- Audio focus ----------------------------------------------------------------------------
@@ -315,38 +407,48 @@ public class NarratorService extends Service {
     }
 
     private void startInForeground() {
-        int type = Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q
-            ? ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK
-            : 0;
-        ServiceCompat.startForeground(this, NOTIFICATION_ID, buildNotification(), type);
-    }
-
-    private void updateNotification() {
-        getSystemService(NotificationManager.class).notify(NOTIFICATION_ID, buildNotification());
+        ServiceCompat.startForeground(
+            this, NOTIFICATION_ID, buildNotification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PLAYBACK);
     }
 
     private Notification buildNotification() {
-        String text = queue.isEmpty()
+        Utterance u = current();
+        String line = queue.isEmpty()
             ? ""
-            : "Segment " + Math.min(index + 1, queue.size()) + " of " + queue.size();
-        PendingIntent open = PendingIntent.getActivity(
-            this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
-        return new NotificationCompat.Builder(this, CHANNEL_ID)
+            : "Line " + Math.min(index + 1, queue.size()) + " of " + queue.size();
+        String text = subtitle(u).isEmpty() ? line : subtitle(u);
+        return new Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(android.R.drawable.ic_media_play)
-            .setContentTitle("Story to Audiobook")
+            .setContentTitle(title(u))
             .setContentText(text)
-            .setContentIntent(open)
+            .setSubText(line)
+            .setContentIntent(openAppIntent())
+            .setDeleteIntent(action(ACTION_STOP, 4))
             .setOngoing(playing)
             .setOnlyAlertOnce(true)
-            .setSilent(true)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-            .addAction(android.R.drawable.ic_media_previous, "Previous", action(ACTION_PREVIOUS, 1))
-            .addAction(
+            .setCategory(Notification.CATEGORY_TRANSPORT)
+            .setVisibility(Notification.VISIBILITY_PUBLIC)
+            .addAction(notificationAction(android.R.drawable.ic_media_previous, "Previous", ACTION_PREVIOUS, 1))
+            .addAction(notificationAction(
                 playing ? android.R.drawable.ic_media_pause : android.R.drawable.ic_media_play,
                 playing ? "Pause" : "Play",
-                action(ACTION_TOGGLE, 2))
-            .addAction(android.R.drawable.ic_media_next, "Next", action(ACTION_NEXT, 3))
+                ACTION_TOGGLE,
+                2))
+            .addAction(notificationAction(android.R.drawable.ic_media_next, "Next", ACTION_NEXT, 3))
+            .setStyle(new Notification.MediaStyle()
+                .setMediaSession(session.getSessionToken())
+                .setShowActionsInCompactView(0, 1, 2))
             .build();
+    }
+
+    private Notification.Action notificationAction(int icon, String label, String action, int requestCode) {
+        return new Notification.Action.Builder(Icon.createWithResource(this, icon), label, action(action, requestCode))
+            .build();
+    }
+
+    private PendingIntent openAppIntent() {
+        return PendingIntent.getActivity(
+            this, 0, new Intent(this, MainActivity.class), PendingIntent.FLAG_IMMUTABLE);
     }
 
     private PendingIntent action(String action, int requestCode) {
@@ -357,7 +459,7 @@ public class NarratorService extends Service {
     // --- Events ---------------------------------------------------------------------------------
 
     private void emitState(String state) {
-        if (listener != null) listener.onStateChange(state);
+        if (listener != null) listener.onStateChange(batch, state);
     }
 
     private void emitError(String message) {
@@ -369,6 +471,7 @@ public class NarratorService extends Service {
         releaseWakeLock();
         abandonFocus();
         if (tts != null) tts.shutdown();
+        if (session != null) session.release();
         instance = null;
         super.onDestroy();
     }

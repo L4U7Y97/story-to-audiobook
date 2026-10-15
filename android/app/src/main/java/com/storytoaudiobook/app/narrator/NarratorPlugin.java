@@ -1,7 +1,10 @@
 package com.storytoaudiobook.app.narrator;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
+import android.speech.tts.TextToSpeech;
 import android.speech.tts.Voice;
 import androidx.core.content.ContextCompat;
 import com.getcapacitor.JSArray;
@@ -24,6 +27,11 @@ import org.json.JSONObject;
 )
 public class NarratorPlugin extends Plugin implements NarratorService.Listener {
 
+    /** A TextToSpeech used only to list voices while the playback service isn't running. */
+    private TextToSpeech voiceTts;
+    private boolean voiceTtsReady = false;
+    private final List<PluginCall> waitingForVoices = new ArrayList<>();
+
     @Override
     public void load() {
         NarratorService.setListener(this);
@@ -32,6 +40,7 @@ public class NarratorPlugin extends Plugin implements NarratorService.Listener {
     @Override
     protected void handleOnDestroy() {
         NarratorService.setListener(null);
+        if (voiceTts != null) voiceTts.shutdown();
     }
 
     @PluginMethod
@@ -51,14 +60,16 @@ public class NarratorPlugin extends Plugin implements NarratorService.Listener {
                     o.optString("voiceName", null),
                     o.optString("lang", null),
                     (float) o.optDouble("pitch", 1.0),
-                    (float) o.optDouble("rate", 1.0)
+                    (float) o.optDouble("rate", 1.0),
+                    o.optString("title", null),
+                    o.optString("subtitle", null)
                 ));
             }
         } catch (JSONException e) {
             call.reject("invalid queue: " + e.getMessage());
             return;
         }
-        NarratorService.setQueue(queue, call.getInt("startIndex", 0));
+        NarratorService.setQueue(queue, call.getInt("startIndex", 0), call.getString("batch", ""));
         send(NarratorService.ACTION_PLAY, true);
         call.resolve();
     }
@@ -83,10 +94,46 @@ public class NarratorPlugin extends Plugin implements NarratorService.Listener {
         call.resolve();
     }
 
+    /** Lists the device voices; works whether or not the playback service is running. */
     @PluginMethod
     public void getVoices(PluginCall call) {
         NarratorService s = NarratorService.getInstance();
-        Set<Voice> voices = s != null ? s.getVoices() : null;
+        Set<Voice> fromService = s != null ? s.getVoices() : null;
+        if (fromService != null) {
+            resolveVoices(call, fromService);
+            return;
+        }
+        if (voiceTtsReady) {
+            resolveVoices(call, voiceTts.getVoices());
+            return;
+        }
+        waitingForVoices.add(call);
+        if (voiceTts == null) {
+            voiceTts = new TextToSpeech(getContext(), status -> getBridge().executeOnMainThread(() -> {
+                voiceTtsReady = status == TextToSpeech.SUCCESS;
+                for (PluginCall waiting : waitingForVoices) {
+                    resolveVoices(waiting, voiceTtsReady ? voiceTts.getVoices() : null);
+                }
+                waitingForVoices.clear();
+            }));
+        }
+    }
+
+    /** The last utterance the service started, saved natively so a killed app can resume there. */
+    @PluginMethod
+    public void getLastSpoken(PluginCall call) {
+        SharedPreferences prefs =
+            getContext().getSharedPreferences(NarratorService.PREFS, Context.MODE_PRIVATE);
+        JSObject result = new JSObject();
+        String id = prefs.getString(NarratorService.PREF_LAST_ID, null);
+        if (id != null) {
+            result.put("id", id);
+            result.put("at", prefs.getLong(NarratorService.PREF_LAST_AT, 0));
+        }
+        call.resolve(result);
+    }
+
+    private void resolveVoices(PluginCall call, Set<Voice> voices) {
         JSArray out = new JSArray();
         if (voices != null) {
             for (Voice v : voices) {
@@ -113,26 +160,19 @@ public class NarratorPlugin extends Plugin implements NarratorService.Listener {
     // --- NarratorService.Listener -------------------------------------------------------------
 
     @Override
-    public void onUtteranceStart(String id, int index) {
-        JSObject data = new JSObject();
-        data.put("id", id);
-        data.put("index", index);
-        data.put("at", System.currentTimeMillis());
-        notifyListeners("utteranceStart", data, true);
+    public void onUtteranceStart(String batch, String id, int index) {
+        notifyListeners("utteranceStart", utteranceEvent(batch, id, index), true);
     }
 
     @Override
-    public void onUtteranceDone(String id, int index) {
-        JSObject data = new JSObject();
-        data.put("id", id);
-        data.put("index", index);
-        data.put("at", System.currentTimeMillis());
-        notifyListeners("utteranceDone", data, true);
+    public void onUtteranceDone(String batch, String id, int index) {
+        notifyListeners("utteranceDone", utteranceEvent(batch, id, index), true);
     }
 
     @Override
-    public void onStateChange(String state) {
+    public void onStateChange(String batch, String state) {
         JSObject data = new JSObject();
+        data.put("batch", batch);
         data.put("state", state);
         notifyListeners("state", data, true);
     }
@@ -142,5 +182,14 @@ public class NarratorPlugin extends Plugin implements NarratorService.Listener {
         JSObject data = new JSObject();
         data.put("message", message);
         notifyListeners("error", data, true);
+    }
+
+    private static JSObject utteranceEvent(String batch, String id, int index) {
+        JSObject data = new JSObject();
+        data.put("batch", batch);
+        data.put("id", id);
+        data.put("index", index);
+        data.put("at", System.currentTimeMillis());
+        return data;
     }
 }

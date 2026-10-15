@@ -1,6 +1,11 @@
 import type { Analysis, Part, Story, VoiceSettings } from '@/format/types';
-import type { SpeechEngine } from './engine';
-import { buildUtterances, paragraphStarts, segmentIndexOf } from './utterances';
+import type { ExternalState, SpeechEngine } from './engine';
+import {
+  batchUtteranceId,
+  buildUtterances,
+  paragraphStarts,
+  parseBatchUtteranceId,
+} from './utterances';
 
 export type PlayerState = 'idle' | 'playing' | 'paused' | 'blocked';
 
@@ -42,6 +47,8 @@ export class Player {
   private lastSave = -Infinity;
   private castDirty = false;
   private loaded?: { part: Part; analysis: Analysis; story: Story };
+  /** The parts in the engine's current queue, by id. */
+  private batch = new Map<string, { part: Part; analysis: Analysis; story: Story }>();
   private readonly saveIntervalMs: number;
   private readonly now: () => number;
 
@@ -52,6 +59,7 @@ export class Player {
   ) {
     this.saveIntervalMs = options.saveIntervalMs ?? 2000;
     this.now = options.now ?? (() => Date.now());
+    engine.onExternalState?.((state) => this.onExternalState(state));
   }
 
   get state(): PlayerSnapshot {
@@ -74,15 +82,16 @@ export class Player {
 
   async pause(): Promise<void> {
     if (this.snapshot.state !== 'playing') return;
-    await this.engine.pause();
+    // State first, so the engine echoing the pause (onExternalState) is a no-op.
     this.update({ state: 'paused' });
+    await this.engine.pause();
     await this.save(true);
   }
 
   async resume(): Promise<void> {
     if (this.snapshot.state !== 'paused') return;
-    await this.engine.resume();
     this.update({ state: 'playing' });
+    await this.engine.resume();
   }
 
   async stop(): Promise<void> {
@@ -170,18 +179,36 @@ export class Player {
       this.loaded = { part, analysis, story };
       this.castDirty = false;
 
-      const queue = buildUtterances(
-        part,
-        analysis,
-        story.cast,
-        position.segmentIndex,
-        this.snapshot.speed,
+      // One batch holds the rest of this part and the next part when it is analysed, so an
+      // engine that runs outside the WebView (Android) crosses into the next part by itself.
+      const batch = [{ part, analysis }];
+      const following = await this.analysedPart(story.partIds[story.partIds.indexOf(part.id) + 1]);
+      if (session !== this.session) return;
+      if (following) batch.push(following);
+      this.batch = new Map(batch.map((b) => [b.part.id, { ...b, story }]));
+
+      const queue = batch.flatMap((b, k) =>
+        buildUtterances(
+          b.part,
+          b.analysis,
+          story.cast,
+          k === 0 ? position.segmentIndex : 0,
+          this.snapshot.speed,
+        ).map((u) => ({
+          ...u,
+          id: batchUtteranceId(b.part.id, u.id),
+          title: story.title,
+          subtitle: b.part.title,
+        })),
       );
-      const partId = part.id;
-      await this.engine.play(queue, (id) => this.onStart(session, partId, segmentIndexOf(id)));
+      await this.engine.play(queue, (id) => {
+        const at = parseBatchUtteranceId(id);
+        if (at) this.onStart(session, at.partId, at.segmentIndex);
+      });
       if (session !== this.session) return;
 
-      const next = story.partIds[story.partIds.indexOf(partId) + 1];
+      const lastId = batch.at(-1)!.part.id;
+      const next = story.partIds[story.partIds.indexOf(lastId) + 1];
       if (!next) {
         this.update({ state: 'idle', message: 'End of the story.' });
         await this.save(true);
@@ -192,8 +219,30 @@ export class Player {
     }
   }
 
+  /** A part with a current analysis, or undefined (missing, not analysed, or stale). */
+  private async analysedPart(
+    partId: string | undefined,
+  ): Promise<{ part: Part; analysis: Analysis } | undefined> {
+    if (!partId) return undefined;
+    const loaded = await this.source.part(partId);
+    if (!loaded?.analysis || loaded.analysis.textHash !== loaded.part.textHash) return undefined;
+    return { part: loaded.part, analysis: loaded.analysis };
+  }
+
+  /** Pause or play pressed in the engine's own controls (notification, headset). */
+  private onExternalState(state: ExternalState): void {
+    if (state === 'paused' && this.snapshot.state === 'playing') {
+      this.update({ state: 'paused' });
+      void this.save(true);
+    } else if (state === 'playing' && this.snapshot.state === 'paused') {
+      this.update({ state: 'playing' });
+    }
+  }
+
   private onStart(session: number, partId: string, segmentIndex: number): void {
     if (session !== this.session) return;
+    const entered = this.batch.get(partId);
+    if (entered && this.loaded?.part.id !== partId) this.loaded = entered;
     const previous = this.snapshot.position;
     const isNewSegment = previous?.partId !== partId || previous.segmentIndex !== segmentIndex;
     if (this.castDirty && isNewSegment) {

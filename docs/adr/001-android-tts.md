@@ -1,6 +1,6 @@
 # ADR-001: Android playback with native TTS in a foreground service
 
-- **Status:** Proposed. The approach is built; the device test is still pending.
+- **Status:** Proposed. Passed on the Android 15 emulator (2026-10-15, results below); a real-phone check is still pending for vendor battery savers and lock-screen controls.
 - **Date:** 2026-10-14
 - **Spec risk:** R1 (Android stops TTS when the screen locks)
 
@@ -37,15 +37,20 @@ Install with `npm run android:apk`, then `adb install -r android/app/build/outpu
 3. Check: is speech still playing? Do the lock-screen notification controls (pause, next) work?
 4. Unlock and record from the spike screen:
 
-| Item                                                            | Result |
-| --------------------------------------------------------------- | ------ |
-| Phone model / Android version                                   |        |
-| Still playing after 30 min locked                               |        |
-| Completed utterances / elapsed time                             |        |
-| Largest gap between utterances / gaps over 3 s                  |        |
-| Notification controls work (locked and unlocked)                |        |
-| Device voices for en / es (Count voices button, after starting) |        |
-| Battery optimisation setting needed?                            |        |
+| Item                                                            | Emulator (2026-10-15)                                                                                                                                                 | Phone |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----- |
+| Phone model / Android version                                   | Android Emulator 34.2, Pixel profile, Android 15 (API 35, Google Play image), Google TTS                                                                              |       |
+| Still playing after 30 min locked                               | Yes. Screen off, battery unplugged and **deep Doze forced** (`dumpsys deviceidle force-idle`) for 33 min; the service stayed in the foreground throughout             |       |
+| Completed utterances / elapsed time                             | 349 in 37 min 18 s (≈10 per minute, steady every minute while asleep: segment 8 → 340). The emulator synthesises slower than a phone                                  |       |
+| Largest gap between utterances / gaps over 3 s                  | 23.8 s, once: the TTS engine warming up on the first sentence, before the screen went off. The two other gaps over 3 s were deliberate pauses during the control test |       |
+| Notification controls work (locked and unlocked)                | Unlocked: Pause, Play, Next and Previous all work (Next/Previous keep the paused state). Locked: not tested (the emulator has no screen lock set)                     |       |
+| Device voices for en / es (Count voices button, after starting) | 467 in total; 51 en, 18 es (11 of them offline)                                                                                                                       |       |
+| Battery optimisation setting needed?                            | No (stock Android). Vendor battery savers (Samsung, Xiaomi…) can only be checked on a real phone                                                                      |       |
+
+**Emulator findings to act on in Task 13:**
+
+- The notification sits collapsed in the "Silent" section, so its buttons only appear after expanding it, and it isn't a media notification. Use `MediaStyle` with a `MediaSession` so the controls show inline, on the lock screen and to headphones and Bluetooth buttons.
+- JS kept receiving progress events while the screen was off (the spike screen counted all 349), but the production player must still treat native events as the source of truth.
 
 ## Consequences
 

@@ -48,6 +48,23 @@ export function fakeTransport(respond: (call: FakeCall) => Reply | Promise<Reply
   };
 }
 
+/**
+ * A fake transport whose replies wait until `release()`. `requested` resolves when the first
+ * request arrives, so a test can change the story while an analysis waits for Claude.
+ */
+export function heldTransport(respond: (call: FakeCall) => Reply | Promise<Reply>) {
+  let release!: () => void;
+  let arrived!: () => void;
+  const released = new Promise<void>((resolve) => (release = resolve));
+  const requested = new Promise<void>((resolve) => (arrived = resolve));
+  const transport = fakeTransport(async (call) => {
+    arrived();
+    await released;
+    return respond(call);
+  });
+  return { transport, requested, release };
+}
+
 /** A reply labelling every unit as one span: quoted units go to `speaker`, the rest to N. */
 export function labelAll(units: readonly string[], speaker: string, extra: object = {}) {
   return {

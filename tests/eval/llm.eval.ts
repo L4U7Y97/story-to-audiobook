@@ -19,7 +19,16 @@ const effort = (process.env.EVAL_EFFORT ?? 'low') as Effort;
 const RESULTS = 'docs/eval-results.md';
 const ATTRIBUTION = 0.9;
 
-describe.skipIf(!apiKey).each([['en/pride-ch1'], ['es/marianela-ch1']])('LLM on %s', (path) => {
+// The heuristic accuracy fixtures, first-person passages included, and the names that must not
+// become characters: there a character named after the narrator takes the narrator's lines.
+const FIXTURES: Array<[path: string, notCharacters: string[]]> = [
+  ['en/pride-ch1', []],
+  ['es/marianela-ch1', []],
+  ['en/lighthouse', ['Kit']],
+  ['es/abuela', ['Inés']],
+];
+
+describe.skipIf(!apiKey).each(FIXTURES)('LLM on %s', (path, notCharacters) => {
   it(`attributes speakers ≥ ${ATTRIBUTION * 100}% and stays near the cost estimate`, async () => {
     const { text, labels } = loadFixture(path);
     const cast = baseCast(labels.lang);
@@ -73,6 +82,7 @@ describe.skipIf(!apiKey).each([['en/pride-ch1'], ['es/marianela-ch1']])('LLM on 
     );
 
     expect(s.attribution).toBeGreaterThanOrEqual(ATTRIBUTION);
+    for (const name of notCharacters) expect(s.characters).not.toContain(name);
   });
 });
 

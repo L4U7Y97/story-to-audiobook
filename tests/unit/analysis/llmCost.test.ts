@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
+import { analyzeHeuristic } from '@/analysis/heuristic';
+import { analyzeLlm } from '@/analysis/llm';
+import { estimateTokens } from '@/analysis/llm/chunking';
 import { costOf, estimateCost, formatUsd, PRICES } from '@/analysis/llm/cost';
+import type { NarratorStyle } from '@/analysis/llm/prompt';
 import { splitUnits } from '@/analysis/units';
 import { baseCast, loadFixture } from '../../helpers/fixtures';
+import { fakeTransport, labelAll } from '../../helpers/fakeLlm';
 
 describe('cost', () => {
   it('prices usage per million tokens', () => {
@@ -34,6 +39,38 @@ describe('cost', () => {
         1e6,
     );
     expect(e.usd!).toBeLessThan(0.01);
+  });
+
+  it('counts the cast lines the run sends, the narrator style included', async () => {
+    const text = '“Hi,” I said.\n\nIt rained.';
+    const units = splitUnits(text, 'en');
+    const cast = baseCast('en');
+    const model = 'claude-haiku-5-5';
+    const sent = async (narratorStyle?: NarratorStyle) => {
+      const transport = fakeTransport(({ units: u }) => labelAll(u, 'N'));
+      const heuristic = analyzeHeuristic({ text, lang: 'en', units, cast });
+      await analyzeLlm({
+        text,
+        lang: 'en',
+        units,
+        cast,
+        heuristic,
+        narratorStyle,
+        transport,
+        model,
+        effort: 'low',
+      });
+      return transport.calls[0]!.request.user;
+    };
+    const estimate = (narratorStyle?: NarratorStyle) =>
+      estimateCost({ text, lang: 'en', units, cast, model, narratorStyle }).inputTokens;
+
+    const firstPerson = await sent('first person');
+    expect(firstPerson).toContain('\nN: the narrator (first person)\n');
+    // One request: the estimate is a fixed system part plus the tokens of the prompt sent.
+    expect(estimate('first person') - estimateTokens(firstPerson)).toBe(
+      estimate() - estimateTokens(await sent()),
+    );
   });
 
   it('formats small amounts readably', () => {

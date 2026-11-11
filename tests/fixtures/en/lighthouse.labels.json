@@ -1,0 +1,218 @@
+{
+  "lang": "en",
+  "source": "Original passage written for these tests (first-person narrator)",
+  "people": {
+    "Kit": [
+      "Narrator"
+    ],
+    "Uncle Abel": [
+      "Uncle Abel",
+      "Abel",
+      "my uncle"
+    ],
+    "Mrs. Pruett": [
+      "Mrs. Pruett",
+      "Pruett"
+    ]
+  },
+  "speech": [
+    {
+      "start": 345,
+      "end": 364,
+      "speaker": "Uncle Abel",
+      "text": "“You’re late, Kit,”"
+    },
+    {
+      "start": 403,
+      "end": 429,
+      "speaker": "Kit",
+      "text": "“The tide was against me,”"
+    },
+    {
+      "start": 439,
+      "end": 474,
+      "speaker": "Uncle Abel",
+      "text": "“The tide is always against you.”\n\n"
+    },
+    {
+      "start": 474,
+      "end": 510,
+      "speaker": "Kit",
+      "text": "“Then I shall have to row harder.”\n\n"
+    },
+    {
+      "start": 601,
+      "end": 679,
+      "speaker": "Uncle Abel",
+      "text": "“Take this up to the gallery. And mind the third step; it’s rotten through.”\n\n"
+    },
+    {
+      "start": 679,
+      "end": 705,
+      "speaker": "Kit",
+      "text": "“I know about the step.”\n\n"
+    },
+    {
+      "start": 705,
+      "end": 782,
+      "speaker": "Uncle Abel",
+      "text": "“You knew about it last winter, too, and you still came down on your back.”\n\n"
+    },
+    {
+      "start": 1196,
+      "end": 1212,
+      "speaker": "Mrs. Pruett",
+      "text": "“There you are,”"
+    },
+    {
+      "start": 1223,
+      "end": 1267,
+      "speaker": "Mrs. Pruett",
+      "text": "“Your uncle has been fretting since noon.”\n\n"
+    },
+    {
+      "start": 1267,
+      "end": 1280,
+      "speaker": "Uncle Abel",
+      "text": "“He has not,”"
+    },
+    {
+      "start": 1299,
+      "end": 1308,
+      "speaker": "Mrs. Pruett",
+      "text": "“He has,”"
+    },
+    {
+      "start": 1327,
+      "end": 1356,
+      "speaker": "Mrs. Pruett",
+      "text": "“Tell him he has, my dear.”\n\n"
+    },
+    {
+      "start": 1356,
+      "end": 1365,
+      "speaker": "Kit",
+      "text": "“He has,”"
+    },
+    {
+      "start": 1377,
+      "end": 1387,
+      "speaker": "Uncle Abel",
+      "text": "“Traitor,”"
+    },
+    {
+      "start": 1544,
+      "end": 1586,
+      "speaker": "Mrs. Pruett",
+      "text": "“Davy Rowe came by the shop this morning,”"
+    },
+    {
+      "start": 1597,
+      "end": 1649,
+      "speaker": "Mrs. Pruett",
+      "text": "“He swears there’s a ship standing off the point.”\n\n"
+    },
+    {
+      "start": 1649,
+      "end": 1667,
+      "speaker": "Kit",
+      "text": "“In this weather?”"
+    },
+    {
+      "start": 1678,
+      "end": 1724,
+      "speaker": "Mrs. Pruett",
+      "text": "“In this weather. Lying to, with no lights.”\n\n"
+    },
+    {
+      "start": 1757,
+      "end": 1789,
+      "speaker": "Uncle Abel",
+      "text": "“What colours was she flying?”\n\n"
+    },
+    {
+      "start": 1789,
+      "end": 1828,
+      "speaker": "Mrs. Pruett",
+      "text": "“Davy couldn’t tell. Too much spray.”\n\n"
+    },
+    {
+      "start": 1828,
+      "end": 1852,
+      "speaker": "Kit",
+      "text": "“Then I’ll go and look,”"
+    },
+    {
+      "start": 1892,
+      "end": 1907,
+      "speaker": "Uncle Abel",
+      "text": "“You will not,”"
+    },
+    {
+      "start": 1923,
+      "end": 1958,
+      "speaker": "Uncle Abel",
+      "text": "“Not in the dark, and not alone.”\n\n"
+    },
+    {
+      "start": 1958,
+      "end": 1980,
+      "speaker": "Kit",
+      "text": "“Then come with me.”\n\n"
+    },
+    {
+      "start": 2060,
+      "end": 2092,
+      "speaker": "Uncle Abel",
+      "text": "“Your mother was just the same,”"
+    },
+    {
+      "start": 2110,
+      "end": 2136,
+      "speaker": "Uncle Abel",
+      "text": "“Get the other lantern.”\n\n"
+    },
+    {
+      "start": 2400,
+      "end": 2408,
+      "speaker": "Kit",
+      "text": "“There,”"
+    },
+    {
+      "start": 2431,
+      "end": 2445,
+      "speaker": "Uncle Abel",
+      "text": "“I see her.”\n\n"
+    },
+    {
+      "start": 2445,
+      "end": 2500,
+      "speaker": "Kit",
+      "text": "“She’s too close. She’ll be on the Teeth by morning.”\n\n"
+    },
+    {
+      "start": 2500,
+      "end": 2529,
+      "speaker": "Uncle Abel",
+      "text": "“Not if she has any sense.”\n\n"
+    },
+    {
+      "start": 2529,
+      "end": 2551,
+      "speaker": "Kit",
+      "text": "“And if she hasn’t?”\n\n"
+    },
+    {
+      "start": 2723,
+      "end": 2750,
+      "speaker": "Uncle Abel",
+      "text": "“Then we wake the village,”"
+    },
+    {
+      "start": 2760,
+      "end": 2844,
+      "speaker": "Uncle Abel",
+      "text": "“Run, Kit. Ring the bell at the chapel, and don’t stop until every window is lit.”\n\n"
+    }
+  ]
+}

@@ -5,24 +5,50 @@ import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
 import { defaultLocale, getStory, updateStory } from '@/storage/stories';
 import { mergeCharactersInStory } from '@/storage/cast';
-import { castUsage, renameCharacter, setAliases } from '@/cast/castOps';
+import { normaliseName } from '@/analysis/castMatch';
+import {
+  castUsage,
+  findNameClash,
+  findTypedNameOwner,
+  partsToldBy,
+  renameCharacter,
+  setAliases,
+} from '@/cast/castOps';
 import { resolveVoice } from '@/cast/resolveVoice';
 import CharacterEditor from '../components/CharacterEditor.vue';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
-import { speakerColorIndex } from '../speakerColors';
+import { speakerColorIndex, speakerTint } from '../speakerColors';
 
 const props = defineProps<{ id: string }>();
 const db = getAppDb();
 const { player } = usePlayer(props.id);
 
 const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
-/** Segment count per character across all analysed parts. */
-const { data: usage } = useLiveQuery(async () => {
+const { data: analyses } = useLiveQuery(async () => {
   const s = await getStory(db, props.id);
-  return castUsage(await db.analyses.bulkGet(s?.partIds ?? []));
+  return db.analyses.bulkGet(s?.partIds ?? []);
 }, [() => props.id]);
+/** Segment count per character across all analysed parts. */
+const usage = computed(() => analyses.value && castUsage(analyses.value));
+/** Parts each character tells, i.e. reads most of the narration of. */
+const told = computed(() => {
+  const s = story.value;
+  if (!s) return new Map<string, number>();
+  return new Map(s.cast.map((c) => [c.id, partsToldBy(analyses.value ?? [], c.id, s.narratorId)]));
+});
 const error = ref('');
+/** A name refused because another member already has it, shown in member `id`'s editor. */
+const nameClash = ref<{ id: string; name: string }>();
+/** Why, worded from the cast as it is now: it goes once no other member has the name. */
+const clashText = computed(() => {
+  const clash = nameClash.value;
+  const s = story.value;
+  if (!clash || !s) return undefined;
+  const editing = s.cast.find((c) => c.id === clash.id);
+  const owner = findTypedNameOwner(s.cast, clash.name, s.narratorId, clash.id);
+  return editing && owner ? clashMessage(clash.name, editing, owner) : undefined;
+});
 
 const deviceVoices = ref<DeviceVoice[]>([]);
 onMounted(async () => {
@@ -79,6 +105,10 @@ async function preview(character: Character) {
 async function saveNames(character: Character, changes: { name: string; aliases: string[] }) {
   const s = story.value;
   if (!s) return;
+  // A name, or one of the other names, that someone else already has is refused.
+  const clash = findNameClash(s.cast, character.id, changes, s.narratorId);
+  if (clash) return void (nameClash.value = { id: character.id, name: clash.name });
+  nameClash.value = undefined;
   const renamed = renameCharacter(s.cast, character.id, changes.name);
   if (!renamed.ok) return void (error.value = renamed.reason);
   // Keep the alias renameCharacter adds for the old name alongside the edited list.
@@ -96,14 +126,50 @@ async function merge(character: Character, intoId: string) {
   try {
     await mergeCharactersInStory(db, props.id, character.id, intoId);
     error.value = '';
+    // A refused name's message described the cast before this merge, often the merge it suggested.
+    nameClash.value = undefined;
     player.castChanged();
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e);
   }
 }
 
+/**
+ * Why a name can't be used (someone has it, as their name or as one of their other names), and
+ * the merge to use instead from the editor the user is in: only a character's editor has "Same
+ * person as…". Nobody is the same person as the unknown speaker, so a name the user gave it (a
+ * new name, or a name merged into it or typed under its other names) is taken off it first.
+ */
+function clashMessage(name: string, editing: Character, owner: Character): string {
+  const ownName = normaliseName(owner.name) === normaliseName(name);
+  const who = ownName ? '' : ` as “${owner.name}”`;
+  const taken = `“${name.trim()}” is already in the cast${who}.`;
+  if (owner.role === 'unknown') {
+    const free = ownName ? 'change its name' : 'remove it from “Other names”';
+    return `${taken} To give it to ${editing.name}, open ${owner.name}’s card and ${free} first.`;
+  }
+  if (editing.role === 'character') return `${taken} Use “Same person as…” to merge them.`;
+  if (editing.role === 'unknown') {
+    return `${taken} To have ${owner.name} read these lines, use “Give all these lines to…”.`;
+  }
+  if (owner.role !== 'character') return taken;
+  return (
+    `${taken} If ${owner.name} tells the whole story, open ${owner.name}’s card and use ` +
+    `“Same person as… ${editing.name}” to merge them.`
+  );
+}
+
 function roleLabel(c: Character): string {
-  return c.role === 'narrator' ? 'Narrator' : c.role === 'unknown' ? 'Unattributed lines' : '';
+  return c.role === 'narrator'
+    ? 'Narrator · reads the story unless a part or passage is told by a character'
+    : c.role === 'unknown'
+      ? 'Unattributed lines'
+      : '';
+}
+
+function toldLabel(c: Character): string {
+  const parts = c.role === 'narrator' ? 0 : (told.value.get(c.id) ?? 0);
+  return parts === 0 ? '' : `tells ${parts} ${parts === 1 ? 'part' : 'parts'}`;
 }
 </script>
 
@@ -124,7 +190,7 @@ function roleLabel(c: Character): string {
         v-for="c in sorted"
         :key="c.id"
         class="card character"
-        :style="colors.has(c.id) ? { '--tint': `var(--speaker-${colors.get(c.id)})` } : undefined"
+        :style="{ '--tint': speakerTint(colors, c.id) }"
       >
         <div class="head">
           <span class="swatch" aria-hidden="true" />
@@ -134,6 +200,7 @@ function roleLabel(c: Character): string {
               <template v-if="roleLabel(c)">{{ roleLabel(c) }} · </template>
               <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
               <template v-else>{{ usage?.get(c.id) ?? 0 }} lines</template>
+              <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
               <template v-if="c.aliases.length"> · also “{{ c.aliases.join('”, “') }}”</template>
             </p>
           </div>
@@ -192,6 +259,7 @@ function roleLabel(c: Character): string {
             :key="c.name + c.aliases.join()"
             :character="c"
             :cast="story?.cast ?? []"
+            :name-error="nameClash?.id === c.id ? clashText : undefined"
             @save="saveNames(c, $event)"
             @merge="merge(c, $event)"
           />

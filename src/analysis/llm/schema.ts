@@ -25,7 +25,7 @@ export const UnitLabelSchema = z.object({
 });
 
 export const NewCharacterSchema = z.object({
-  ref: z.string().describe('A new code for this character, e.g. "n1"'),
+  ref: z.string().describe('A new code for this character, e.g. "new1"'),
   name: z.string(),
   aliases: z.array(z.string()),
   gender: z.enum(['male', 'female', 'other']).optional(),
@@ -33,7 +33,7 @@ export const NewCharacterSchema = z.object({
 });
 
 export const AliasAdditionSchema = z.object({
-  characterId: z.string().describe('The cast code of an existing character'),
+  characterId: z.string().describe('A cast code: "N" for the narrator, or a character code'),
   alias: z.string(),
 });
 

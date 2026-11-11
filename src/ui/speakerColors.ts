@@ -12,3 +12,12 @@ export function speakerColorIndex(cast: readonly Character[]): Map<string, numbe
   }
   return map;
 }
+
+/**
+ * A speaker's colour as a CSS value: their palette slot's, or for the narrator (who has no slot)
+ * its own colour, which differs from every slot's.
+ */
+export function speakerTint(colors: ReadonlyMap<string, number>, id: string): string {
+  const slot = colors.get(id);
+  return slot === undefined ? 'var(--narrator)' : `var(--speaker-${slot})`;
+}

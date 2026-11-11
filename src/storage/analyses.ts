@@ -1,5 +1,6 @@
 import type { Analysis, Character } from '@/format/types';
 import { validateAnalysis } from '@/format/validate';
+import { normaliseName } from '@/analysis/castMatch';
 import type { StoryDb } from './db';
 import { now } from './ids';
 
@@ -45,13 +46,19 @@ export async function saveAnalysis(
   });
 }
 
+/** Adds new characters, and each new alias a member is not yet known by (see normaliseName). */
 function applyCastChanges(cast: Character[], changes: CastChanges): Character[] {
   if (!changes.added.length && !changes.aliasAdditions.length) return cast;
   const updated = cast.map((c) => {
-    const aliases = changes.aliasAdditions
-      .filter((a) => a.characterId === c.id && a.alias !== c.name && !c.aliases.includes(a.alias))
-      .map((a) => a.alias);
-    return aliases.length ? { ...c, aliases: [...c.aliases, ...new Set(aliases)] } : c;
+    const known = new Set([c.name, ...c.aliases].map((n) => normaliseName(n)));
+    const aliases: string[] = [];
+    for (const { characterId, alias } of changes.aliasAdditions) {
+      const key = normaliseName(alias);
+      if (characterId !== c.id || known.has(key)) continue;
+      known.add(key);
+      aliases.push(alias);
+    }
+    return aliases.length ? { ...c, aliases: [...c.aliases, ...aliases] } : c;
   });
   const existing = new Set(updated.map((c) => c.id));
   return [...updated, ...changes.added.filter((c) => !existing.has(c.id))];

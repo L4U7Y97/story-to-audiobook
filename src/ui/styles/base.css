@@ -159,8 +159,13 @@ label {
   white-space: nowrap;
 }
 
-/* Speaker tints for the reader and cast view (narrator has none). */
+/*
+ * Speaker tints for the reader and cast view. The narrator has no palette slot: its own colour
+ * differs from every slot's (and from the accent), so its spoken lines never look like someone
+ * else's.
+ */
 :root {
+  --narrator: #644c60;
   --speaker-0: #2f5fd0;
   --speaker-1: #b4472a;
   --speaker-2: #2e7d4f;
@@ -173,6 +178,7 @@ label {
 
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme='light']) {
+    --narrator: #dcc4dc;
     --speaker-0: #8fb0ff;
     --speaker-1: #ff9b7a;
     --speaker-2: #7fd6a2;
@@ -185,6 +191,7 @@ label {
 }
 
 :root[data-theme='dark'] {
+  --narrator: #dcc4dc;
   --speaker-0: #8fb0ff;
   --speaker-1: #ff9b7a;
   --speaker-2: #7fd6a2;

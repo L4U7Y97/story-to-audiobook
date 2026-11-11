@@ -1,4 +1,5 @@
 import { SCHEMA_VERSION, type Character, type Lang, type Story } from '@/format/types';
+import { NARRATOR_NAME, UNKNOWN_NAME } from '@/analysis/castMatch';
 import type { StoryDb } from './db';
 import { newId, now } from './ids';
 
@@ -17,14 +18,14 @@ export async function createStory(
   const narrator: Character = {
     id: newId(),
     role: 'narrator',
-    name: input.lang === 'es' ? 'Narrador' : 'Narrator',
+    name: NARRATOR_NAME[input.lang],
     aliases: [],
     voice: { lang: locale, pitch: 1, rate: 1 },
   };
   const unknown: Character = {
     id: newId(),
     role: 'unknown',
-    name: input.lang === 'es' ? 'Desconocido' : 'Unknown speaker',
+    name: UNKNOWN_NAME[input.lang],
     aliases: [],
     voice: { lang: locale, pitch: 1.15, rate: 1 },
   };

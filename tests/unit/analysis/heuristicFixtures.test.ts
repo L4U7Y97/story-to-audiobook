@@ -3,11 +3,19 @@ import { splitUnits } from '@/analysis/units';
 import { analyzeHeuristic } from '@/analysis/heuristic';
 import { baseCast, loadFixture, score } from '../../helpers/fixtures';
 
-// Accuracy thresholds from SPEC.md (Testing strategy → Fixture accuracy).
+// Accuracy thresholds from SPEC.md (Testing strategy → Fixture accuracy). Each fixture also has a
+// regression floor just under what the heuristic scores today.
 const SPEECH_VS_NARRATION = 0.95;
 const ATTRIBUTION = 0.7;
 
-describe.each([['en/pride-ch1'], ['es/marianela-ch1']])('heuristic on %s', (path) => {
+describe.each([
+  // path, attribution floor, names that must not become characters
+  ['en/pride-ch1', 0.95, []],
+  ['es/marianela-ch1', 0.95, []],
+  // First person: the narrator is addressed by name ("Kit", "Inés") but is never a second voice.
+  ['en/lighthouse', 0.95, ['Kit']],
+  ['es/abuela', 0.95, ['Inés']],
+])('heuristic on %s', (path, floor, notCharacters) => {
   const { text, labels } = loadFixture(path);
   const cast = baseCast(labels.lang);
   const result = analyzeHeuristic({
@@ -30,8 +38,13 @@ describe.each([['en/pride-ch1'], ['es/marianela-ch1']])('heuristic on %s', (path
     expect(s.speechVsNarration).toBeGreaterThanOrEqual(SPEECH_VS_NARRATION);
   });
 
-  it(`attributes speakers ≥ ${ATTRIBUTION * 100}%`, () => {
-    expect(s.attribution).toBeGreaterThanOrEqual(ATTRIBUTION);
+  it(`attributes speakers ≥ ${Math.max(ATTRIBUTION, floor) * 100}%`, () => {
+    expect(s.attribution).toBeGreaterThanOrEqual(Math.max(ATTRIBUTION, floor));
+  });
+
+  it('creates no character for the narrator', () => {
+    for (const name of notCharacters) expect(s.characters).not.toContain(name);
+    expect(result.aliasAdditions.filter((a) => a.characterId === 'narrator')).toEqual([]);
   });
 
   it('is deterministic', () => {

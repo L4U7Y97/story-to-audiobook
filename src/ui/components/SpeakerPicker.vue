@@ -1,16 +1,29 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import type { Character, Mode, Segment } from '@/format/types';
+import { speakerTint } from '../speakerColors';
 
-defineProps<{
-  segment: Segment;
-  text: string;
-  cast: Character[];
-  colors: Map<string, number>;
-}>();
+/** Which lines a choice covers (see ReassignScope); 'range' ends at a line tapped next. */
+export type PickScope = 'line' | 'following' | 'part' | 'range';
+
+const props = withDefaults(
+  defineProps<{
+    segment: Segment;
+    text: string;
+    cast: Character[];
+    colors: Map<string, number>;
+    /** Lines by this line's speaker from this one to the end of the part, and in all of it. */
+    counts: { following: number; part: number };
+    initialScope?: PickScope;
+    /** The mode preselected; none when how the line reads depends on who is picked. */
+    defaultMode?: Mode;
+    title?: string;
+  }>(),
+  { initialScope: 'line', defaultMode: undefined, title: 'Who reads this?' },
+);
 const emit = defineEmits<{
-  pick: [choice: { speakerId: string; mode?: Mode }];
-  create: [choice: { name: string; mode?: Mode }];
+  pick: [choice: { speakerId: string; mode?: Mode; scope: PickScope }];
+  create: [choice: { name: string; mode?: Mode; scope: PickScope }];
   close: [];
 }>();
 
@@ -20,16 +33,36 @@ const MODES: Array<{ value: Mode; label: string }> = [
   { value: 'narration', label: 'Narrates' },
   { value: 'written', label: 'Reads out' },
 ];
-/** Undefined = let the app choose (narrator narrates, characters speak). */
-const mode = ref<Mode | undefined>();
+/** Undefined = the app chooses: defaultMode (reassign.ts) for the person picked. */
+const mode = ref<Mode | undefined>(props.defaultMode);
+const scope = ref<PickScope>(props.initialScope);
 const newName = ref('');
 const sheet = ref<HTMLElement>();
 
+const speaker = computed(
+  () => props.cast.find((c) => c.id === props.segment.speakerId)?.name ?? '',
+);
+const scopes = computed((): Array<{ value: PickScope; label: string }> => [
+  { value: 'line', label: 'Only this line' },
+  {
+    value: 'following',
+    label: `This and the following lines by ${speaker.value} (${props.counts.following})`,
+  },
+  { value: 'part', label: `Every line by ${speaker.value} in this part (${props.counts.part})` },
+  { value: 'range', label: 'From this line to one I tap next…' },
+]);
+/** A mode is chosen for one line; wider scopes keep how each line is read. */
+const oneLine = computed(() => scope.value === 'line');
+
 onMounted(() => sheet.value?.focus());
+
+function choice(): { mode?: Mode; scope: PickScope } {
+  return { mode: oneLine.value ? mode.value : undefined, scope: scope.value };
+}
 
 function create() {
   const name = newName.value.trim();
-  if (name) emit('create', { name, mode: mode.value });
+  if (name) emit('create', { name, ...choice() });
 }
 </script>
 
@@ -44,8 +77,16 @@ function create() {
       tabindex="-1"
       @keydown.esc="emit('close')"
     >
-      <h2 id="picker-title">Who reads this?</h2>
+      <h2 id="picker-title">{{ title }}</h2>
       <blockquote>{{ text.trim() }}</blockquote>
+
+      <fieldset v-if="counts.part > 1" class="scopes">
+        <legend>Which lines?</legend>
+        <label v-for="s in scopes" :key="s.value">
+          <input v-model="scope" type="radio" name="scope" :value="s.value" />
+          {{ s.label }}
+        </label>
+      </fieldset>
 
       <div class="modes" role="radiogroup" aria-label="How it is read">
         <button
@@ -53,23 +94,27 @@ function create() {
           :key="m.value"
           type="button"
           role="radio"
-          :aria-checked="mode === m.value"
-          :class="{ active: mode === m.value }"
+          :aria-checked="oneLine && mode === m.value"
+          :class="{ active: oneLine && mode === m.value }"
+          :disabled="!oneLine"
           @click="mode = mode === m.value ? undefined : m.value"
         >
           {{ m.label }}
         </button>
       </div>
+      <p v-if="!oneLine" class="note">Each line keeps how it is read.</p>
+      <p v-else-if="!mode && !defaultMode" class="note">
+        Not chosen: the narrator, or someone who already narrates in this part, narrates it; anyone
+        else says it.
+      </p>
 
       <ul class="people">
         <li v-for="c in cast" :key="c.id">
           <button
             type="button"
             :class="{ current: c.id === segment.speakerId }"
-            :style="
-              colors.has(c.id) ? { '--tint': `var(--speaker-${colors.get(c.id)})` } : undefined
-            "
-            @click="emit('pick', { speakerId: c.id, mode })"
+            :style="{ '--tint': speakerTint(colors, c.id) }"
+            @click="emit('pick', { speakerId: c.id, ...choice() })"
           >
             <span class="swatch" aria-hidden="true" />{{ c.name }}
           </button>
@@ -122,6 +167,30 @@ blockquote {
   overflow: hidden;
 }
 
+.scopes {
+  border: none;
+  padding: 0;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.scopes legend {
+  padding: 0;
+  margin-bottom: 4px;
+}
+
+.scopes label {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 44px;
+}
+
+.scopes input {
+  flex: none;
+}
+
 .modes {
   display: flex;
   flex-wrap: wrap;
@@ -132,6 +201,12 @@ blockquote {
   border-color: var(--accent);
   color: var(--accent);
   font-weight: 600;
+}
+
+.note {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.85rem;
 }
 
 .people {

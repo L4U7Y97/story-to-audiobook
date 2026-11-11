@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue';
+import { computed, nextTick, ref, shallowRef, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { Character, Mode, Segment } from '@/format/types';
-import { reassignSegment } from '@/analysis/reassign';
+import { modeForAnyone, reassignSegments, tellerOf, type ReassignScope } from '@/analysis/reassign';
 import { assignVoice } from '@/cast/assignVoices';
+import { findTypedNameOwner } from '@/cast/castOps';
 import { paragraphStarts } from '@/playback/utterances';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
@@ -13,9 +14,9 @@ import { listParts } from '@/storage/parts';
 import { getStory } from '@/storage/stories';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
-import { speakerColorIndex } from '../speakerColors';
+import { speakerColorIndex, speakerTint } from '../speakerColors';
 import PlayerBar from '../components/PlayerBar.vue';
-import SpeakerPicker from '../components/SpeakerPicker.vue';
+import SpeakerPicker, { type PickScope } from '../components/SpeakerPicker.vue';
 
 const props = defineProps<{ id: string; partId?: string }>();
 const db = getAppDb();
@@ -42,7 +43,19 @@ const colors = computed(() => speakerColorIndex(story.value?.cast ?? []));
 const names = computed(() => new Map(story.value?.cast.map((c) => [c.id, c.name])));
 const narratorId = computed(() => story.value?.narratorId);
 
+/**
+ * A line's colour: its speaker's. The narrator's own narration has none, so it keeps the text
+ * colour and is highlighted with the accent while it plays.
+ */
+function lineTint(segment: Segment) {
+  return segment.mode === 'narration' && segment.speakerId === narratorId.value
+    ? undefined
+    : { '--tint': speakerTint(colors.value, segment.speakerId) };
+}
+
 interface Paragraph {
+  /** Someone other than the narrator who reads narration in this paragraph. */
+  teller?: string;
   segments: Array<{ index: number; segment: Segment; text: string }>;
 }
 
@@ -54,9 +67,22 @@ const paragraphs = computed<Paragraph[]>(() => {
   const out: Paragraph[] = [];
   a.segments.forEach((segment, index) => {
     if (starts[index]) out.push({ segments: [] });
-    out.at(-1)!.segments.push({ index, segment, text: p.text.slice(segment.start, segment.end) });
+    const paragraph = out.at(-1)!;
+    paragraph.segments.push({ index, segment, text: p.text.slice(segment.start, segment.end) });
+    if (segment.mode === 'narration' && segment.speakerId !== narratorId.value) {
+      paragraph.teller ??= segment.speakerId;
+    }
   });
   return out;
+});
+
+/** Who tells the part (tellerOf) and the first line they narrate, for the "Told by" chip. */
+const teller = computed(() => {
+  const segments = analysis.value?.segments ?? [];
+  if (!paragraphs.value.length || !narratorId.value) return undefined;
+  const id = tellerOf(segments, narratorId.value);
+  const index = segments.findIndex((s) => s.speakerId === id && s.mode === 'narration');
+  return index < 0 ? undefined : { id, index };
 });
 
 const currentIndex = computed(() => {
@@ -91,36 +117,114 @@ function playFrom(index: number) {
 
 // "Fix speakers" mode: tapping a line opens the speaker picker instead of playing it.
 const editing = ref(false);
-const picking = ref<number | null>(null);
+/**
+ * A line as it was tapped. An analysis saved again meanwhile (one finishing in the background)
+ * can put another line at its index, so the line is found again by its offsets and speaker.
+ */
+interface Line {
+  start: number;
+  end: number;
+  speakerId: string;
+}
+/** The line the picker is open on; `teller` when it was opened from the "Told by" chip. */
+const picking = ref<(Line & { teller: boolean }) | null>(null);
+/**
+ * A passage being given to someone: its first line, until its last is tapped.
+ * Shallow, so a new character waiting in `added` stays a plain object IndexedDB can store.
+ */
+const range = shallowRef<{
+  first: Line;
+  speakerId: string;
+  name: string;
+  added: Character[];
+} | null>(null);
 const editError = ref('');
+
+/** The line at `index` as it is shown now. */
+function lineAt(index: number): Line | undefined {
+  const s = analysis.value?.segments[index];
+  return s && { start: s.start, end: s.end, speakerId: s.speakerId };
+}
+
+/** Where a tapped line is now; -1 once it was cut differently or given to someone else. */
+function lineIndex(line: Line): number {
+  return (
+    analysis.value?.segments.findIndex(
+      (s) => s.start === line.start && s.end === line.end && s.speakerId === line.speakerId,
+    ) ?? -1
+  );
+}
+
+const pickedIndex = computed(() => (picking.value ? lineIndex(picking.value) : -1));
+// A re-saved analysis redid the picked line: the sheet closes rather than apply the choice to
+// a line the user did not tap.
+watch(pickedIndex, (index) => {
+  if (index < 0) picking.value = null;
+});
 const pickedSegment = computed(() =>
-  picking.value === null ? undefined : analysis.value?.segments[picking.value],
+  pickedIndex.value < 0 ? undefined : analysis.value?.segments[pickedIndex.value],
 );
+/** Lines by the picked line's speaker from it to the end of the part, and in all of it. */
+const pickedCounts = computed(() => {
+  const segments = analysis.value?.segments ?? [];
+  const theirs = (from: number) =>
+    segments.slice(from).filter((s) => s.speakerId === pickedSegment.value?.speakerId).length;
+  return { following: theirs(Math.max(pickedIndex.value, 0)), part: theirs(0) };
+});
+/**
+ * The mode the picker preselects: how the line reads whoever reads it (modeForAnyone), and
+ * narration in the "Who tells this part?" sheet. How plain narration reads depends on who is
+ * picked, so nothing is preselected and reassignSegments applies defaultMode for them.
+ */
+const pickedMode = computed((): Mode | undefined => {
+  const segments = analysis.value?.segments;
+  const p = part.value;
+  if (!segments || !p || !picking.value) return undefined;
+  return picking.value.teller ? 'narration' : modeForAnyone(p.text, segments, pickedIndex.value);
+});
 
 async function toggleEditing() {
   editing.value = !editing.value;
+  range.value = null;
   // Segment indices can shift while editing, so playback pauses.
   if (editing.value) await player.pause();
 }
 
+// A passage ends in the part it starts in.
+watch(partId, () => (range.value = null));
+
+/** Opens the picker on line `index` as it is shown now. */
+function openPicker(index: number, teller: boolean) {
+  const line = lineAt(index);
+  picking.value = line ? { ...line, teller } : null;
+}
+
 function onSegmentClick(index: number) {
-  if (editing.value) picking.value = index;
+  if (range.value) void endRange(index);
+  else if (editing.value) openPicker(index, false);
   else playFrom(index);
 }
 
-async function applySpeaker(speakerId: string, mode?: Mode, added: Character[] = []) {
+function openTeller() {
+  range.value = null;
+  if (teller.value) openPicker(teller.value.index, true);
+}
+
+/** Gives line `index`, and with a wider scope more lines of its speaker, to `speakerId`. */
+async function applySpeaker(
+  index: number,
+  speakerId: string,
+  options: { mode?: Mode; scope: ReassignScope },
+  added: Character[] = [],
+) {
   const a = analysis.value;
   const p = part.value;
   const s = story.value;
-  if (!a || !p || !s || picking.value === null) return;
-  const segments = reassignSegment(
-    p.text,
-    a.segments,
-    picking.value,
-    speakerId,
-    s.narratorId,
-    mode,
-  );
+  if (!a || !p || !s) return;
+  const segments = reassignSegments(p.text, a.segments, index, speakerId, {
+    narratorId: s.narratorId,
+    ...options,
+  });
   try {
     await saveAnalysis(db, { ...a, segments }, { added, aliasAdditions: [] });
     editError.value = '';
@@ -130,12 +234,43 @@ async function applySpeaker(speakerId: string, mode?: Mode, added: Character[] =
   }
 }
 
-async function createSpeaker(name: string, mode?: Mode) {
+/** Applies a choice from the picker. A range waits for a tap on its last line. */
+async function choose(
+  speakerId: string,
+  { mode, scope }: { mode?: Mode; scope: PickScope },
+  added: Character[] = [],
+) {
+  const index = pickedIndex.value;
+  const segment = pickedSegment.value;
+  if (index < 0 || !segment) return;
+  // Giving a speaker's lines back to them would only pin those lines as corrections.
+  if (scope !== 'line' && speakerId === segment.speakerId) return void (picking.value = null);
+  if (scope !== 'range') return applySpeaker(index, speakerId, { mode, scope }, added);
+  const name = added[0]?.name ?? names.value.get(speakerId) ?? '';
+  const first = { start: segment.start, end: segment.end, speakerId: segment.speakerId };
+  range.value = { first, speakerId, name, added };
+  picking.value = null;
+}
+
+/** Ends a passage at the tapped line: its first line's speaker's lines up to there move. */
+async function endRange(through: number) {
+  const r = range.value;
+  if (!r) return;
+  range.value = null;
+  // Nothing moves if a re-saved analysis redid the first line meanwhile.
+  const from = lineIndex(r.first);
+  if (from >= 0) await applySpeaker(from, r.speakerId, { scope: { through } }, r.added);
+}
+
+async function createSpeaker(name: string, how: { mode?: Mode; scope: PickScope }) {
   const s = story.value;
   if (!s) return;
+  // Someone the cast already knows by that name ("Narrator" included) reads it, not a duplicate.
+  const owner = findTypedNameOwner(s.cast, name, s.narratorId);
+  if (owner) return choose(owner.id, how);
   const base = { id: newId(), role: 'character' as const, name, aliases: [] };
   const voice = assignVoice(base, s.cast, await getEngine().listVoices(), defaultLocale(s.lang));
-  await applySpeaker(base.id, mode, [{ ...base, voice }]);
+  await choose(base.id, how, [{ ...base, voice }]);
 }
 
 function selectPart(event: Event) {
@@ -163,7 +298,15 @@ function selectPart(event: Event) {
         <RouterLink :to="{ name: 'cast', params: { id } }">Cast</RouterLink>
       </span>
     </nav>
-    <p v-if="editing" class="hint">Tap a line to choose who reads it.</p>
+    <p v-if="range" class="banner" role="status">
+      Tap the last line {{ range.name }} reads ·
+      <button type="button" class="link" @click="range = null">Cancel</button>
+    </p>
+    <p v-else-if="editing" class="hint">
+      Tap a line to choose who reads it. If a character tells this part, use “Told by”. For a letter
+      or a tale, tap its first line, choose “From this line to one I tap next…” and who tells it,
+      then tap its last line.
+    </p>
     <p v-if="editError" class="error" role="alert">{{ editError }}</p>
 
     <label v-if="parts?.length" class="part-picker">
@@ -177,8 +320,27 @@ function selectPart(event: Event) {
       This part has not been analysed yet. Analyse it from the story page to hear it.
     </p>
 
+    <button
+      v-if="editing && teller"
+      type="button"
+      class="told-by"
+      aria-haspopup="dialog"
+      :style="{ '--tint': speakerTint(colors, teller.id) }"
+      @click="openTeller"
+    >
+      <span class="swatch" aria-hidden="true" />Told by: {{ names.get(teller.id) }}
+      <span aria-hidden="true">▾</span>
+    </button>
+
     <article ref="textEl" :class="['text', { editing }]" :lang="story?.lang">
-      <p v-for="(paragraph, i) in paragraphs" :key="i">
+      <p
+        v-for="(paragraph, i) in paragraphs"
+        :key="i"
+        :data-teller="paragraph.teller"
+        :style="
+          paragraph.teller ? { '--teller': speakerTint(colors, paragraph.teller) } : undefined
+        "
+      >
         <span
           v-for="s in paragraph.segments"
           :key="s.index"
@@ -188,14 +350,10 @@ function selectPart(event: Event) {
             'segment',
             {
               current: s.index === currentIndex,
-              voiced: s.segment.speakerId !== narratorId,
+              voiced: s.segment.mode !== 'narration',
             },
           ]"
-          :style="
-            colors.has(s.segment.speakerId)
-              ? { '--tint': `var(--speaker-${colors.get(s.segment.speakerId)})` }
-              : undefined
-          "
+          :style="lineTint(s.segment)"
           :title="names.get(s.segment.speakerId)"
           @click="onSegmentClick(s.index)"
           >{{ s.text }}</span
@@ -205,13 +363,17 @@ function selectPart(event: Event) {
 
     <PlayerBar v-if="!editing" :player="player" :snapshot="snapshot" />
     <SpeakerPicker
-      v-if="pickedSegment && part && story"
+      v-if="picking && pickedSegment && part && story"
       :segment="pickedSegment"
       :text="part.text.slice(pickedSegment.start, pickedSegment.end)"
       :cast="story.cast"
       :colors="colors"
-      @pick="applySpeaker($event.speakerId, $event.mode)"
-      @create="createSpeaker($event.name, $event.mode)"
+      :counts="pickedCounts"
+      :initial-scope="picking.teller ? 'part' : 'line'"
+      :default-mode="pickedMode"
+      :title="picking.teller ? 'Who tells this part?' : undefined"
+      @pick="choose($event.speakerId, $event)"
+      @create="createSpeaker($event.name, $event)"
       @close="picking = null"
     />
   </main>
@@ -249,6 +411,32 @@ function selectPart(event: Event) {
   color: var(--danger);
 }
 
+/* Stays in view while the user scrolls to the passage's last line. */
+.banner {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: 0 0 12px;
+  padding: 0 12px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--surface);
+}
+
+.told-by {
+  gap: 8px;
+  margin-bottom: 12px;
+  border-radius: 999px;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--tint);
+  flex: none;
+}
+
 .text.editing .segment {
   text-decoration: underline dotted;
   text-underline-offset: 4px;
@@ -265,6 +453,12 @@ function selectPart(event: Event) {
 
 .text p {
   margin: 0 0 1em;
+}
+
+/* A paragraph whose narration a character reads; the narration keeps the text colour. */
+.text p[data-teller] {
+  border-inline-start: 3px solid var(--teller);
+  padding-inline-start: 12px;
 }
 
 .segment {

@@ -1,0 +1,168 @@
+{
+  "lang": "es",
+  "source": "Original passage written for these tests (first-person narrator)",
+  "people": {
+    "Inés": [
+      "Narrator",
+      "Narrador"
+    ],
+    "Remedios": [
+      "Remedios",
+      "Doña Remedios",
+      "doña Remedios",
+      "abuela",
+      "la abuela",
+      "mi abuela",
+      "una voz"
+    ],
+    "Julián": [
+      "Julián"
+    ]
+  },
+  "speech": [
+    {
+      "start": 207,
+      "end": 224,
+      "speaker": "Remedios",
+      "text": "—¿Eres tú, Inés? "
+    },
+    {
+      "start": 260,
+      "end": 276,
+      "speaker": "Inés",
+      "text": "—Soy yo, abuela "
+    },
+    {
+      "start": 288,
+      "end": 304,
+      "speaker": "Remedios",
+      "text": "—Llegas tarde.\n\n"
+    },
+    {
+      "start": 304,
+      "end": 341,
+      "speaker": "Inés",
+      "text": "—El autobús se rompió en la cuesta.\n\n"
+    },
+    {
+      "start": 341,
+      "end": 366,
+      "speaker": "Remedios",
+      "text": "—Siempre se rompe algo.\n\n"
+    },
+    {
+      "start": 573,
+      "end": 590,
+      "speaker": "Remedios",
+      "text": "—Estás más flaca "
+    },
+    {
+      "start": 605,
+      "end": 620,
+      "speaker": "Inés",
+      "text": "—Estoy igual.\n\n"
+    },
+    {
+      "start": 620,
+      "end": 676,
+      "speaker": "Remedios",
+      "text": "—Estás más flaca y más alta, y eso no puede ser bueno.\n\n"
+    },
+    {
+      "start": 864,
+      "end": 893,
+      "speaker": "Julián",
+      "text": "—¡La señorita de la capital! "
+    },
+    {
+      "start": 913,
+      "end": 926,
+      "speaker": "Inés",
+      "text": "—No empieces "
+    },
+    {
+      "start": 937,
+      "end": 962,
+      "speaker": "Julián",
+      "text": "—No empiezo, no empiezo. "
+    },
+    {
+      "start": 1023,
+      "end": 1053,
+      "speaker": "Julián",
+      "text": ". ¿Te quedas todo el verano?\n\n"
+    },
+    {
+      "start": 1053,
+      "end": 1068,
+      "speaker": "Inés",
+      "text": "—Eso depende.\n\n"
+    },
+    {
+      "start": 1068,
+      "end": 1079,
+      "speaker": "Julián",
+      "text": "—¿De qué?\n\n"
+    },
+    {
+      "start": 1079,
+      "end": 1104,
+      "speaker": "Inés",
+      "text": "—De si me dejas en paz.\n\n"
+    },
+    {
+      "start": 1104,
+      "end": 1128,
+      "speaker": "Remedios",
+      "text": "—Entonces te vas mañana "
+    },
+    {
+      "start": 1379,
+      "end": 1400,
+      "speaker": "Julián",
+      "text": "—Mañana te lo enseño "
+    },
+    {
+      "start": 1411,
+      "end": 1424,
+      "speaker": "Inés",
+      "text": "—¿Al perro?\n\n"
+    },
+    {
+      "start": 1424,
+      "end": 1481,
+      "speaker": "Julián",
+      "text": "—Al perro y al molino. Hay una cosa que tienes que ver.\n\n"
+    },
+    {
+      "start": 1481,
+      "end": 1494,
+      "speaker": "Inés",
+      "text": "—¿Qué cosa?\n\n"
+    },
+    {
+      "start": 1494,
+      "end": 1522,
+      "speaker": "Julián",
+      "text": "—Si te lo digo, no vienes.\n\n"
+    },
+    {
+      "start": 1565,
+      "end": 1570,
+      "speaker": "Inés",
+      "text": "—Iré "
+    },
+    {
+      "start": 1580,
+      "end": 1630,
+      "speaker": "Inés",
+      "text": ". Pero si es otra de tus bromas, te tiro al río.\n\n"
+    },
+    {
+      "start": 1630,
+      "end": 1644,
+      "speaker": "Julián",
+      "text": "—Trato hecho.\n"
+    }
+  ]
+}

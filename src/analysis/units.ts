@@ -29,6 +29,8 @@ const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 const WHITESPACE = /\s/u;
 const NON_WHITESPACE = /\S/u;
 const SINGLE_QUOTE_OPENERS_BEFORE = new Set(['(', '[', '{', '—', '–', '"', '“', '«', '-']);
+/** A text with a blank line in it separates paragraphs only by blank lines. */
+const BLANK_LINE = /\n[^\S\n]*\n/;
 
 /**
  * Splits text into units at paragraph breaks, quoted speech (“…”, «…», "…", ‘…’, '…') and
@@ -39,11 +41,15 @@ export function splitUnits(text: string, lang: Lang, hints: readonly Hint[] = []
   if (text.length === 0) return [];
 
   const pieces: Piece[] = [];
-  const separator = /\n[^\S\n]*\n/.test(text) ? /\n[^\S\n]*\n\s*/g : /\n\s*/g;
+  const separator = BLANK_LINE.test(text) ? /\n[^\S\n]*\n\s*/g : /\n\s*/g;
   let paragraph = 0;
   let paraStart = 0;
+  // A «…» quotation the last paragraph left open (see scanQuotes).
+  let open: OpenQuote | null = null;
   for (const match of text.matchAll(separator)) {
-    pieces.push(...scanParagraph(text, paraStart, match.index, paragraph, lang));
+    const scanned = scanParagraph(text, paraStart, match.index, paragraph, lang, open);
+    pieces.push(...scanned.pieces);
+    open = scanned.open;
     pieces.push({
       start: match.index,
       end: match.index + match[0].length,
@@ -53,7 +59,7 @@ export function splitUnits(text: string, lang: Lang, hints: readonly Hint[] = []
     paraStart = match.index + match[0].length;
     paragraph++;
   }
-  pieces.push(...scanParagraph(text, paraStart, text.length, paragraph, lang));
+  pieces.push(...scanParagraph(text, paraStart, text.length, paragraph, lang, open).pieces);
 
   const merged = mergeBlankPieces(text, splitAtEmphasis(text, pieces, hints));
   const paragraphNumbers = new Map<number, number>();
@@ -64,19 +70,32 @@ export function splitUnits(text: string, lang: Lang, hints: readonly Hint[] = []
   });
 }
 
+/**
+ * Whether a paragraph starts at `offset`, as splitUnits splits them: only whitespace lies before
+ * it, back to the start of the text or to a paragraph break (a hard wrap is not one).
+ */
+export function startsParagraph(text: string, offset: number): boolean {
+  let from = offset;
+  while (from > 0 && WHITESPACE.test(text[from - 1]!)) from--;
+  if (from === 0) return true;
+  const gap = text.slice(from, offset);
+  return BLANK_LINE.test(text) ? BLANK_LINE.test(gap) : gap.includes('\n');
+}
+
 function scanParagraph(
   text: string,
   start: number,
   end: number,
   paragraph: number,
   lang: Lang,
-): Piece[] {
-  if (start >= end) return [];
+  continued: OpenQuote | null,
+): { pieces: Piece[]; open: OpenQuote | null } {
+  if (start >= end) return { pieces: [], open: null };
   const lead = start + (text.slice(start, end).length - text.slice(start, end).trimStart().length);
   if (lang === 'es' && dashLength(text, lead, end) > 0) {
-    return scanDashDialogue(text, start, lead, end, paragraph);
+    return { pieces: scanDashDialogue(text, start, lead, end, paragraph), open: null };
   }
-  return scanQuotes(text, start, end, paragraph);
+  return scanQuotes(text, start, lead, end, paragraph, continued);
 }
 
 /** Length of a dialogue dash at i: one of —―– or a run of two or more hyphens ("--"). */
@@ -136,9 +155,22 @@ interface OpenQuote {
   single: boolean;
 }
 
-function scanQuotes(text: string, start: number, end: number, paragraph: number): Piece[] {
+/**
+ * Quoted speech in one paragraph. `continued` is a «…» quotation the paragraph before left open:
+ * a paragraph starting with "»" carries it on (Spanish comillas de seguir). Returns the «…»
+ * quotation this paragraph leaves open, if any.
+ */
+function scanQuotes(
+  text: string,
+  start: number,
+  lead: number,
+  end: number,
+  paragraph: number,
+  continued: OpenQuote | null,
+): { pieces: Piece[]; open: OpenQuote | null } {
   const pieces: Piece[] = [];
-  let open: OpenQuote | null = null;
+  const continues = continued?.close === '»' && text[lead] === '»';
+  let open: OpenQuote | null = continues ? continued : null;
   let pieceStart = start;
 
   const cut = (at: number, kind: UnitKind) => {
@@ -146,7 +178,7 @@ function scanQuotes(text: string, start: number, end: number, paragraph: number)
     pieceStart = at;
   };
 
-  for (let i = start; i < end; i++) {
+  for (let i = continues ? lead + 1 : start; i < end; i++) {
     const ch = text[i]!;
     if (open === null) {
       const quote = openingQuote(text, i, start, end);
@@ -160,9 +192,9 @@ function scanQuotes(text: string, start: number, end: number, paragraph: number)
     }
   }
   // A quote left open at the end of a paragraph continues to its end (multi-paragraph speech
-  // repeats the opening quote on each paragraph).
+  // repeats the opening quote on each paragraph, or opens it with "»").
   cut(end, open ? 'speech' : 'narration');
-  return pieces;
+  return { pieces, open: open?.close === '»' ? open : null };
 }
 
 function openingQuote(text: string, i: number, start: number, end: number): OpenQuote | null {

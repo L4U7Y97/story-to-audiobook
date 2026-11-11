@@ -1,5 +1,6 @@
 import type { Analysis } from '@/format/types';
 import { validateAnalysis } from '@/format/validate';
+import { NARRATOR_NAME } from '@/analysis/castMatch';
 import { mergeCharacters } from '@/cast/castOps';
 import type { StoryDb } from './db';
 import { now } from './ids';
@@ -21,7 +22,7 @@ export async function mergeCharactersInStory(
       (a): a is Analysis => a !== undefined,
     );
 
-    const result = mergeCharacters(story.cast, analyses, fromId, intoId);
+    const result = mergeCharacters(story.cast, analyses, fromId, intoId, NARRATOR_NAME[story.lang]);
     if (!result.ok) throw new Error(result.reason);
     const { cast, analyses: updated } = result.value;
 

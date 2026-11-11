@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
 import type { Lang, Segment } from '@/format/types';
 import { validateSegments } from '@/format/validate';
-import { splitUnits, type Unit } from '@/analysis/units';
+import { splitUnits, startsParagraph, type Unit } from '@/analysis/units';
 
 /** Unit texts with their provisional kind, for readable assertions. */
 function show(text: string, lang: Lang = 'en', hints = []): Array<[string, Unit['kind']]> {
@@ -61,6 +61,24 @@ describe('splitUnits: quotes', () => {
       ['“First paragraph of a long speech.\n\n', 'speech'],
       ['“Second paragraph,”', 'speech'],
       [' he said.', 'narration'],
+    ]);
+  });
+
+  it('continues a «…» quotation in a paragraph that opens with »', () => {
+    const text =
+      '«Era tarde», dijo Ana. «Estábamos cansados.\n\n»Entonces llegó la guerra.» Calló.';
+    expect(show(text, 'es')).toEqual([
+      ['«Era tarde»', 'speech'],
+      [', dijo Ana. ', 'narration'],
+      ['«Estábamos cansados.\n\n', 'speech'],
+      ['»Entonces llegó la guerra.»', 'speech'],
+      [' Calló.', 'narration'],
+    ]);
+    // Only after a quotation left open: otherwise » is an ordinary character.
+    expect(show('«Ven».\n\n»Nada.', 'es')).toEqual([
+      ['«Ven»', 'speech'],
+      ['.\n\n', 'narration'],
+      ['»Nada.', 'narration'],
     ]);
   });
 });
@@ -133,6 +151,18 @@ describe('splitUnits: paragraphs and whitespace', () => {
   });
 });
 
+describe('startsParagraph', () => {
+  it('finds paragraph starts as splitUnits does, so a hard wrap starts none', () => {
+    const wrapped = 'Llovía.\n\n—No sé si vendrá\n—dijo Ana.';
+    expect(startsParagraph(wrapped, wrapped.indexOf('—No'))).toBe(true);
+    expect(startsParagraph(wrapped, wrapped.indexOf('—dijo'))).toBe(false);
+    const lines = 'Ana entró.\n—Hola.';
+    expect(startsParagraph(lines, lines.indexOf('—'))).toBe(true);
+    expect(startsParagraph('  —Hola.', 2)).toBe(true);
+    expect(startsParagraph('—Hola —dijo.', 6)).toBe(false);
+  });
+});
+
 describe('splitUnits: emphasis hints', () => {
   it('splits narration at multi-word emphasis', () => {
     const text = 'I must go, she thought. Then she left.';
@@ -185,6 +215,20 @@ describe('splitUnits: properties', () => {
         }));
         expect(validateSegments(text, asSegments, new Set(['n']))).toEqual({ ok: true });
         expect(units.map((u) => u.index)).toEqual(units.map((_, i) => i));
+      }),
+    );
+  });
+
+  it.each(['en', 'es'] as const)('starts paragraphs where startsParagraph says (%s)', (lang) => {
+    fc.assert(
+      fc.property(fc.string({ unit: alphabet, maxLength: 80 }), (text) => {
+        const units = splitUnits(text, lang);
+        units.forEach((u, i) => {
+          const body = text.slice(u.start, u.end);
+          const words = u.end - body.trimStart().length;
+          const starts = i === 0 || u.paragraph !== units[i - 1]!.paragraph;
+          expect(startsParagraph(text, words)).toBe(starts);
+        });
       }),
     );
   });

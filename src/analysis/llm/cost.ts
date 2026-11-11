@@ -1,7 +1,7 @@
 import type { Character, Lang } from '@/format/types';
 import type { Unit } from '../units';
 import { chunkUnits, DEFAULT_CHUNK_LIMITS, estimateTokens } from './chunking';
-import { buildUserPrompt, SYSTEM_PROMPT } from './prompt';
+import { buildUserPrompt, promptCast, SYSTEM_PROMPT, type NarratorStyle } from './prompt';
 
 /** USD per million tokens (prompts under 100k tokens, which every chunk is). */
 export const PRICES: Record<string, { input: number; output: number }> = {
@@ -42,17 +42,11 @@ export function estimateCost(input: {
   units: readonly Unit[];
   cast: readonly Character[];
   model: string;
+  /** How the narrator told the story's other analysed parts, as the run will show it. */
+  narratorStyle?: NarratorStyle;
 }): CostEstimate {
   const chunks = chunkUnits(input.text, input.units, DEFAULT_CHUNK_LIMITS);
-  let n = 0;
-  const cast = input.cast.map((c) => ({
-    code: c.role === 'narrator' ? 'N' : c.role === 'unknown' ? 'U' : `c${++n}`,
-    name: c.name,
-    role: c.role,
-    aliases: c.aliases,
-    ...(c.gender ? { gender: c.gender } : {}),
-    ...(c.description ? { description: c.description } : {}),
-  }));
+  const cast = promptCast(input.cast, input.narratorStyle);
   const system = estimateTokens(SYSTEM_PROMPT) + SCHEMA_TOKENS;
 
   let inputTokens = 0;

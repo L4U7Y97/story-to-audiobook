@@ -64,6 +64,17 @@ describe('mergeLabels', () => {
     expect(mergeLabels('abcdefghi', result, baseCast('en'), 'p1', ids).segments).toHaveLength(3);
   });
 
+  it('never stores the internal teller flag', () => {
+    const result: LabelResult = {
+      spans: [span(0, 5, { teller: true }), span(5, 9, { mode: 'speech', teller: true })],
+      newCharacters: [],
+      aliasAdditions: [],
+    };
+    const { segments } = mergeLabels('Then “Hi”', result, baseCast('en'), 'p1', ids);
+    expect(segments).toHaveLength(2);
+    expect(segments.filter((s) => 'teller' in s)).toEqual([]);
+  });
+
   it('adds new aliases to existing characters once', () => {
     const cast = [
       ...baseCast('es'),

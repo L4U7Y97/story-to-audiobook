@@ -64,13 +64,24 @@ function choice(): { mode?: Mode; scope: PickScope } {
   return { mode: oneLine.value ? mode.value : undefined, scope: scope.value };
 }
 
+/**
+ * Leaving the sheet any way but Cancel keeps a change made without picking anyone: the line
+ * stays with its speaker and reads in the chosen mode. Nothing changed, nothing is saved.
+ */
+function dismiss() {
+  const how = choice();
+  if (how.mode && how.mode !== props.segment.mode) {
+    emit('pick', { speakerId: props.segment.speakerId, ...how });
+  } else emit('close');
+}
+
 function create(name = newName.value.trim()) {
   if (name) emit('create', { name, ...choice() });
 }
 </script>
 
 <template>
-  <div class="backdrop" @click.self="emit('close')">
+  <div class="backdrop" @click.self="dismiss()">
     <section
       ref="sheet"
       class="sheet"
@@ -78,7 +89,7 @@ function create(name = newName.value.trim()) {
       aria-modal="true"
       aria-labelledby="picker-title"
       tabindex="-1"
-      @keydown.esc="emit('close')"
+      @keydown.esc="dismiss()"
     >
       <h2 id="picker-title">{{ title }}</h2>
       <blockquote>{{ text.trim() }}</blockquote>

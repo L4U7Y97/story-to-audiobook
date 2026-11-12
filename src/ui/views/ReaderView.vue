@@ -18,7 +18,8 @@ import { speakerColorIndex, speakerTint } from '../speakerColors';
 import PlayerBar from '../components/PlayerBar.vue';
 import SpeakerPicker, { type PickScope } from '../components/SpeakerPicker.vue';
 
-const props = defineProps<{ id: string; partId?: string }>();
+/** `line`: a line of the route's part to scroll to and mark, as a cast card's links ask. */
+const props = defineProps<{ id: string; partId?: string; line?: number }>();
 const db = getAppDb();
 const router = useRouter();
 const { player, snapshot } = usePlayer(props.id);
@@ -99,6 +100,25 @@ watch(currentIndex, async (index) => {
     ?.querySelector(`[data-index="${index}"]`)
     ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
 });
+
+/** The line a link asked for, marked while the route asks for it (changing part drops it). */
+const targetIndex = computed(() =>
+  props.line !== undefined && Number.isInteger(props.line) && props.partId === partId.value
+    ? props.line
+    : -1,
+);
+// Scroll to it once its part's lines are shown. Playback is left alone: tapping it plays it.
+watch(
+  [targetIndex, () => paragraphs.value.length],
+  async ([index, shown]) => {
+    if (index < 0 || !shown) return;
+    await nextTick();
+    textEl.value
+      ?.querySelector(`[data-index="${index}"]`)
+      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  },
+  { immediate: true },
+);
 
 // Follow playback into the next part.
 watch(
@@ -350,6 +370,7 @@ function selectPart(event: Event) {
             'segment',
             {
               current: s.index === currentIndex,
+              target: s.index === targetIndex,
               voiced: s.segment.mode !== 'narration',
             },
           ]"
@@ -473,6 +494,13 @@ function selectPart(event: Event) {
 
 .segment[data-mode='thought'] {
   font-style: italic;
+}
+
+/* The line a cast card linked to: underlined in its speaker's colour, under the playing mark. */
+.segment.target {
+  text-decoration: underline 2px var(--tint, var(--accent));
+  text-underline-offset: 4px;
+  background: color-mix(in srgb, var(--tint, var(--accent)) 10%, transparent);
 }
 
 .segment.current {

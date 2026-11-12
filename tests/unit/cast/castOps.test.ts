@@ -7,6 +7,7 @@ import {
   findNameClash,
   findNameOwner,
   findTypedNameOwner,
+  linesOf,
   mergeCharacters,
   parseAliases,
   partsToldBy,
@@ -335,6 +336,19 @@ describe('castUsage', () => {
   it('counts lines per speaker', () => {
     const usage = castUsage([analysis('p', ['a', 'a', 'b']), undefined]);
     expect(Object.fromEntries(usage)).toEqual({ a: 2, b: 1 });
+  });
+});
+
+describe('linesOf', () => {
+  it('lists a speaker’s lines in story order, with their part and index', () => {
+    const lines = linesOf([analysis('p1', ['a', 'b', 'a']), undefined, analysis('p2', ['a'])], 'a');
+    expect(lines.map(({ partId, index }) => [partId, index])).toEqual([
+      ['p1', 0],
+      ['p1', 2],
+      ['p2', 0],
+    ]);
+    expect(lines[1]!.segment.start).toBe(2);
+    expect(linesOf([analysis('p1', ['b'])], 'a')).toEqual([]);
   });
 });
 

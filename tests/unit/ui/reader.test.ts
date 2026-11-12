@@ -377,3 +377,29 @@ describe('a passage', () => {
     expect(stretch(story, saved, 'That was all')?.speakerId).toBe(story.ids.N);
   });
 });
+
+describe('a line linked from the cast', () => {
+  it('is marked and scrolled to, without playing', async () => {
+    const story = await storeStory(frame);
+    const scrolled: Element[] = [];
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (
+      this: Element,
+    ) {
+      scrolled.push(this);
+    });
+    try {
+      const host = await mountView(ReaderView, {
+        id: story.storyId,
+        partId: story.partId,
+        line: 4,
+      });
+      await until(() => lines(host).length === frame.length, 'the lines');
+      const target = await until(() => host.querySelector('.segment.target'), 'the marked line');
+      expect(target.textContent).toBe('“Hush,”');
+      await until(() => scrolled.includes(target), 'the scroll');
+      expect(host.querySelector('.segment.current')).toBeNull();
+    } finally {
+      scroll.mockRestore();
+    }
+  });
+});

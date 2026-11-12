@@ -278,3 +278,36 @@ describe('the cast search', () => {
     ).toBe('John Watson');
   });
 });
+
+describe('a member’s lines', () => {
+  it('lists them, each linking to its line in the reader', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const lines = cardOf(host, 'Holmes').querySelector<HTMLDetailsElement>('details.lines')!;
+    expect(lines.querySelector('summary')!.textContent).toContain('Holmes’s lines');
+    lines.open = true;
+    lines.dispatchEvent(new Event('toggle'));
+    const links = await until(() => {
+      const found = [...lines.querySelectorAll<HTMLAnchorElement>('a')];
+      return found.length ? found : undefined;
+    }, 'the links');
+    expect(links.map((a) => a.querySelector('.line-text')!.textContent)).toEqual([
+      '“Come in, Watson,”',
+    ]);
+    expect(links[0]!.getAttribute('href')).toBe(
+      `/story/${story.storyId}/read/${story.partId}?line=0`,
+    );
+
+    const narrator = cardOf(host, 'Narrator').querySelector<HTMLDetailsElement>('details.lines')!;
+    narrator.open = true;
+    narrator.dispatchEvent(new Event('toggle'));
+    await until(() => narrator.querySelectorAll('a').length === 2, 'the narrator’s links');
+    expect(narrator.querySelectorAll('a')[1]!.getAttribute('href')).toContain('?line=3');
+  });
+
+  it('is not offered to a member with no lines', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    expect(cardOf(host, 'Unknown speaker').querySelector('details.lines')).toBeNull();
+  });
+});

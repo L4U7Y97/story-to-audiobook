@@ -4,6 +4,7 @@ import type { Character, VoiceSettings } from '@/format/types';
 import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
 import { defaultLocale, getStory, updateStory } from '@/storage/stories';
+import { listParts } from '@/storage/parts';
 import { mergeCharactersInStory } from '@/storage/cast';
 import { normaliseName } from '@/analysis/castMatch';
 import {
@@ -11,6 +12,7 @@ import {
   filterCast,
   findNameClash,
   findTypedNameOwner,
+  linesOf,
   partsToldBy,
   renameCharacter,
   setAliases,
@@ -31,6 +33,7 @@ const { data: analyses } = useLiveQuery(async () => {
   const s = await getStory(db, props.id);
   return db.analyses.bulkGet(s?.partIds ?? []);
 }, [() => props.id]);
+const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
 /** Segment count per character across all analysed parts. */
 const usage = computed(() => analyses.value && castUsage(analyses.value));
 /** Parts each character tells, i.e. reads most of the narration of. */
@@ -39,6 +42,51 @@ const told = computed(() => {
   if (!s) return new Map<string, number>();
   return new Map(s.cast.map((c) => [c.id, partsToldBy(analyses.value ?? [], c.id, s.narratorId)]));
 });
+
+/** Members whose "Lines" list is open: a list is only worked out while it is shown. */
+const linesOpen = ref(new Set<string>());
+/** How many of a member's lines are listed; "Show more" raises it. */
+const linesShown = ref(new Map<string, number>());
+const LINES_PAGE = 50;
+function onLinesToggle(c: Character, event: Event) {
+  const next = new Set(linesOpen.value);
+  if ((event.target as HTMLDetailsElement).open) next.add(c.id);
+  else next.delete(c.id);
+  linesOpen.value = next;
+}
+function showMoreLines(c: Character) {
+  const next = new Map(linesShown.value);
+  next.set(c.id, (next.get(c.id) ?? LINES_PAGE) + LINES_PAGE);
+  linesShown.value = next;
+}
+/**
+ * Each open member's lines with their part's title and text. Lines of a part whose analysis is
+ * out of date are left out: the reader doesn't show them, so a link would lead nowhere.
+ */
+const memberLines = computed(() => {
+  const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
+  const current = (analyses.value ?? []).filter(
+    (a) => a && byId.get(a.partId)?.textHash === a.textHash,
+  );
+  return new Map(
+    [...linesOpen.value].map((id) => [
+      id,
+      linesOf(current, id).map((l) => {
+        const part = byId.get(l.partId)!;
+        return {
+          ...l,
+          partTitle: part.title,
+          text: excerpt(part.text.slice(l.segment.start, l.segment.end)),
+        };
+      }),
+    ]),
+  );
+});
+function excerpt(text: string, max = 140): string {
+  const t = text.replace(/\s+/gu, ' ').trim();
+  return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
+}
+
 const error = ref('');
 /** A name refused because another member already has it, shown in member `id`'s editor. */
 const nameClash = ref<{ id: string; name: string }>();
@@ -275,6 +323,41 @@ function toldLabel(c: Character): string {
             @merge="merge(c, $event)"
           />
         </details>
+
+        <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
+          <summary>See {{ c.name }}’s lines</summary>
+          <template v-if="memberLines.get(c.id)">
+            <p v-if="!memberLines.get(c.id)!.length" class="muted small">
+              Their lines are in parts that need analysing again.
+            </p>
+            <ol>
+              <li
+                v-for="l in memberLines.get(c.id)!.slice(0, linesShown.get(c.id) ?? LINES_PAGE)"
+                :key="l.partId + ':' + l.index"
+              >
+                <RouterLink
+                  :to="{
+                    name: 'reader',
+                    params: { id, partId: l.partId },
+                    query: { line: String(l.index) },
+                  }"
+                >
+                  <span class="line-part muted small">{{ l.partTitle }}</span>
+                  <span class="line-text" :data-mode="l.segment.mode">{{ l.text }}</span>
+                </RouterLink>
+              </li>
+            </ol>
+            <button
+              v-if="memberLines.get(c.id)!.length > (linesShown.get(c.id) ?? LINES_PAGE)"
+              type="button"
+              class="link"
+              @click="showMoreLines(c)"
+            >
+              Show more ({{ memberLines.get(c.id)!.length - (linesShown.get(c.id) ?? LINES_PAGE) }}
+              left)
+            </button>
+          </template>
+        </details>
       </li>
     </ul>
   </main>
@@ -355,6 +438,44 @@ summary {
 
 .error {
   color: var(--danger);
+}
+
+.lines ol {
+  list-style: none;
+  margin: 4px 0 0;
+  padding: 0;
+  display: grid;
+  gap: 2px;
+  max-height: 360px;
+  overflow-y: auto;
+}
+
+.lines a {
+  display: grid;
+  gap: 2px;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border-inline-start: 3px solid var(--tint, var(--muted));
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.lines a:hover,
+.lines a:focus-visible {
+  background: color-mix(in srgb, var(--tint, var(--accent)) 12%, transparent);
+}
+
+.link {
+  min-height: 44px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent);
+  text-decoration: underline;
+}
+
+.line-text[data-mode='thought'] {
+  font-style: italic;
 }
 
 .sliders input {

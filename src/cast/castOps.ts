@@ -1,4 +1,4 @@
-import type { Analysis, Character } from '@/format/types';
+import type { Analysis, Character, Segment } from '@/format/types';
 import { isDefaultName, NARRATOR_NAME, normaliseName } from '@/analysis/castMatch';
 import { tellerOf } from '@/analysis/reassign';
 
@@ -171,6 +171,24 @@ export function castUsage(analyses: ReadonlyArray<Analysis | undefined>): Map<st
     for (const s of a?.segments ?? []) counts.set(s.speakerId, (counts.get(s.speakerId) ?? 0) + 1);
   }
   return counts;
+}
+
+/** Where a member's line is: its part, its index in that part's analysis, and the segment. */
+export interface LineRef {
+  partId: string;
+  index: number;
+  segment: Segment;
+}
+
+/** Every line `id` reads, in story order (analyses in part order, then segment order). */
+export function linesOf(analyses: ReadonlyArray<Analysis | undefined>, id: string): LineRef[] {
+  const out: LineRef[] = [];
+  for (const a of analyses) {
+    a?.segments.forEach((segment, index) => {
+      if (segment.speakerId === id) out.push({ partId: a.partId, index, segment });
+    });
+  }
+  return out;
 }
 
 /** How many of the analysed parts `id` tells, i.e. reads most of the narration of (tellerOf). */

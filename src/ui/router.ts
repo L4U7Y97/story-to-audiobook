@@ -16,7 +16,11 @@ export const router = createRouter({
       path: '/story/:id/read/:partId?',
       name: 'reader',
       component: () => import('./views/ReaderView.vue'),
-      props: true,
+      // ?line=<index> scrolls to that line of the part and marks it (from a cast card's lines).
+      props: (route) => ({
+        ...route.params,
+        line: typeof route.query.line === 'string' ? Number(route.query.line) : undefined,
+      }),
     },
     {
       path: '/story/:id/cast',

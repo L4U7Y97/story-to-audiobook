@@ -72,6 +72,21 @@ const frame: Chunk[] = [
 ];
 
 describe('the speaker picker', () => {
+  it('removes a character from the cast after all their lines are reassigned', async () => {
+    const { story, host } = await fixSpeakers(
+      [['“Hello,” said Tom.', 'Tom', 'speech']],
+      [{ name: 'Tom' }, { name: 'Jane' }],
+    );
+
+    button(await tap(host, 0), 'Jane')!.click();
+
+    await until(
+      async () => !(await getStory(db, story.storyId))!.cast.some((c) => c.id === story.ids.Tom),
+      'Tom to leave the cast',
+    );
+    expect((await getStory(db, story.storyId))!.cast.map((c) => c.id)).toContain(story.ids.Jane);
+  });
+
   // The analyser missed the unquoted question and gave it to the narrator as narration.
   const missed: Chunk[] = [
     ['Tom came in late.\n\n', 'N', 'narration'],
@@ -133,7 +148,9 @@ describe('the speaker picker', () => {
     submit(sheet.querySelector('form.new')!);
     const saved = await savedCorrection(story.partId);
     expect(stretch(story, saved, '“Out,”')).toMatchObject({ speakerId: story.ids[who] });
-    expect((await getStory(db, story.storyId))!.cast).toHaveLength(3);
+    expect((await getStory(db, story.storyId))!.cast.map((c) => c.id)).toEqual(
+      who === 'N' ? [story.ids.N, story.ids.U] : [story.ids.N, story.ids.U, story.ids.Tom],
+    );
   });
 
   it('gives a new character the traits its name tells, and a voice to match', async () => {

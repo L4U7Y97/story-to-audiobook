@@ -18,6 +18,8 @@ export class AnalysisRejectedError extends Error {
 export interface CastChanges {
   added: Character[];
   aliasAdditions: Array<{ characterId: string; alias: string }>;
+  /** Remove character-role members with no lines anywhere in the story after saving. */
+  pruneUnusedCharacters?: boolean;
 }
 
 /**
@@ -36,9 +38,22 @@ export async function saveAnalysis(
     const story = await db.stories.get(part.storyId);
     if (!story) throw new AnalysisRejectedError(analysis.partId, 'story not found');
 
-    const cast = applyCastChanges(story.cast, castChanges);
+    let cast = applyCastChanges(story.cast, castChanges);
     const result = validateAnalysis(part, analysis, new Set(cast.map((c) => c.id)));
     if (!result.ok) throw new AnalysisRejectedError(analysis.partId, result.reason);
+
+    if (castChanges.pruneUnusedCharacters) {
+      const partIds = await db.parts.where('storyId').equals(story.id).primaryKeys();
+      const analyses = await db.analyses.bulkGet(partIds);
+      const used = new Set(
+        analyses
+          .filter((saved): saved is Analysis => saved !== undefined && saved.partId !== analysis.partId)
+          .concat(analysis)
+          .flatMap((saved) => saved.segments.map((segment) => segment.speakerId)),
+      );
+      const remaining = cast.filter((c) => c.role !== 'character' || used.has(c.id));
+      if (remaining.length !== cast.length) cast = remaining;
+    }
 
     if (cast !== story.cast) await db.stories.update(story.id, { cast, updatedAt: now() });
     await db.analyses.put(analysis);

@@ -248,7 +248,11 @@ async function applySpeaker(
     ...options,
   });
   try {
-    await saveAnalysis(db, { ...a, segments }, { added, aliasAdditions: [] });
+    await saveAnalysis(
+      db,
+      { ...a, segments },
+      { added, aliasAdditions: [], pruneUnusedCharacters: true },
+    );
     editError.value = '';
     picking.value = null;
   } catch (e) {

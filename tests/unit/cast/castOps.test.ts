@@ -897,6 +897,48 @@ describe('saveAnalysis alias additions', () => {
     const after = (await getStory(db, story.id))!.cast.find((c) => c.id === 'obrien')!;
     expect(after.aliases).toEqual(['Tom', 'O’Brien']);
   });
+
+  it('removes characters only after their lines are reassigned across every part', async () => {
+    db = openStoryDb(`cast-${Math.random()}`);
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    const tom = character('tom', 'Tom');
+    await updateStory(db, story.id, { cast: [...story.cast, tom] });
+    const first = await addPart(db, story.id, paste('First.'));
+    const second = await addPart(db, story.id, paste('Second.'));
+    const forPart = (part: Part, speakerId: string): Analysis => ({
+      partId: part.id,
+      textHash: part.textHash,
+      analyzer: { kind: 'heuristic', version: 1 },
+      createdAt: '',
+      segments: [
+        {
+          start: 0,
+          end: part.text.length,
+          speakerId,
+          mode: 'speech',
+          source: 'user',
+        },
+      ],
+    });
+    await saveAnalysis(db, forPart(first, tom.id));
+    await saveAnalysis(db, forPart(second, tom.id));
+
+    await saveAnalysis(
+      db,
+      forPart(first, story.narratorId),
+      { added: [], aliasAdditions: [], pruneUnusedCharacters: true },
+    );
+    expect((await getStory(db, story.id))!.cast.some((c) => c.id === tom.id)).toBe(true);
+
+    await saveAnalysis(
+      db,
+      forPart(second, story.narratorId),
+      { added: [], aliasAdditions: [], pruneUnusedCharacters: true },
+    );
+    const cast = (await getStory(db, story.id))!.cast;
+    expect(cast.some((c) => c.id === tom.id)).toBe(false);
+    expect(cast.filter((c) => c.role !== 'character')).toHaveLength(2);
+  });
 });
 
 describe('mergeCharactersInStory', () => {

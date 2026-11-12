@@ -1,7 +1,7 @@
 {
   "name": "story-to-audiobook",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.3.0",
   "description": "Reads stories aloud with distinct voices for the narrator and each character",
   "type": "module",
   "engines": {

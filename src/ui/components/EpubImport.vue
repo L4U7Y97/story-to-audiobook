@@ -5,7 +5,8 @@ import { combineChapters, EpubError, parseEpub, type EpubBook } from '@/ingest/e
 import { getAppDb } from '@/storage/db';
 import { addPart } from '@/storage/parts';
 
-const props = defineProps<{ storyId: string; position: number }>();
+/** `position` is in reading order, or within the book when `bookId` is given. */
+const props = defineProps<{ storyId: string; position: number; bookId?: string }>();
 const emit = defineEmits<{ imported: [parts: Part[]] }>();
 
 /** Sections that are almost never part of the story itself. */
@@ -53,6 +54,7 @@ async function importChapters() {
   error.value = '';
   try {
     const db = getAppDb();
+    const book = props.bookId ? { bookId: props.bookId } : {};
     const source = (href?: string) => ({
       kind: 'epub' as const,
       fileName: fileName.value,
@@ -66,7 +68,12 @@ async function importChapters() {
           ? chosen.value[0]!.title
           : `${chosen.value[0]!.title} – ${chosen.value.at(-1)!.title}`;
       parts.push(
-        await addPart(db, props.storyId, { title, source: source(), text, hints }, props.position),
+        await addPart(
+          db,
+          props.storyId,
+          { title, source: source(), text, hints, ...book },
+          props.position,
+        ),
       );
     } else {
       for (const [i, c] of chosen.value.entries()) {
@@ -74,7 +81,7 @@ async function importChapters() {
           await addPart(
             db,
             props.storyId,
-            { title: c.title, source: source(c.href), text: c.text, hints: c.hints },
+            { title: c.title, source: source(c.href), text: c.text, hints: c.hints, ...book },
             props.position + i,
           ),
         );

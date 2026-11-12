@@ -145,7 +145,8 @@ export interface Story {
   schemaVersion: number;
   title: string;
   lang: Lang;
-  partIds: string[]; // reading order
+  partIds: string[]; // reading order; with books, grouped by book (all of book 1's parts, then book 2's…)
+  books?: { id: string; title: string }[]; // optional: separate books of one story (a series), in order; when present every Part has a bookId of one of them; the cast is shared by all books
   cast: Character[];
   narratorId: string; // always present; a Character with role 'narrator': the default teller, who reads narration unless a part or passage is told by a character; may carry the main narrator's name and aliases
   position?: { partId: string; segmentIndex: number };
@@ -174,6 +175,7 @@ export interface VoiceSettings {
 export interface Part {
   id: string;
   storyId: string;
+  bookId?: string; // set iff the story has books
   title: string;
   source: { kind: 'txt' | 'epub' | 'paste'; fileName?: string; epubHref?: string };
   text: string; // canonical text — immutable after creation

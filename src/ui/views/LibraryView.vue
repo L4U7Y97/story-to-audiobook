@@ -94,6 +94,9 @@ function formatDate(iso: string): string {
           <RouterLink :to="{ name: 'story', params: { id: story.id } }" class="story">
             <span class="story-title">{{ story.title }}</span>
             <span class="muted">
+              <template v-if="story.books?.length">
+                {{ story.books.length }} {{ story.books.length === 1 ? 'book' : 'books' }} ·
+              </template>
               {{ story.partIds.length }} {{ story.partIds.length === 1 ? 'part' : 'parts' }} ·
               {{ story.lang === 'es' ? 'Español' : 'English' }} · {{ formatDate(story.updatedAt) }}
             </span>

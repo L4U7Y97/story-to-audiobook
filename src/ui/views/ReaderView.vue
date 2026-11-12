@@ -11,6 +11,7 @@ import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { newId } from '@/storage/ids';
 import { defaultLocale } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
+import { groupParts } from '@/storage/books';
 import { getStory } from '@/storage/stories';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
@@ -332,7 +333,18 @@ function selectPart(event: Event) {
     <label v-if="parts?.length" class="part-picker">
       <span class="sr-only">Part</span>
       <select :value="partId" @change="selectPart">
-        <option v-for="p in parts" :key="p.id" :value="p.id">{{ p.title }}</option>
+        <template v-if="story?.books?.length">
+          <optgroup
+            v-for="group in groupParts(story.books, parts)"
+            :key="group.book!.id"
+            :label="group.book!.title"
+          >
+            <option v-for="p in group.parts" :key="p.id" :value="p.id">{{ p.title }}</option>
+          </optgroup>
+        </template>
+        <template v-else>
+          <option v-for="p in parts" :key="p.id" :value="p.id">{{ p.title }}</option>
+        </template>
       </select>
     </label>
 

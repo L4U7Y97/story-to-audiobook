@@ -9,6 +9,7 @@ import { sha256 } from '@/format/hash';
 import { validateAnalysis } from '@/format/validate';
 import type { StoryDb } from './db';
 import { newId, now } from './ids';
+import { orderByBooks } from './books';
 
 export const EXPORT_FORMAT = 'story-to-audiobook';
 
@@ -87,6 +88,11 @@ export function parseExport(json: string): ParseResult {
     typeof story.title !== 'string' ||
     (story.lang !== 'en' && story.lang !== 'es') ||
     !Array.isArray(story.partIds) ||
+    (story.books !== undefined &&
+      (!Array.isArray(story.books) ||
+        !story.books.every(
+          (b) => isObject(b) && typeof b.id === 'string' && typeof b.title === 'string',
+        ))) ||
     !Array.isArray(story.cast) ||
     !story.cast.every((c) => isObject(c) && typeof c.id === 'string' && isObject(c.voice)) ||
     !story.cast.some((c) => isObject(c) && c.id === story.narratorId) ||
@@ -138,11 +144,25 @@ export async function importStory(db: StoryDb, data: StoryExport): Promise<Impor
       status.set(part.id, valid ? 'done' : 'pending');
     }
 
+    // Every part must belong to a known book (or none, without books); partIds grouped by book.
+    const books = data.story.books?.length ? data.story.books : undefined;
+    const bookIds = new Set(books?.map((b) => b.id));
+    const bookOf = new Map(
+      parts.map((p) => [
+        partIdOf.get(p.id)!,
+        books ? (p.bookId && bookIds.has(p.bookId) ? p.bookId : books[0]!.id) : undefined,
+      ]),
+    );
+
     const position = data.story.position;
     const story: Story = {
       ...data.story,
       id: storyId,
-      partIds: parts.map((p) => partIdOf.get(p.id)!),
+      partIds: orderByBooks(
+        parts.map((p) => partIdOf.get(p.id)!),
+        bookOf,
+        books ?? [],
+      ),
       cast: data.story.cast.map((c) => {
         if (c.firstSeenPartId === undefined) return c;
         const copy = { ...c, firstSeenPartId: partIdOf.get(c.firstSeenPartId) };
@@ -155,15 +175,18 @@ export async function importStory(db: StoryDb, data: StoryExport): Promise<Impor
       updatedAt: now(),
     };
     if (!story.position) delete story.position;
+    if (!books) delete story.books;
 
     await db.stories.add(story);
     await db.parts.bulkAdd(
-      parts.map((p) => ({
-        ...p,
-        id: partIdOf.get(p.id)!,
-        storyId,
-        analysisStatus: status.get(p.id)!,
-      })),
+      parts.map((p) => {
+        const id = partIdOf.get(p.id)!;
+        const part: Part = { ...p, id, storyId, analysisStatus: status.get(p.id)! };
+        const bookId = bookOf.get(id);
+        if (bookId) part.bookId = bookId;
+        else delete part.bookId;
+        return part;
+      }),
     );
     await db.analyses.bulkAdd(analyses);
     return { story, droppedAnalyses };

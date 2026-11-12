@@ -1,11 +1,19 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import type { Part } from '@/format/types';
+import type { Book, Part } from '@/format/types';
 
-const props = defineProps<{ part: Part; first: boolean; last: boolean; hasKey: boolean }>();
+/** `books`: the story's books, when it has more than one (offers moving the part between them). */
+const props = defineProps<{
+  part: Part;
+  first: boolean;
+  last: boolean;
+  hasKey: boolean;
+  books?: Book[];
+}>();
 const emit = defineEmits<{
   rename: [title: string];
   move: [delta: number];
+  moveToBook: [bookId: string];
   replace: [];
   /** No method: Claude when a key is set (after a cost estimate), otherwise the free method. */
   reanalyse: [method?: 'heuristic'];
@@ -58,6 +66,15 @@ function remove() {
       <button role="menuitem" :disabled="last" @click="act(() => emit('move', 1))">
         Move down
       </button>
+      <template v-for="b in books ?? []" :key="b.id">
+        <button
+          v-if="b.id !== part.bookId"
+          role="menuitem"
+          @click="act(() => emit('moveToBook', b.id))"
+        >
+          Move to “{{ b.title }}”
+        </button>
+      </template>
       <button role="menuitem" @click="act(() => emit('replace'))">Replace text…</button>
       <template v-if="part.analysisStatus === 'done'">
         <button role="menuitem" @click="act(() => emit('reanalyse'))">

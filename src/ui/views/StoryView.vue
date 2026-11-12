@@ -1,25 +1,68 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
-import type { AnalysisStatus, Part } from '@/format/types';
+import type { AnalysisStatus, Book, Part } from '@/format/types';
 import { formatUsd } from '@/analysis/llm/cost';
 import { exportFileName, exportStory } from '@/storage/exportImport';
 import { saveTextFile } from '../files';
 import { getAppDb } from '@/storage/db';
 import { getStory } from '@/storage/stories';
 import { deletePart, listParts, movePart, renamePart } from '@/storage/parts';
+import {
+  addBook,
+  deleteBook,
+  groupParts,
+  moveBook,
+  movePartToBook,
+  renameBook,
+} from '@/storage/books';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { existingPlayer } from '../composables/usePlayer';
 import { modelLabel, useAnalysis, type Method } from '../composables/useAnalysis';
 import AddPartForm from '../components/AddPartForm.vue';
 import PartActions from '../components/PartActions.vue';
+import BookActions from '../components/BookActions.vue';
 
 const props = defineProps<{ id: string }>();
 const db = getAppDb();
 
 const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
 const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
-const adding = ref(false);
+/** Adding a part: to this book id, or '' when the story has no books; null when not adding. */
+const adding = ref<string | null>(null);
 const replacing = ref<Part | undefined>();
+const books = computed(() => story.value?.books ?? []);
+/** Parts under their books (one group with book undefined when the story has no books). */
+const groups = computed(() => groupParts(books.value, parts.value ?? []));
+/** The book the add/replace form works on, if any. */
+const formBook = computed<Book | undefined>(() => {
+  const id = replacing.value?.bookId ?? adding.value;
+  return books.value.find((b) => b.id === id);
+});
+const formParts = computed(() =>
+  formBook.value
+    ? (parts.value ?? []).filter((p) => p.bookId === formBook.value!.id)
+    : (parts.value ?? []),
+);
+
+const addingBook = ref(false);
+const newBookTitle = ref('');
+
+async function createBook() {
+  const book = await addBook(db, props.id, newBookTitle.value);
+  addingBook.value = false;
+  newBookTitle.value = '';
+  replacing.value = undefined;
+  adding.value = book.id;
+}
+
+async function removeBook(book: Book) {
+  const playing = existingPlayer(props.id);
+  const playingId = playing?.snapshot.value.position?.partId;
+  if (playingId && parts.value?.some((p) => p.id === playingId && p.bookId === book.id)) {
+    await playing!.player.stop();
+  }
+  await deleteBook(db, props.id, book.id);
+}
 const { settings, progress, errors, notes, loadSettings, hasKey, estimate, run } = useAnalysis(db);
 /** Parts waiting for the user to accept the cost of analysing them with Claude. */
 const confirming = ref<Part[]>([]);
@@ -64,18 +107,18 @@ async function analyse(parts: Part[], method?: Method) {
 }
 
 async function onAdded(added: Part[]) {
-  adding.value = false;
+  adding.value = null;
   replacing.value = undefined;
   await analyse(added);
 }
 
 function startReplace(part: Part) {
-  adding.value = false;
+  adding.value = null;
   replacing.value = part;
 }
 
-async function move(part: Part, delta: number) {
-  const index = parts.value?.findIndex((p) => p.id === part.id) ?? -1;
+async function move(part: Part, siblings: Part[], delta: number) {
+  const index = siblings.findIndex((p) => p.id === part.id);
   if (index >= 0) await movePart(db, props.id, part.id, index + delta);
 }
 
@@ -123,63 +166,114 @@ function wordCount(text: string): number {
         >
       </div>
 
-      <ol v-if="parts?.length" class="parts">
-        <li v-for="(part, i) in parts" :key="part.id" class="card part">
-          <RouterLink
-            class="part-title"
-            :to="{ name: 'reader', params: { id: story.id, partId: part.id } }"
-            >{{ part.title }}</RouterLink
-          >
-          <span class="muted">{{ wordCount(part.text).toLocaleString() }} words</span>
-          <span class="status" :data-status="part.analysisStatus">
-            {{ statusLabel(part) }}
-            <button
-              v-if="
-                (part.analysisStatus === 'pending' && !confirming.some((p) => p.id === part.id)) ||
-                (part.analysisStatus === 'failed' && !errors[part.id])
-              "
-              class="analyse"
-              @click="analyse([part])"
-            >
-              {{ part.analysisStatus === 'failed' ? 'Retry' : 'Analyse' }}
-            </button>
+      <component
+        :is="group.book ? 'section' : 'div'"
+        v-for="(group, g) in groups"
+        :key="group.book?.id ?? 'all'"
+        :class="{ book: group.book }"
+        :aria-labelledby="group.book ? `book-${group.book.id}` : undefined"
+      >
+        <header v-if="group.book" class="book-header">
+          <h2 :id="`book-${group.book.id}`">{{ group.book.title }}</h2>
+          <span class="muted">
+            {{ group.parts.length }} {{ group.parts.length === 1 ? 'part' : 'parts' }}
           </span>
-          <PartActions
-            class="part-menu"
-            :part="part"
-            :first="i === 0"
-            :last="i === parts.length - 1"
-            :has-key="Boolean(settings?.apiKey)"
-            @rename="renamePart(db, part.id, $event)"
-            @move="move(part, $event)"
-            @replace="startReplace(part)"
-            @reanalyse="analyse([part], $event)"
-            @remove="remove(part)"
+          <RouterLink
+            v-if="group.parts.length"
+            class="book-listen"
+            :to="{ name: 'reader', params: { id: story.id, partId: group.parts[0]!.id } }"
+            >Listen</RouterLink
+          >
+          <BookActions
+            class="book-menu"
+            :book="group.book"
+            :first="g === 0"
+            :last="g === groups.length - 1"
+            :part-count="group.parts.length"
+            @rename="renameBook(db, story.id, group.book.id, $event)"
+            @move="moveBook(db, story.id, group.book.id, g + $event)"
+            @remove="removeBook(group.book)"
           />
-          <div v-if="errors[part.id]" class="error" role="alert">
-            <span>{{ errors[part.id]!.message }}</span>
-            <span class="error-actions">
-              <button class="analyse" @click="analyse([part], errors[part.id]!.method)">
-                Retry
-              </button>
+        </header>
+        <ol v-if="group.parts.length" class="parts">
+          <li v-for="(part, i) in group.parts" :key="part.id" class="card part">
+            <RouterLink
+              class="part-title"
+              :to="{ name: 'reader', params: { id: story.id, partId: part.id } }"
+              >{{ part.title }}</RouterLink
+            >
+            <span class="muted">{{ wordCount(part.text).toLocaleString() }} words</span>
+            <span class="status" :data-status="part.analysisStatus">
+              {{ statusLabel(part) }}
               <button
-                v-if="errors[part.id]!.method === 'llm'"
+                v-if="
+                  (part.analysisStatus === 'pending' &&
+                    !confirming.some((p) => p.id === part.id)) ||
+                  (part.analysisStatus === 'failed' && !errors[part.id])
+                "
                 class="analyse"
-                @click="analyse([part], 'heuristic')"
+                @click="analyse([part])"
               >
-                Analyse without Claude
+                {{ part.analysisStatus === 'failed' ? 'Retry' : 'Analyse' }}
               </button>
-              <RouterLink
-                v-if="errors[part.id]!.message === 'API key rejected'"
-                :to="{ name: 'settings' }"
-                >Settings</RouterLink
-              >
             </span>
-          </div>
-          <p v-else-if="notes[part.id]" class="note muted">{{ notes[part.id] }}</p>
-        </li>
-      </ol>
-      <p v-else-if="parts" class="muted">No parts yet. Add the first chapter or a few pages.</p>
+            <PartActions
+              class="part-menu"
+              :part="part"
+              :first="i === 0"
+              :last="i === group.parts.length - 1"
+              :books="books.length > 1 ? books : undefined"
+              :has-key="Boolean(settings?.apiKey)"
+              @rename="renamePart(db, part.id, $event)"
+              @move="move(part, group.parts, $event)"
+              @move-to-book="movePartToBook(db, story.id, part.id, $event)"
+              @replace="startReplace(part)"
+              @reanalyse="analyse([part], $event)"
+              @remove="remove(part)"
+            />
+            <div v-if="errors[part.id]" class="error" role="alert">
+              <span>{{ errors[part.id]!.message }}</span>
+              <span class="error-actions">
+                <button class="analyse" @click="analyse([part], errors[part.id]!.method)">
+                  Retry
+                </button>
+                <button
+                  v-if="errors[part.id]!.method === 'llm'"
+                  class="analyse"
+                  @click="analyse([part], 'heuristic')"
+                >
+                  Analyse without Claude
+                </button>
+                <RouterLink
+                  v-if="errors[part.id]!.message === 'API key rejected'"
+                  :to="{ name: 'settings' }"
+                  >Settings</RouterLink
+                >
+              </span>
+            </div>
+            <p v-else-if="notes[part.id]" class="note muted">{{ notes[part.id] }}</p>
+          </li>
+        </ol>
+        <p v-else-if="group.book" class="muted">No parts in this book yet.</p>
+        <p v-else-if="parts" class="muted">No parts yet. Add the first chapter or a few pages.</p>
+
+        <template v-if="group.book">
+          <AddPartForm
+            v-if="adding === group.book.id || (replacing && replacing.bookId === group.book.id)"
+            :key="replacing?.id ?? 'new'"
+            :story-id="story.id"
+            :parts="formParts"
+            :replacing="replacing"
+            :book-id="group.book.id"
+            :book-title="group.book.title"
+            @added="onAdded"
+            @cancel="((adding = null), (replacing = undefined))"
+          />
+          <button v-else class="add" @click="((replacing = undefined), (adding = group.book.id))">
+            Add a part to “{{ group.book.title }}”
+          </button>
+        </template>
+      </component>
 
       <section
         v-if="confirming.length && confirmEstimate"
@@ -212,16 +306,47 @@ function wordCount(text: string): number {
         </div>
       </section>
 
-      <AddPartForm
-        v-if="adding || replacing"
-        :key="replacing?.id ?? 'new'"
-        :story-id="story.id"
-        :parts="parts ?? []"
-        :replacing="replacing"
-        @added="onAdded"
-        @cancel="((adding = false), (replacing = undefined))"
-      />
-      <button v-else class="primary add" @click="adding = true">Add a part</button>
+      <template v-if="!books.length">
+        <AddPartForm
+          v-if="adding !== null || replacing"
+          :key="replacing?.id ?? 'new'"
+          :story-id="story.id"
+          :parts="formParts"
+          :replacing="replacing"
+          @added="onAdded"
+          @cancel="((adding = null), (replacing = undefined))"
+        />
+        <button v-else class="primary add" @click="adding = ''">Add a part</button>
+      </template>
+
+      <form v-if="addingBook" class="card add-book" @submit.prevent="createBook">
+        <h2>Add a book</h2>
+        <p class="muted">
+          <template v-if="!books.length && parts?.length">
+            The parts you have now become “Book 1”.
+          </template>
+          Every book of this story shares the same characters and voices.
+        </p>
+        <label>
+          Title
+          <input
+            v-model="newBookTitle"
+            :placeholder="`Book ${books.length ? books.length + 1 : parts?.length ? 2 : 1}`"
+            autocomplete="off"
+          />
+        </label>
+        <div class="form-actions">
+          <button type="button" @click="((addingBook = false), (newBookTitle = ''))">Cancel</button>
+          <button class="primary" type="submit">Add book</button>
+        </div>
+      </form>
+      <button
+        v-else
+        :class="['add', 'add-book-button', { primary: books.length > 0 }]"
+        @click="addingBook = true"
+      >
+        Add a book
+      </button>
 
       <section v-if="parts?.length" class="backup" aria-labelledby="backup-heading">
         <h2 id="backup-heading">Backup</h2>
@@ -384,5 +509,55 @@ function wordCount(text: string): number {
   border: none;
   background: none;
   color: var(--accent);
+}
+.book {
+  margin: 24px 0;
+  display: grid;
+  gap: 8px;
+}
+
+.book-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 4px;
+}
+
+.book-header h2 {
+  margin: 0;
+  font-size: 1.15rem;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.book .parts {
+  margin: 0;
+}
+
+.add-book-button {
+  margin-top: 8px;
+}
+
+.add-book {
+  display: grid;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.add-book h2 {
+  margin: 0;
+  font-size: 1.05rem;
+}
+
+.add-book p {
+  margin: 0;
+}
+
+.form-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
 }
 </style>

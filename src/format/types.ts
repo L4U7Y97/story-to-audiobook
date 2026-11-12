@@ -38,14 +38,25 @@ export interface Story {
   schemaVersion: number;
   title: string;
   lang: Lang;
-  /** Reading order. */
+  /** Reading order. With books, parts are grouped: every part of a book, then the next book's. */
   partIds: string[];
+  /**
+   * Separate books of one story (a series), in reading order. Absent or empty: the story is a
+   * single book and parts have no bookId. When present, every part belongs to one of them.
+   * The cast is shared by all books.
+   */
+  books?: Book[];
   cast: Character[];
   /** Always present; a Character with role 'narrator'. */
   narratorId: string;
   position?: { partId: string; segmentIndex: number };
   createdAt: string;
   updatedAt: string;
+}
+
+export interface Book {
+  id: string;
+  title: string;
 }
 
 export type CharacterRole = 'narrator' | 'character' | 'unknown';
@@ -82,6 +93,8 @@ export type AnalysisStatus = 'pending' | 'running' | 'done' | 'failed';
 export interface Part {
   id: string;
   storyId: string;
+  /** The book this part belongs to, when the story has books (see Story.books). */
+  bookId?: string;
   title: string;
   source: { kind: PartSourceKind; fileName?: string; epubHref?: string };
   /** Canonical text. Immutable after creation. */

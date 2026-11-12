@@ -2,6 +2,7 @@ import { sha256 } from '@/format/hash';
 import type { AnalysisStatus, Hint, Part } from '@/format/types';
 import type { StoryDb } from './db';
 import { newId, now } from './ids';
+import { bookOfParts, orderByBooks } from './books';
 
 export interface NewPart {
   title: string;
@@ -9,10 +10,13 @@ export interface NewPart {
   /** Canonical text (see src/ingest). Stored as-is and never modified afterwards. */
   text: string;
   hints?: Hint[];
+  /** The book to add it to when the story has books (default: the last book). */
+  bookId?: string;
 }
 
 /**
- * Adds a part to a story. `index` is the position in reading order (default: at the end).
+ * Adds a part to a story. `index` is the position in reading order (default: at the end); when the
+ * story has books, it is the position within the part's book.
  * Note: there is deliberately no way to edit a part's text once stored — replacePart swaps in a
  * whole new upload with a new hash and discards the old analysis.
  */
@@ -22,26 +26,36 @@ export async function addPart(
   input: NewPart,
   index?: number,
 ): Promise<Part> {
-  const part: Part = {
-    id: newId(),
-    storyId,
-    title: input.title,
-    source: input.source,
-    text: input.text,
-    textHash: await sha256(input.text),
-    ...(input.hints?.length ? { hints: input.hints } : {}),
-    analysisStatus: 'pending',
-  };
-  await db.transaction('rw', db.stories, db.parts, async () => {
+  const textHash = await sha256(input.text);
+  return db.transaction('rw', db.stories, db.parts, async () => {
     const story = await db.stories.get(storyId);
     if (!story) throw new Error(`story ${storyId} not found`);
-    const partIds = [...story.partIds];
-    const at = index === undefined ? partIds.length : clamp(index, 0, partIds.length);
-    partIds.splice(at, 0, part.id);
+    const books = story.books ?? [];
+    const bookId = books.length ? (input.bookId ?? books.at(-1)!.id) : undefined;
+    if (bookId && !books.some((b) => b.id === bookId)) {
+      throw new Error(`book ${bookId} not in story ${storyId}`);
+    }
+    const part: Part = {
+      id: newId(),
+      storyId,
+      ...(bookId ? { bookId } : {}),
+      title: input.title,
+      source: input.source,
+      text: input.text,
+      textHash,
+      ...(input.hints?.length ? { hints: input.hints } : {}),
+      analysisStatus: 'pending',
+    };
+    const bookOf = await bookOfParts(db, story);
+    bookOf.set(part.id, bookId);
+    const partIds = insertInGroup(story.partIds, part.id, index, (id) => bookOf.get(id) === bookId);
     await db.parts.add(part);
-    await db.stories.update(storyId, { partIds, updatedAt: now() });
+    await db.stories.update(storyId, {
+      partIds: orderByBooks(partIds, bookOf, books),
+      updatedAt: now(),
+    });
+    return part;
   });
-  return part;
 }
 
 /**
@@ -94,21 +108,29 @@ export async function listParts(db: StoryDb, storyId: string): Promise<Part[]> {
   return parts.filter((p): p is Part => p !== undefined);
 }
 
+/**
+ * Moves a part to `toIndex` in reading order — within its own book when the story has books (use
+ * movePartToBook to change book).
+ */
 export async function movePart(
   db: StoryDb,
   storyId: string,
   partId: string,
   toIndex: number,
 ): Promise<void> {
-  await db.transaction('rw', db.stories, async () => {
+  await db.transaction('rw', db.stories, db.parts, async () => {
     const story = await db.stories.get(storyId);
     if (!story) throw new Error(`story ${storyId} not found`);
-    const from = story.partIds.indexOf(partId);
-    if (from === -1) throw new Error(`part ${partId} not in story ${storyId}`);
-    const partIds = [...story.partIds];
-    partIds.splice(from, 1);
-    partIds.splice(clamp(toIndex, 0, partIds.length), 0, partId);
-    await db.stories.update(storyId, { partIds, updatedAt: now() });
+    if (!story.partIds.includes(partId)) throw new Error(`part ${partId} not in story ${storyId}`);
+    const books = story.books ?? [];
+    const bookOf = await bookOfParts(db, story);
+    const bookId = bookOf.get(partId);
+    const rest = story.partIds.filter((id) => id !== partId);
+    const partIds = insertInGroup(rest, partId, toIndex, (id) => bookOf.get(id) === bookId);
+    await db.stories.update(storyId, {
+      partIds: orderByBooks(partIds, bookOf, books),
+      updatedAt: now(),
+    });
   });
 }
 
@@ -134,6 +156,27 @@ export async function deletePart(db: StoryDb, storyId: string, partId: string): 
     await db.analyses.delete(partId);
     await db.parts.delete(partId);
   });
+}
+
+/**
+ * Inserts `id` so that it is at `index` among the ids that match `inGroup` (default: after the last
+ * of them). Ids outside the group keep their places.
+ */
+function insertInGroup(
+  ids: readonly string[],
+  id: string,
+  index: number | undefined,
+  inGroup: (id: string) => boolean,
+): string[] {
+  const out = [...ids];
+  const members = ids.map((x, i) => (inGroup(x) ? i : -1)).filter((i) => i !== -1);
+  if (!members.length) {
+    out.push(id);
+    return out;
+  }
+  const at = index === undefined ? members.length : clamp(index, 0, members.length);
+  out.splice(at === members.length ? members.at(-1)! + 1 : members[at]!, 0, id);
+  return out;
 }
 
 function clamp(n: number, min: number, max: number): number {

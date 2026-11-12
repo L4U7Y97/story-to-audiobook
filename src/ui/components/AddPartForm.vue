@@ -7,8 +7,17 @@ import { fromPaste } from '@/ingest/paste';
 import { readTxtFile } from '@/ingest/txt';
 import EpubImport from './EpubImport.vue';
 
-/** With `replacing`, the form swaps that part's text instead of adding a new part. */
-const props = defineProps<{ storyId: string; parts: Part[]; replacing?: Part }>();
+/**
+ * With `replacing`, the form swaps that part's text instead of adding a new part. With `bookId`,
+ * new parts go into that book and `parts` are that book's parts (positions are within the book).
+ */
+const props = defineProps<{
+  storyId: string;
+  parts: Part[];
+  replacing?: Part;
+  bookId?: string;
+  bookTitle?: string;
+}>();
 const emit = defineEmits<{ added: [parts: Part[]]; cancel: [] }>();
 
 const mode = ref<'paste' | 'file' | 'epub'>('paste');
@@ -54,6 +63,7 @@ async function save() {
           ? { kind: 'paste' as const }
           : { kind: 'txt' as const, fileName: file.value?.name },
       text: text.value,
+      ...(props.bookId ? { bookId: props.bookId } : {}),
     };
     const db = getAppDb();
     const part = props.replacing
@@ -70,7 +80,15 @@ async function save() {
 
 <template>
   <form class="card add-part" @submit.prevent="save">
-    <h2>{{ replacing ? `Replace “${replacing.title}”` : 'Add a part' }}</h2>
+    <h2>
+      {{
+        replacing
+          ? `Replace “${replacing.title}”`
+          : bookTitle
+            ? `Add a part to “${bookTitle}”`
+            : 'Add a part'
+      }}
+    </h2>
     <p v-if="replacing" class="muted">
       The new text replaces this part. Voices and characters are kept.
     </p>
@@ -116,7 +134,12 @@ async function save() {
           </option>
         </select>
       </label>
-      <EpubImport :story-id="storyId" :position="position" @imported="emit('added', $event)" />
+      <EpubImport
+        :story-id="storyId"
+        :book-id="bookId"
+        :position="position"
+        @imported="emit('added', $event)"
+      />
       <div class="actions">
         <button type="button" @click="emit('cancel')">Cancel</button>
       </div>

@@ -182,6 +182,35 @@ export function partsToldBy(
   return analyses.filter((a) => a && tellerOf(a.segments, narratorId) === id).length;
 }
 
+/** Folds case, accents and curly apostrophes, so "jose" finds "José" and "o'b" finds "O’Brien". */
+function searchKey(text: string): string {
+  return text
+    .normalize('NFD')
+    .replace(/\p{M}/gu, '')
+    .replace(/[’‘]/gu, "'")
+    .replace(/\s+/gu, ' ')
+    .trim()
+    .toLowerCase();
+}
+
+/**
+ * The members whose name or one of whose other names contains `query`, in the order given;
+ * everyone when the query is blank. With no such member, the one a name typed as `query` would
+ * go to (findTypedNameOwner: "Mr. Darcy" is "Mr Darcy", "Narrator" is the narrator), if any.
+ */
+export function filterCast(
+  cast: readonly Character[],
+  query: string,
+  narratorId = cast.find((c) => c.role === 'narrator')?.id ?? '',
+): Character[] {
+  const q = searchKey(query);
+  if (!q) return [...cast];
+  const found = cast.filter((c) => [c.name, ...c.aliases].some((n) => searchKey(n).includes(q)));
+  if (found.length) return found;
+  const owner = findTypedNameOwner(cast, query, narratorId);
+  return owner ? [owner] : [];
+}
+
 function sameName(a: string, b: string): boolean {
   return normaliseName(a) === normaliseName(b);
 }

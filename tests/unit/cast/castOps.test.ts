@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { Analysis, Character, Lang, Part, Segment } from '@/format/types';
 import {
   castUsage,
+  filterCast,
   findNameClash,
   findNameOwner,
   findTypedNameOwner,
@@ -562,5 +563,43 @@ describe('partsToldBy', () => {
     });
     expect(partsToldBy([{ ...before, segments }], 'amy', 'narrator')).toBe(1);
     expect(partsToldBy([{ ...before, segments }], 'narrator', 'narrator')).toBe(0);
+  });
+});
+
+describe('filterCast', () => {
+  const cast: Character[] = [
+    { ...character('n', 'Narrator'), role: 'narrator' },
+    character('j', 'José Arcadio', ['the colonel']),
+    character('o', 'Mrs. O’Brien'),
+    character('d', 'Mr Darcy'),
+  ];
+  const names = (query: string) => filterCast(cast, query).map((c) => c.name);
+
+  it('finds the member a typed name means when no name contains it', () => {
+    expect(names('Mr. Darcy')).toEqual(['Mr Darcy']);
+    expect(names('Mister Darcy')).toEqual(['Mr Darcy']);
+    expect(names('Mr. Darcy’s')).toEqual(['Mr Darcy']);
+    const renamed = cast.map((c) => (c.id === 'n' ? { ...c, name: 'Ishmael' } : c));
+    expect(filterCast(renamed, 'narrator', 'n').map((c) => c.name)).toEqual(['Ishmael']);
+  });
+
+  it('keeps everyone, in order, for a blank query', () => {
+    const everyone = ['Narrator', 'José Arcadio', 'Mrs. O’Brien', 'Mr Darcy'];
+    expect(names('')).toEqual(everyone);
+    expect(names('   ')).toEqual(everyone);
+  });
+
+  it('matches part of a name, ignoring case and accents', () => {
+    expect(names('jose')).toEqual(['José Arcadio']);
+    expect(names('ARCA')).toEqual(['José Arcadio']);
+  });
+
+  it('matches other names, and straight or curly apostrophes alike', () => {
+    expect(names('colonel')).toEqual(['José Arcadio']);
+    expect(names("o'bri")).toEqual(['Mrs. O’Brien']);
+  });
+
+  it('finds nobody for a name no one has', () => {
+    expect(names('Aureliano')).toEqual([]);
   });
 });

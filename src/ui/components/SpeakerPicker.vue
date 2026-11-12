@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue';
 import type { Character, Mode, Segment } from '@/format/types';
+import { filterCast } from '@/cast/castOps';
 import { speakerTint } from '../speakerColors';
+import CastFilter from './CastFilter.vue';
 
 /** Which lines a choice covers (see ReassignScope); 'range' ends at a line tapped next. */
 export type PickScope = 'line' | 'following' | 'part' | 'range';
@@ -37,6 +39,8 @@ const MODES: Array<{ value: Mode; label: string }> = [
 const mode = ref<Mode | undefined>(props.defaultMode);
 const scope = ref<PickScope>(props.initialScope);
 const newName = ref('');
+const query = ref('');
+const shown = computed(() => filterCast(props.cast, query.value));
 const sheet = ref<HTMLElement>();
 
 const speaker = computed(
@@ -60,8 +64,7 @@ function choice(): { mode?: Mode; scope: PickScope } {
   return { mode: oneLine.value ? mode.value : undefined, scope: scope.value };
 }
 
-function create() {
-  const name = newName.value.trim();
+function create(name = newName.value.trim()) {
   if (name) emit('create', { name, ...choice() });
 }
 </script>
@@ -108,8 +111,16 @@ function create() {
         else says it.
       </p>
 
+      <CastFilter v-model="query" label="Find someone" />
+      <p v-if="query.trim() && !shown.length" class="note" role="status">
+        Nobody in the cast is called “{{ query.trim() }}”.
+        <button type="button" class="add-typed" @click="create(query.trim())">
+          Add “{{ query.trim() }}”
+        </button>
+      </p>
+
       <ul class="people">
-        <li v-for="c in cast" :key="c.id">
+        <li v-for="c in shown" :key="c.id">
           <button
             type="button"
             :class="{ current: c.id === segment.speakerId }"
@@ -121,7 +132,7 @@ function create() {
         </li>
       </ul>
 
-      <form class="new" @submit.prevent="create">
+      <form class="new" @submit.prevent="create()">
         <label>
           New character
           <input v-model="newName" autocomplete="off" placeholder="Name" />
@@ -207,6 +218,10 @@ blockquote {
   margin: 0;
   color: var(--muted);
   font-size: 0.85rem;
+}
+
+.add-typed {
+  margin-left: 6px;
 }
 
 .people {

@@ -8,6 +8,7 @@ import { mergeCharactersInStory } from '@/storage/cast';
 import { normaliseName } from '@/analysis/castMatch';
 import {
   castUsage,
+  filterCast,
   findNameClash,
   findTypedNameOwner,
   partsToldBy,
@@ -15,6 +16,7 @@ import {
   setAliases,
 } from '@/cast/castOps';
 import { resolveVoice } from '@/cast/resolveVoice';
+import CastFilter from '../components/CastFilter.vue';
 import CharacterEditor from '../components/CharacterEditor.vue';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
@@ -69,6 +71,9 @@ const sorted = computed(() =>
       (usage.value?.get(b.id) ?? 0) - (usage.value?.get(a.id) ?? 0),
   ),
 );
+const query = ref('');
+/** Hidden, not removed, so a card's open editor and what is typed in it outlive a search. */
+const shown = computed(() => new Set(filterCast(sorted.value, query.value).map((c) => c.id)));
 
 /** How each character's voice plays on this device (a missing voice is substituted). */
 const resolved = computed(
@@ -185,9 +190,15 @@ function toldLabel(c: Character): string {
     <p class="muted">Voices apply from the next line that is read.</p>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
+    <CastFilter v-if="sorted.length" v-model="query" />
+    <p v-if="query.trim() && !shown.size" class="muted" role="status">
+      Nobody in the cast is called “{{ query.trim() }}”.
+    </p>
+
     <ul class="cast">
       <li
         v-for="c in sorted"
+        v-show="shown.has(c.id)"
         :key="c.id"
         class="card character"
         :style="{ '--tint': speakerTint(colors, c.id) }"

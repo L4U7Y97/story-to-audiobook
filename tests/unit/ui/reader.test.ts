@@ -135,6 +135,59 @@ describe('the speaker picker', () => {
   });
 });
 
+describe('the speaker picker’s search', () => {
+  const chunks: Chunk[] = [
+    ['“Where were you?”', 'U', 'speech'],
+    [' asked Tom.\n\n', 'N', 'narration'],
+    ['“Out,”', 'U', 'speech'],
+    [' I said.', 'N', 'narration'],
+  ];
+  const people = (sheet: HTMLElement) =>
+    [...sheet.querySelectorAll('.people button')].map((b) => b.textContent?.trim());
+  const search = (sheet: HTMLElement) =>
+    sheet.querySelector<HTMLInputElement>('.cast-filter input')!;
+
+  it('narrows the people to those a name or other name matches', async () => {
+    const { host } = await fixSpeakers(chunks, [
+      { name: 'Tom', aliases: ['Tommy'] },
+      { name: 'Ann' },
+    ]);
+    const sheet = await tap(host, 2);
+    typeInto(search(sheet), 'tommy');
+    await until(() => people(sheet).length === 1, 'the filtered people');
+    expect(people(sheet)).toEqual(['Tom']);
+  });
+
+  it('offers to add a name nobody has, and gives the line to them', async () => {
+    const { story, host } = await fixSpeakers(chunks, [{ name: 'Tom' }]);
+    const sheet = await tap(host, 2);
+    typeInto(search(sheet), 'Mary');
+    const add = await until(() => button(sheet, 'Add “Mary”'), 'the add button');
+    add.click();
+    const saved = await savedCorrection(story.partId);
+    const cast = (await getStory(db, story.storyId))!.cast;
+    const mary = cast.find((c) => c.name === 'Mary');
+    expect(mary).toBeDefined();
+    expect(stretch(story, saved, '“Out,”')).toMatchObject({ speakerId: mary!.id });
+  });
+
+  it('clears the search on Esc before Esc closes the picker', async () => {
+    const { host } = await fixSpeakers(chunks, [{ name: 'Tom' }]);
+    const sheet = await tap(host, 2);
+    const input = search(sheet);
+    typeInto(input, 'zz');
+    await until(() => people(sheet).length === 0, 'the filtered people');
+    const esc = () =>
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    esc();
+    await until(() => people(sheet).length > 0, 'everyone back');
+    expect(input.value).toBe('');
+    expect(host.querySelector('.sheet')).not.toBeNull();
+    esc();
+    await until(() => !host.querySelector('.sheet'), 'the picker to close');
+  });
+});
+
 describe('colours', () => {
   it('gives the narrator’s spoken lines a colour of their own, and its narration none', async () => {
     const { host } = await fixSpeakers(

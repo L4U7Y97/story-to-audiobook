@@ -232,3 +232,49 @@ it('shows the narrator in its own colour, as the reader does', async () => {
   expect(tint('Unknown speaker')).toBe('var(--speaker-0)');
   expect(tint('Holmes')).toBe('var(--speaker-1)');
 });
+
+describe('the cast search', () => {
+  const shownNames = (host: HTMLElement) =>
+    [...host.querySelectorAll<HTMLElement>('li.card')]
+      .filter((li) => li.style.display !== 'none')
+      .map((li) => li.querySelector('h2')?.textContent?.trim());
+  const search = (host: HTMLElement) => host.querySelector<HTMLInputElement>('.cast-filter input')!;
+
+  it('shows only the members whose name or other names match', async () => {
+    const host = await openCast(await storeStory(holmes));
+    typeInto(search(host), 'wat');
+    await until(() => shownNames(host).length === 1, 'the filtered cast');
+    expect(shownNames(host)).toEqual(['Watson']);
+  });
+
+  it('says when nobody matches, and the clear button brings everyone back', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    typeInto(search(host), 'Moriarty');
+    const status = await until(() => host.querySelector('[role="status"]'), 'the no-match note');
+    expect(status.textContent).toContain('“Moriarty”');
+    expect(shownNames(host)).toEqual([]);
+    host.querySelector<HTMLButtonElement>('.cast-filter .clear')!.click();
+    const members = (await getStory(db, story.storyId))!.cast.length;
+    await until(() => shownNames(host).length === members, 'the whole cast');
+    expect(search(host).value).toBe('');
+    // Focus goes back to the box, not to the page behind it.
+    expect(document.activeElement).toBe(search(host));
+  });
+
+  it('keeps what is typed in a card’s editor while the card is searched out of view', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const editor = cardOf(host, 'Watson').querySelector('details')!;
+    editor.open = true;
+    const nameInput = editor.querySelector<HTMLInputElement>('.editor .fields input')!;
+    typeInto(nameInput, 'John Watson');
+    typeInto(search(host), 'holm');
+    await until(() => !shownNames(host).includes('Watson'), 'Watson hidden');
+    typeInto(search(host), '');
+    await until(() => shownNames(host).includes('Watson'), 'Watson back');
+    expect(cardOf(host, 'Watson').querySelector('details')!.open).toBe(true);
+    expect(
+      cardOf(host, 'Watson').querySelector<HTMLInputElement>('.editor .fields input')!.value,
+    ).toBe('John Watson');
+  });
+});

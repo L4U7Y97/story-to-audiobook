@@ -5,7 +5,13 @@ import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
 import { defaultLocale, getStory, updateStory } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
-import { mergeCharactersInStory } from '@/storage/cast';
+import {
+  matchVoicesInStory,
+  mergeCharactersInStory,
+  repickVoiceInStory,
+  setTraitsInStory,
+  setVoiceInStory,
+} from '@/storage/cast';
 import { normaliseName } from '@/analysis/castMatch';
 import {
   castUsage,
@@ -18,8 +24,11 @@ import {
   setAliases,
 } from '@/cast/castOps';
 import { resolveVoice } from '@/cast/resolveVoice';
+import { cleanTraits, TRAIT_KEYS, withTraits } from '@/cast/traits';
+import { voiceProfile } from '@/cast/voiceProfile';
 import CastFilter from '../components/CastFilter.vue';
 import CharacterEditor from '../components/CharacterEditor.vue';
+import CharacterTraits from '../components/CharacterTraits.vue';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
 import { speakerColorIndex, speakerTint } from '../speakerColors';
@@ -100,14 +109,20 @@ const clashText = computed(() => {
   return editing && owner ? clashMessage(clash.name, editing, owner) : undefined;
 });
 
+/** The device's voices, asked for once: a change made before they are listed waits for them. */
+const voicesReady = getEngine().listVoices();
 const deviceVoices = ref<DeviceVoice[]>([]);
 onMounted(async () => {
-  deviceVoices.value = await getEngine().listVoices();
+  deviceVoices.value = await voicesReady;
 });
 const locale = computed(() => (story.value ? defaultLocale(story.value.lang) : 'en-US'));
+/** The voices a picker lists, each with what is known of it: "es-es-x-eee-local (female)". */
 const voiceChoices = computed(() => {
   const forLang = voicesForLang(deviceVoices.value, locale.value);
-  return forLang.length ? forLang : deviceVoices.value;
+  return (forLang.length ? forLang : deviceVoices.value).map((v) => {
+    const notes = [voiceProfile(v).gender, v.network ? 'online' : undefined].filter(Boolean);
+    return { name: v.name, label: notes.length ? `${v.name} (${notes.join(', ')})` : v.name };
+  });
 });
 const colors = computed(() => speakerColorIndex(story.value?.cast ?? []));
 
@@ -131,14 +146,37 @@ const resolved = computed(
     ),
 );
 
-async function setVoice(character: Character, changes: Partial<VoiceSettings>) {
-  const s = story.value;
-  if (!s) return;
-  const cast = s.cast.map((c) =>
-    c.id === character.id ? { ...c, voice: { ...c.voice, ...changes } } : c,
-  );
-  await updateStory(db, s.id, { cast });
-  player.castChanged();
+/** Saves a change to the cast and has the player take it up; a failure is shown on the page. */
+async function changeCast(change: () => Promise<void>) {
+  try {
+    await change();
+    error.value = '';
+    player.castChanged();
+  } catch (e) {
+    error.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
+/** Members whose last change of traits left a voice set by hand as it was. */
+const voiceKept = ref(new Set<string>());
+function noteVoiceKept(id: string, kept: boolean) {
+  if (voiceKept.value.has(id) === kept) return;
+  const next = new Set(voiceKept.value);
+  if (kept) next.add(id);
+  else next.delete(id);
+  voiceKept.value = next;
+}
+
+/** A voice, pitch or speed chosen by hand: automatic re-picks leave it alone from now on. */
+async function setVoice(
+  character: Character,
+  changes: Partial<Pick<VoiceSettings, 'voiceName' | 'lang' | 'pitch' | 'rate'>>,
+) {
+  await changeCast(async () => {
+    await setVoiceInStory(db, props.id, character.id, changes);
+    // The voice is now the one the user wants for the traits as they are.
+    noteVoiceKept(character.id, false);
+  });
 }
 
 function onVoicePicked(character: Character, name: string) {
@@ -147,6 +185,46 @@ function onVoicePicked(character: Character, name: string) {
     character,
     voice ? { voiceName: voice.name, lang: voice.lang } : { voiceName: undefined },
   );
+}
+
+type TraitChanges = Parameters<typeof setTraitsInStory>[3];
+
+/** Sets or clears traits; the member's voice follows them unless it was set by hand. */
+async function changeTraits(character: Character, changes: TraitChanges) {
+  // Choosing the value a trait already has changes nothing, so there is nothing to say then.
+  const [before, after] = [cleanTraits(character), cleanTraits(withTraits(character, changes))];
+  const changed = TRAIT_KEYS.some((key) => before[key] !== after[key]);
+  await changeCast(async () => {
+    const voices = await voicesReady;
+    const { repicked } = await setTraitsInStory(db, props.id, character.id, changes, voices);
+    if (changed) noteVoiceKept(character.id, !repicked);
+  });
+}
+
+/** Picks a member's voice again from its traits, also when it was set by hand. */
+async function repickVoice(character: Character) {
+  await changeCast(async () => {
+    await repickVoiceInStory(db, props.id, character.id, await voicesReady);
+    noteVoiceKept(character.id, false);
+  });
+}
+
+const hasCharacters = computed(() => story.value?.cast.some((c) => c.role === 'character'));
+/** "Match voices to traits" was pressed once: the next press does it. */
+const matching = ref(false);
+const matched = ref(false);
+async function matchVoices() {
+  matched.value = false;
+  if (!matching.value) return void (matching.value = true);
+  matching.value = false;
+  await changeCast(async () => {
+    await matchVoicesInStory(db, props.id, await voicesReady);
+    matched.value = true;
+  });
+}
+function leaveMatch() {
+  matching.value = false;
+  matched.value = false;
 }
 
 async function preview(character: Character) {
@@ -243,6 +321,18 @@ function toldLabel(c: Character): string {
       Nobody in the cast is called “{{ query.trim() }}”.
     </p>
 
+    <div v-if="hasCharacters" class="match">
+      <button type="button" :class="{ danger: matching }" @click="matchVoices" @blur="leaveMatch">
+        {{ matching ? 'Confirm match' : 'Match voices to traits' }}
+      </button>
+      <p v-if="matching" class="warning" role="alert">
+        Traits missing from a character are guessed from its names, then every voice not marked as
+        set by hand is picked again. A voice you chose before this update has no mark, so it is
+        picked again too. Press again to confirm.
+      </p>
+      <p v-if="matched" class="muted small" role="status">Voices matched to traits.</p>
+    </div>
+
     <ul class="cast">
       <li
         v-for="c in sorted"
@@ -277,7 +367,7 @@ function toldLabel(c: Character): string {
               {{ c.voice.voiceName }} (not on this device)
             </option>
             <option v-for="v in voiceChoices" :key="v.name" :value="v.name">
-              {{ v.name }}{{ v.network ? ' (online)' : '' }}
+              {{ v.label }}
             </option>
           </select>
         </label>
@@ -323,6 +413,14 @@ function toldLabel(c: Character): string {
             @merge="merge(c, $event)"
           />
         </details>
+
+        <CharacterTraits
+          v-if="c.role !== 'unknown'"
+          :character="c"
+          :voice-kept="voiceKept.has(c.id)"
+          @change="changeTraits(c, $event)"
+          @repick="repickVoice(c)"
+        />
 
         <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
           <summary>See {{ c.name }}’s lines</summary>
@@ -383,6 +481,27 @@ function toldLabel(c: Character): string {
   display: flex;
   justify-content: space-between;
   margin-bottom: 12px;
+}
+
+.match {
+  display: grid;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+.match button {
+  justify-self: start;
+}
+
+.warning {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.9rem;
+}
+
+.danger {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 
 .cast {

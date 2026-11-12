@@ -60,7 +60,20 @@ export interface Book {
 }
 
 export type CharacterRole = 'narrator' | 'character' | 'unknown';
-export type Gender = 'male' | 'female' | 'other';
+
+export const GENDERS = ['male', 'female', 'other'] as const;
+export type Gender = (typeof GENDERS)[number];
+
+export const AGE_GROUPS = ['child', 'teen', 'adult', 'elder'] as const;
+export type AgeGroup = (typeof AGE_GROUPS)[number];
+
+/** creature = a fantasy being (dragon, fairy, ghost); machine = a robot or an AI */
+export const SPECIES = ['human', 'animal', 'creature', 'machine'] as const;
+export type Species = (typeof SPECIES)[number];
+
+/** Absent = average. */
+export const SIZES = ['small', 'large'] as const;
+export type Size = (typeof SIZES)[number];
 
 export interface Character {
   id: string;
@@ -68,13 +81,19 @@ export interface Character {
   role: CharacterRole;
   name: string;
   aliases: string[];
-  /** Hint for voice choice only. */
+  /** The traits (gender, age, species, size) are hints for voice choice only. */
   gender?: Gender;
+  age?: AgeGroup;
+  species?: Species;
+  size?: Size;
   /** Short description; helps keep later parts consistent. */
   description?: string;
   voice: VoiceSettings;
   firstSeenPartId?: string;
 }
+
+/** What shapes a character's voice. The unknown speaker has none. */
+export type Traits = Pick<Character, 'gender' | 'age' | 'species' | 'size'>;
 
 export interface VoiceSettings {
   /** Device voice id; may be missing on another device. */
@@ -85,6 +104,8 @@ export interface VoiceSettings {
   pitch: number;
   /** 0.5–2.0, multiplied by the player's global speed. */
   rate: number;
+  /** Set by hand in the Cast view; automatic re-picks leave such a voice alone. */
+  manual?: true;
 }
 
 export type PartSourceKind = 'txt' | 'epub' | 'paste';

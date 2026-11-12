@@ -1,4 +1,4 @@
-import type { Gender, Mode, SegmentSource, Tone } from '@/format/types';
+import type { AgeGroup, Gender, Mode, SegmentSource, Size, Species, Tone } from '@/format/types';
 
 /** Who speaks a span: an existing cast member, or a character found during this analysis. */
 export type SpeakerRef = { kind: 'cast'; id: string } | { kind: 'new'; ref: string };
@@ -19,11 +19,15 @@ export interface SpanLabel {
   teller?: true;
 }
 
+/** A character found during this analysis. Its traits are only those the analyser is sure of. */
 export interface NewCharacter {
   ref: string;
   name: string;
   aliases: string[];
   gender?: Gender;
+  age?: AgeGroup;
+  species?: Species;
+  size?: Size;
   description?: string;
 }
 

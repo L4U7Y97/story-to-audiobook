@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { mergeLabels } from '@/analysis/merge';
-import type { LabelResult, SpanLabel } from '@/analysis/labels';
+import type { LabelResult, NewCharacter, SpanLabel } from '@/analysis/labels';
 import { baseCast } from '../../helpers/fixtures';
 
 const narrator = { kind: 'cast', id: 'narrator' } as const;
@@ -35,6 +35,104 @@ describe('mergeLabels', () => {
       firstSeenPartId: 'p1',
     });
     expect(merged.segments.map((s) => s.speakerId)).toEqual(['id1', 'narrator']);
+  });
+
+  it('copies the traits of a new character, in a fixed order', () => {
+    n = 0;
+    const result: LabelResult = {
+      spans: [span(0, 5, { speaker: { kind: 'new', ref: 'new:1' }, mode: 'speech' }), span(5, 9)],
+      newCharacters: [
+        {
+          ref: 'new:1',
+          name: 'Pip',
+          aliases: [],
+          size: 'small',
+          species: 'animal',
+          age: 'child',
+          gender: 'male',
+          description: 'a mouse',
+        },
+      ],
+      aliasAdditions: [],
+    };
+    const created = mergeLabels('“Hi” ok.', result, baseCast('en'), 'p1', ids).cast.at(-1)!;
+    expect(created).toStrictEqual({
+      id: 'id1',
+      role: 'character',
+      name: 'Pip',
+      aliases: [],
+      gender: 'male',
+      age: 'child',
+      species: 'animal',
+      size: 'small',
+      description: 'a mouse',
+      firstSeenPartId: 'p1',
+    });
+    expect(Object.keys(created)).toEqual([
+      'id',
+      'role',
+      'name',
+      'aliases',
+      'gender',
+      'age',
+      'species',
+      'size',
+      'description',
+      'firstSeenPartId',
+    ]);
+  });
+
+  it('writes no trait key for a trait that is missing, undefined or not a known value', () => {
+    n = 0;
+    const result: LabelResult = {
+      spans: [
+        span(0, 5, { speaker: { kind: 'new', ref: 'a' }, mode: 'speech' }),
+        span(5, 10, { speaker: { kind: 'new', ref: 'b' }, mode: 'speech' }),
+        span(10, 13, { speaker: { kind: 'new', ref: 'c' }, mode: 'speech' }),
+      ],
+      newCharacters: [
+        { ref: 'a', name: 'Anne', aliases: [] },
+        {
+          ref: 'b',
+          name: 'Tom',
+          aliases: [],
+          gender: undefined,
+          age: undefined,
+          species: 'machine',
+          size: undefined,
+        },
+        // Values outside the format's lists count as unset, wherever they come from.
+        {
+          ref: 'c',
+          name: 'Rex',
+          aliases: [],
+          age: 'elderly',
+          size: 'medium',
+        } as unknown as NewCharacter,
+      ],
+      aliasAdditions: [],
+    };
+    const merged = mergeLabels('“Hi” “Yo” “R”', result, baseCast('en'), 'p1', ids);
+    const [anne, tom, rex] = merged.cast.slice(-3);
+    const plain = ['id', 'role', 'name', 'aliases', 'firstSeenPartId'];
+    expect(Object.keys(anne!)).toEqual(plain);
+    expect(Object.keys(tom!)).toEqual([
+      'id',
+      'role',
+      'name',
+      'aliases',
+      'species',
+      'firstSeenPartId',
+    ]);
+    expect(tom).toStrictEqual({
+      id: 'id2',
+      role: 'character',
+      name: 'Tom',
+      aliases: [],
+      species: 'machine',
+      firstSeenPartId: 'p1',
+    });
+    expect(Object.keys(rex!)).toEqual(plain);
   });
 
   it('joins adjacent spans with the same voice within a paragraph only', () => {

@@ -24,11 +24,23 @@ export const UnitLabelSchema = z.object({
   spans: z.array(SpanSchema),
 });
 
+// The three traits below are plain strings whose description lists the values: the SDK sends an
+// enum to the API as description text anyway, and a value outside the list ("elderly") must cost
+// that trait only, never the character. `.describe()` goes before `.optional()`: a description
+// put on the optional wrapper does not reach the schema the API gets.
 export const NewCharacterSchema = z.object({
   ref: z.string().describe('A new code for this character, e.g. "new1"'),
   name: z.string(),
   aliases: z.array(z.string()),
   gender: z.enum(['male', 'female', 'other']).optional(),
+  age: z.string().describe('When the text shows it, one of: child, teen, adult, elder').optional(),
+  species: z
+    .string()
+    .describe(
+      'When the text shows it, one of: human, animal, creature (fantasy being), machine (robot, AI)',
+    )
+    .optional(),
+  size: z.string().describe('small or large; omit for average').optional(),
   description: z.string().describe('A few words that identify the character'),
 });
 

@@ -8,12 +8,18 @@ import {
   findNameOwner,
   findTypedNameOwner,
   linesOf,
+  matchVoicesToTraits,
   mergeCharacters,
   parseAliases,
   partsToldBy,
   renameCharacter,
+  repickMember,
   setAliases,
+  setTraits,
 } from '@/cast/castOps';
+import { assignVoice, assignVoices, repickVoice } from '@/cast/assignVoices';
+import { resolveVoice } from '@/cast/resolveVoice';
+import type { DeviceVoice } from '@/playback/engine';
 import { analyzePart } from '@/analysis/analyzer';
 import { reassignSegments } from '@/analysis/reassign';
 import { NARRATOR_NAME, UNKNOWN_NAME } from '@/analysis/castMatch';
@@ -143,6 +149,506 @@ describe('mergeCharacters', () => {
       ['narrator', 'heuristic'],
       ['narrator', 'heuristic'],
     ]);
+  });
+
+  describe('traits', () => {
+    const [narrator, unknown] = baseCast('en');
+    const merge = (into: Character, from: Character) => {
+      const cast = [...new Set([narrator!, unknown!, into, from])];
+      const result = mergeCharacters(cast, [], from.id, into.id);
+      if (!result.ok) throw new Error(result.reason);
+      return result.value.cast.find((c) => c.id === into.id)!;
+    };
+
+    it('keeps the survivor’s traits and fills the ones it lacks from the merged member', () => {
+      const into: Character = { ...character('a', 'Rose'), gender: 'female', size: 'small' };
+      const from: Character = {
+        ...character('b', 'the old dog'),
+        gender: 'male',
+        age: 'elder',
+        species: 'animal',
+        size: 'large',
+      };
+      expect(merge(into, from)).toStrictEqual({
+        ...into,
+        aliases: ['the old dog'],
+        age: 'elder',
+        species: 'animal',
+      });
+    });
+
+    it('writes no trait key for a trait neither member has', () => {
+      const merged = merge(character('a', 'Rose'), { ...character('b', 'Rosie'), age: 'teen' });
+      expect(Object.keys(merged)).toEqual(['id', 'role', 'name', 'aliases', 'voice', 'age']);
+      const plain = merge(character('a', 'Rose'), character('b', 'Rosie'));
+      expect(plain).toStrictEqual({ ...character('a', 'Rose'), aliases: ['Rosie'] });
+      expect(Object.keys(plain)).toEqual(['id', 'role', 'name', 'aliases', 'voice']);
+    });
+
+    it('takes no trait value outside the format, and keeps the survivor’s voice as it is', () => {
+      const into = character('a', 'Rose');
+      const from: Character = { ...character('b', 'Rosie'), age: 'elder' };
+      Object.assign(from, { gender: 'robot' });
+      const merged = merge(into, from);
+      expect(merged).toStrictEqual({ ...into, aliases: ['Rosie'], age: 'elder' });
+      expect(merged.voice).toBe(into.voice);
+    });
+
+    it('fills the narrator’s traits too, but never gives the unknown speaker any', () => {
+      const lady: Character = { ...character('b', 'Jane'), gender: 'female', age: 'adult' };
+      expect(merge(narrator!, lady)).toMatchObject({ gender: 'female', age: 'adult' });
+      expect(Object.keys(merge(unknown!, lady))).toEqual(Object.keys(unknown!));
+      // A gender an older version left on the unknown speaker is nobody's.
+      const stray: Character = { ...unknown!, gender: 'male' };
+      const result = mergeCharacters(
+        [narrator!, stray, character('a', 'Rose')],
+        [],
+        'unknown',
+        'a',
+      );
+      expect(result.ok && Object.keys(result.value.cast[2]!)).toEqual(
+        Object.keys(character('a', 'Rose')),
+      );
+    });
+  });
+});
+
+describe('setTraits', () => {
+  const ZIRA = 'Microsoft Zira - English (United States)';
+  const DAVID = 'Microsoft David - English (United States)';
+  const voices: DeviceVoice[] = [
+    { name: 'en-a', lang: 'en-US', isDefault: true },
+    { name: DAVID, lang: 'en-US' },
+    { name: ZIRA, lang: 'en-US' },
+  ];
+  const byHand = { voiceName: 'en-a', lang: 'en-US', pitch: 1.4, rate: 0.7, manual: true as const };
+  // The unknown speaker as createStory stores it, a little higher than the narrator: a narrator
+  // with traits keeps clear of the voice the unknown speaker is heard with.
+  const [narrator, unknown] = baseCast('en');
+  const cast: Character[] = [
+    narrator!,
+    { ...unknown!, voice: { lang: 'en-US', pitch: 1.15, rate: 1 } },
+    character('a', 'Alex'),
+    { ...character('b', 'Blake'), gender: 'male', age: 'elder', voice: byHand },
+  ];
+  const run = (id: string, changes: Parameters<typeof setTraits>[2], within = cast) => {
+    const result = setTraits(within, id, changes, voices, 'en-US');
+    if (!result.ok) throw new Error(result.reason);
+    return { ...result.value, member: result.value.cast.find((c) => c.id === id)! };
+  };
+
+  it('sets the traits and picks the voice again to match', () => {
+    const { cast: after, member, repicked } = run('a', { gender: 'female', age: 'teen' });
+    expect(repicked).toBe(true);
+    expect(member).toMatchObject({ gender: 'female', age: 'teen' });
+    expect(member.voice.voiceName).toBe(ZIRA);
+    expect(member.voice).toStrictEqual(assignVoice(member, cast, voices, 'en-US'));
+    expect(Object.keys(member.voice)).not.toContain('manual');
+    // Everyone else is left as they were.
+    expect(after.map((c) => c.id)).toEqual(cast.map((c) => c.id));
+    expect(after.filter((c) => c.id !== 'a')).toEqual(cast.filter((c) => c.id !== 'a'));
+    expect(after.find((c) => c.id === 'b')).toBe(cast[3]);
+  });
+
+  it('keeps a voice set by hand and says that it was not picked again', () => {
+    const { member, repicked } = run('b', { gender: 'female', species: 'animal' });
+    expect(repicked).toBe(false);
+    expect(member).toMatchObject({ gender: 'female', age: 'elder', species: 'animal' });
+    expect(member.voice).toStrictEqual(byHand);
+  });
+
+  it('returns the same cast when nothing actually changes', () => {
+    for (const changes of [{}, { gender: undefined }, { size: undefined, species: undefined }]) {
+      const same = run('a', changes);
+      expect(same.cast).toBe(cast);
+      expect(same.repicked).toBe(false);
+    }
+    const unchanged = run('b', { gender: 'male', age: 'elder' });
+    expect(unchanged.cast).toBe(cast);
+    expect(unchanged.repicked).toBe(false);
+    // A value outside the format is no trait: setting it where none was changes nothing.
+    expect(run('a', { age: 'ancient' as never }).cast).toBe(cast);
+  });
+
+  it('clears a trait given as undefined and leaves no key behind', () => {
+    const { member, repicked } = run('b', { age: undefined });
+    expect(repicked).toBe(false);
+    expect(Object.keys(member)).toEqual(['id', 'role', 'name', 'aliases', 'voice', 'gender']);
+    const none = run('b', { gender: undefined, age: undefined }).member;
+    expect(none).toStrictEqual({ ...character('b', 'Blake'), voice: byHand });
+    expect('gender' in none || 'age' in none).toBe(false);
+    // An invalid value clears too.
+    expect(Object.keys(run('b', { age: 'ancient' as never }).member)).not.toContain('age');
+  });
+
+  it('gives the narrator traits, leaving it on “device default” when that voice suits it', () => {
+    const { member, repicked } = run('narrator', { gender: 'female' });
+    expect(repicked).toBe(true);
+    expect(member.gender).toBe('female');
+    expect(member.voice).toStrictEqual({ lang: 'en-US', pitch: 1, rate: 1 });
+    const old = run('narrator', { age: 'elder' });
+    expect(old.member.voice).toStrictEqual({ lang: 'en-US', pitch: 1, rate: 0.88 });
+    // A default voice of the other gender gives way to a named one.
+    const zira: DeviceVoice[] = [{ name: ZIRA, lang: 'en-US', isDefault: true }, voices[1]!];
+    const male = setTraits(cast, 'narrator', { gender: 'male' }, zira, 'en-US');
+    expect(male.ok && male.value.cast[0]!.voice).toStrictEqual({
+      voiceName: DAVID,
+      lang: 'en-US',
+      pitch: 1,
+      rate: 1,
+    });
+  });
+
+  it('refuses the unknown speaker, which has no traits, and members that are not there', () => {
+    expect(setTraits(cast, 'unknown', { gender: 'male' }, voices, 'en-US')).toMatchObject({
+      ok: false,
+    });
+    expect(setTraits(cast, 'nobody', { gender: 'male' }, voices, 'en-US')).toEqual({
+      ok: false,
+      reason: 'character not found',
+    });
+  });
+});
+
+describe('repickMember', () => {
+  const ZIRA = 'Microsoft Zira - English (United States)';
+  const voices: DeviceVoice[] = [
+    { name: 'en-a', lang: 'en-US', isDefault: true },
+    { name: 'en-b', lang: 'en-US' },
+    { name: ZIRA, lang: 'en-US' },
+  ];
+  const byHand = { voiceName: 'en-a', lang: 'en-US', pitch: 1.4, rate: 0.7, manual: true as const };
+  const cast: Character[] = [
+    ...baseCast('en'),
+    { ...character('a', 'Alex'), gender: 'female', voice: byHand },
+    character('b', 'Blake'),
+  ];
+
+  it('picks the member’s voice again, also one that was set by hand', () => {
+    const result = repickMember(cast, 'a', voices, 'en-US');
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    const member = result.value[2]!;
+    expect(member.voice).toStrictEqual(assignVoice(member, cast, voices, 'en-US'));
+    expect(member.voice.voiceName).toBe(ZIRA);
+    expect(Object.keys(member.voice)).toEqual(['voiceName', 'lang', 'pitch', 'rate']);
+    expect(member).toMatchObject({ id: 'a', name: 'Alex', gender: 'female' });
+    expect(result.value.filter((c) => c.id !== 'a')).toEqual(cast.filter((c) => c.id !== 'a'));
+  });
+
+  it('keeps the voice name when the device has no voice for the language', () => {
+    const result = repickMember(cast, 'a', [], 'en-US');
+    expect(result.ok && result.value[2]!.voice).toMatchObject({ voiceName: 'en-a', lang: 'en-US' });
+    expect(result.ok && Object.keys(result.value[2]!.voice)).not.toContain('manual');
+  });
+
+  it('gives the same voice again to a member that already has the automatic one', () => {
+    const first = assignVoice(character('b', 'Blake'), baseCast('en'), voices, 'en-US');
+    const own = [...baseCast('en'), { ...character('b', 'Blake'), voice: first }];
+    const result = repickMember(own, 'b', voices, 'en-US');
+    expect(result.ok && result.value[2]!.voice).toStrictEqual(first);
+  });
+
+  it('rejects a member that is not in the cast', () => {
+    expect(repickMember(cast, 'nobody', voices, 'en-US')).toMatchObject({ ok: false });
+  });
+});
+
+describe('a narrator picked again (setTraits, repickMember)', () => {
+  const DAVID = 'Microsoft David - English (United States)';
+  const ZIRA = 'Microsoft Zira - English (United States)';
+  const MARK = 'Microsoft Mark - English (United States)';
+  const HAZEL = 'Microsoft Hazel - English (United Kingdom)';
+  const windows: DeviceVoice[] = [
+    { name: DAVID, lang: 'en-US', isDefault: true },
+    { name: ZIRA, lang: 'en-US' },
+    { name: MARK, lang: 'en-US' },
+  ];
+  /** A new story's cast as createStory stores it: both on the device's default voice. */
+  const fresh = (): Character[] => {
+    const [narrator, unknown] = baseCast('en');
+    return [narrator!, { ...unknown!, voice: { lang: 'en-US', pitch: 1.15, rate: 1 } }];
+  };
+  const cents = (n: number) => Math.round(n * 100);
+  const on = (voiceName: string, pitch: number, rate: number) => ({
+    voiceName,
+    lang: 'en-US',
+    pitch,
+    rate,
+  });
+  /** The voice, pitch and rate a member is really heard with on the device. */
+  const heard = (c: Character, deviceVoices: DeviceVoice[]) =>
+    `${resolveVoice(c.voice, deviceVoices).voiceName}|${cents(c.voice.pitch)}|${cents(c.voice.rate)}`;
+  /** The characters on the voice the narrator speaks with, within 0.05 of its pitch. */
+  const nearNarrator = (cast: readonly Character[], deviceVoices: DeviceVoice[]) => {
+    const narrator = cast.find((c) => c.role === 'narrator')!;
+    const voiceOf = (c: Character) => resolveVoice(c.voice, deviceVoices).voiceName;
+    return cast
+      .filter(
+        (c) =>
+          c.role === 'character' &&
+          voiceOf(c) === voiceOf(narrator) &&
+          Math.abs(cents(c.voice.pitch) - cents(narrator.voice.pitch)) <= 5,
+      )
+      .map((c) => c.id);
+  };
+  const traitsSet = (
+    cast: Character[],
+    changes: Parameters<typeof setTraits>[2],
+    deviceVoices: DeviceVoice[],
+  ) => {
+    const result = setTraits(cast, 'narrator', changes, deviceVoices, 'en-US');
+    if (!result.ok) throw new Error(result.reason);
+    return result.value.cast;
+  };
+  const repicked = (cast: Character[], deviceVoices: DeviceVoice[]) => {
+    const result = repickMember(cast, 'narrator', deviceVoices, 'en-US');
+    if (!result.ok) throw new Error(result.reason);
+    return result.value;
+  };
+  const woman = (id: string): Omit<Character, 'voice'> => ({
+    id,
+    role: 'character',
+    name: id,
+    aliases: [],
+    gender: 'female',
+  });
+
+  it('moves the characters its new voice brings too near, in cast order, each seeing the ones before', () => {
+    const women = ['w0', 'w1', 'w2', 'w3', 'w4', 'w5', 'w6', 'w7'].map(woman);
+    const cast = [...fresh(), ...assignVoices(women, fresh(), windows, 'en-US')];
+    // Every woman is on the only woman's voice, which the narrator is about to take.
+    expect(cast.slice(2).every((c) => c.voice.voiceName === ZIRA)).toBe(true);
+    const narrator: Character = { ...cast[0]!, gender: 'female', voice: on(ZIRA, 1, 1) };
+    const clashing = nearNarrator([narrator, ...cast.slice(1)], windows);
+    expect(clashing.length).toBeGreaterThan(1);
+
+    const after = traitsSet(cast, { gender: 'female' }, windows);
+    expect(after[0]).toStrictEqual(narrator);
+    expect(nearNarrator(after, windows)).toEqual([]);
+    expect(new Set(after.map((c) => heard(c, windows))).size).toBe(after.length);
+
+    // Only the clashing ones moved; each pick saw the new narrator and the picks before it.
+    const expected: Character[] = [narrator, ...cast.slice(1)];
+    for (const [i, c] of expected.entries()) {
+      if (clashing.includes(c.id)) {
+        expected[i] = { ...c, voice: repickVoice(c, expected, windows, 'en-US') };
+      }
+    }
+    expect(after).toStrictEqual(expected);
+    for (const [i, c] of cast.entries()) {
+      if (i > 0 && !clashing.includes(c.id)) expect(after[i]).toBe(c);
+    }
+  });
+
+  it('moves a character that would be heard exactly as the re-picked narrator', () => {
+    const [narrator, unknown] = fresh();
+    const byHand: Character = { ...narrator!, voice: { ...on(ZIRA, 1, 1), manual: true } };
+    const bear: Omit<Character, 'voice'> = {
+      id: 'c4',
+      role: 'character',
+      name: 'Bruin',
+      aliases: [],
+      species: 'animal',
+      size: 'large',
+    };
+    const cast = [byHand, unknown!, ...assignVoices([bear], [byHand, unknown!], windows, 'en-US')];
+    // With the narrator on Zira, the bear was free to read as the default voice does.
+    expect(cast[2]!.voice).toStrictEqual(on(DAVID, 1, 1));
+
+    const after = repicked(cast, windows);
+    expect(after[0]!.voice).toStrictEqual({ lang: 'en-US', pitch: 1, rate: 1 });
+    expect(nearNarrator(after, windows)).toEqual([]);
+    expect(heard(after[2]!, windows)).not.toBe(heard(after[0]!, windows));
+    expect(after[2]!.voice).toStrictEqual(repickVoice(cast[2]!, after, windows, 'en-US'));
+    expect(after[1]).toBe(unknown);
+  });
+
+  it('does the same when clearing the narrator’s last trait sends it back to the default voice', () => {
+    const lady = traitsSet(fresh(), { gender: 'female' }, windows);
+    expect(lady[0]!.voice.voiceName).toBe(ZIRA);
+    const bear: Character = { ...character('c4', 'Bruin'), species: 'animal', size: 'large' };
+    const cast = [...lady, ...assignVoices([bear], lady, windows, 'en-US')];
+    expect(cast[2]!.voice).toStrictEqual(on(DAVID, 1, 1));
+
+    const after = traitsSet(cast, { gender: undefined }, windows);
+    expect(after[0]!.voice).toStrictEqual({ lang: 'en-US', pitch: 1, rate: 1 });
+    expect(nearNarrator(after, windows)).toEqual([]);
+    expect(after[2]).toMatchObject({ species: 'animal', size: 'large' });
+  });
+
+  it('leaves hand-set voices and characters far enough in pitch alone, and guesses no traits', () => {
+    const voices: DeviceVoice[] = [
+      { name: DAVID, lang: 'en-US', isDefault: true },
+      { name: ZIRA, lang: 'en-US' },
+      { name: HAZEL, lang: 'en-GB' },
+    ];
+    const byHand = { ...on(ZIRA, 1, 1.1), manual: true as const };
+    const cast: Character[] = [
+      ...fresh(),
+      { ...character('holmes', 'Holmes'), voice: on(ZIRA, 1.1, 1.07) },
+      { ...character('watson', 'Watson'), voice: on(HAZEL, 0.95, 0.95) },
+      { ...character('hudson', 'Mrs Hudson'), voice: on(ZIRA, 0.95, 0.99) },
+      { ...character('lestrade', 'Lestrade'), voice: on(HAZEL, 1.1, 1.07) },
+      { ...character('adler', 'Irene Adler'), voice: byHand },
+    ];
+    const after = traitsSet(cast, { gender: 'female' }, voices);
+    const get = (id: string) => after.find((c) => c.id === id)!;
+    expect(after[0]!.voice).toStrictEqual(on(ZIRA, 1, 1));
+    // Mrs Hudson was 0.05 below the narrator's pitch on its new voice.
+    expect(get('hudson').voice.voiceName).not.toBe(ZIRA);
+    expect(get('hudson').voice).toStrictEqual(
+      repickVoice(cast[4]!, [after[0]!, ...cast.slice(1)], voices, 'en-US'),
+    );
+    // "Mrs" would make her a woman, who belongs on Zira: only the voice changes here.
+    expect(Object.keys(get('hudson'))).toEqual(['id', 'role', 'name', 'aliases', 'voice']);
+    // Holmes shares the voice 0.10 above the narrator, which is far enough.
+    for (const id of ['unknown', 'holmes', 'watson', 'lestrade', 'adler']) {
+      expect(get(id)).toBe(cast.find((c) => c.id === id));
+    }
+    expect(nearNarrator(after, voices)).toEqual(['adler']);
+  });
+
+  it('moves them too when only the narrator’s pitch changes on the voice they share', () => {
+    const only: DeviceVoice[] = [{ name: DAVID, lang: 'en-US', isDefault: true }];
+    const women = ['w0', 'w1', 'w2', 'w3', 'w4', 'w5'].map(woman);
+    const cast = [...fresh(), ...assignVoices(women, fresh(), only, 'en-US')];
+    const pitches = cast.slice(2).map((c) => cents(c.voice.pitch));
+    expect(pitches.some((pitch) => pitch >= 105 && pitch <= 115)).toBe(true);
+
+    // A woman reading with a man's voice is pitched up, into the middle of the women.
+    const after = traitsSet(cast, { gender: 'female' }, only);
+    expect(after[0]!.voice).toStrictEqual({ lang: 'en-US', pitch: 1.1, rate: 1 });
+    expect(nearNarrator(after, only)).toEqual([]);
+    expect(new Set(after.map((c) => heard(c, only))).size).toBe(after.length);
+    expect(after.slice(2).every((c) => c.voice.voiceName === DAVID)).toBe(true);
+    // The unknown speaker, now 0.05 above the narrator, is not a character: it stays.
+    expect(after[1]).toBe(cast[1]);
+  });
+
+  it('leaves everyone as they were when the narrator keeps its voice and pitch', () => {
+    // Stored before the rule existed: a character that reads exactly as the narrator does.
+    const twin = { ...character('twin', 'Twin'), voice: on(DAVID, 1, 1) };
+    const cast = [...fresh(), twin];
+    const slower = traitsSet(cast, { age: 'elder' }, windows);
+    expect(slower[0]!.voice).toStrictEqual({ lang: 'en-US', pitch: 1, rate: 0.88 });
+    expect(slower[2]).toBe(twin);
+    const again = repicked(cast, windows);
+    expect(again[0]!.voice).toStrictEqual({ lang: 'en-US', pitch: 1, rate: 1 });
+    expect(again[2]).toBe(twin);
+  });
+
+  it('tells an identical character from the narrator on a device with no voice for the language', () => {
+    const [narrator, unknown] = fresh();
+    const byHand: Character = {
+      ...narrator!,
+      voice: { lang: 'en-US', pitch: 1.2, rate: 0.9, manual: true },
+    };
+    const twin = { ...character('twin', 'Twin'), voice: { lang: 'en-US', pitch: 1, rate: 1 } };
+    const after = repicked([byHand, unknown!, twin], []);
+    expect(after[0]!.voice).toStrictEqual({ lang: 'en-US', pitch: 1, rate: 1 });
+    expect(after[2]!.voice).not.toMatchObject({ pitch: 1, rate: 1 });
+    expect(after[2]!.voice).toStrictEqual(repickVoice(twin, after, [], 'en-US'));
+    // With no voice name to compare, a different rate is enough: nothing is too near.
+    const slow = { ...twin, voice: { lang: 'en-US', pitch: 1, rate: 0.95 } };
+    expect(repicked([byHand, unknown!, slow], [])[2]).toBe(slow);
+  });
+});
+
+describe('matchVoicesToTraits', () => {
+  const ZIRA = 'Microsoft Zira - English (United States)';
+  const DAVID = 'Microsoft David - English (United States)';
+  const voices: DeviceVoice[] = [
+    { name: 'en-a', lang: 'en-US', isDefault: true },
+    { name: DAVID, lang: 'en-US' },
+    { name: ZIRA, lang: 'en-US' },
+    { name: 'es-a', lang: 'es-ES' },
+  ];
+  const byHand = { voiceName: 'en-a', lang: 'en-US', pitch: 1.4, rate: 0.7, manual: true as const };
+  const [narrator, unknown] = baseCast('en');
+  const cast: Character[] = [
+    character('man', 'the old man'),
+    { ...narrator!, gender: 'female', name: 'Grandma Rose' },
+    { ...character('gran', 'Lucy’s grandmother'), voice: byHand },
+    { ...unknown!, aliases: ['the little girl'] },
+    { ...character('tom', 'Tom', ['the little boy']), gender: 'other' },
+    { ...character('ann', 'Ann'), gender: 'female' },
+    { ...character('eve', 'Eve'), gender: 'female' },
+  ];
+  const matched = matchVoicesToTraits(cast, voices, 'en-US', 'en');
+  const get = (id: string) => matched.find((c) => c.id === id)!;
+
+  it('keeps the cast in order and leaves the narrator and the unknown speaker untouched', () => {
+    expect(matched.map((c) => c.id)).toEqual(cast.map((c) => c.id));
+    expect(matched[1]).toBe(cast[1]);
+    expect(matched[3]).toBe(cast[3]);
+  });
+
+  it('guesses the traits a character lacks from its name and other names, filling only', () => {
+    expect(get('man')).toMatchObject({ gender: 'male', age: 'elder' });
+    expect(get('gran')).toMatchObject({ gender: 'female', age: 'elder' });
+    // The gender set by hand stays; the age comes from "the little boy".
+    expect(get('tom')).toMatchObject({ gender: 'other', age: 'child' });
+    expect(Object.keys(get('ann'))).toEqual(Object.keys(cast[5]!));
+  });
+
+  it('picks every voice again to match, except the ones set by hand', () => {
+    expect(get('man').voice.voiceName).toBe(DAVID);
+    expect(get('gran').voice).toStrictEqual(byHand);
+    expect(get('tom').voice.voiceName).toBe(ZIRA);
+    expect(get('ann').voice.voiceName).toBe(ZIRA);
+    expect(get('eve').voice.voiceName).toBe(ZIRA);
+    for (const c of matched.filter((m) => m.role === 'character')) {
+      expect(Object.keys(c.voice).includes('manual')).toBe(c.id === 'gran');
+    }
+  });
+
+  it('picks each voice seeing the narrator, the unknown speaker, hand-set voices and earlier picks', () => {
+    // Each pick is what assignVoice gives with the members handled before it and the fixed ones.
+    const fixed = [cast[1]!, cast[2]!, cast[3]!];
+    const seen = (...earlier: string[]) => [...fixed, ...earlier.map(get)];
+    expect(get('man').voice).toStrictEqual(assignVoice(get('man'), seen(), voices, 'en-US'));
+    expect(get('tom').voice).toStrictEqual(assignVoice(get('tom'), seen('man'), voices, 'en-US'));
+    expect(get('ann').voice).toStrictEqual(
+      assignVoice(get('ann'), seen('man', 'tom'), voices, 'en-US'),
+    );
+    expect(get('eve').voice).toStrictEqual(
+      assignVoice(get('eve'), seen('man', 'tom', 'ann'), voices, 'en-US'),
+    );
+    const combos = matched
+      .filter((c) => c.role === 'character')
+      .map((c) => `${c.voice.voiceName}|${c.voice.pitch}|${c.voice.rate}`);
+    expect(new Set(combos).size).toBe(5);
+  });
+
+  it('shares the voices out again, counting the hand-set ones and not the voices being replaced', () => {
+    const plain: DeviceVoice[] = [
+      { name: 'en-a', lang: 'en-US', isDefault: true },
+      { name: 'en-b', lang: 'en-US' },
+      { name: 'en-c', lang: 'en-US' },
+    ];
+    const on = (voiceName: string) => ({ voiceName, lang: 'en-US', pitch: 1, rate: 1 });
+    const crowd: Character[] = [
+      ...baseCast('en'),
+      { ...character('h', 'Hal'), voice: { ...on('en-b'), manual: true } },
+      { ...character('x', 'Xu'), voice: on('en-c') },
+      { ...character('y', 'Yo'), voice: on('en-c') },
+      { ...character('z', 'Zed'), voice: on('en-c') },
+    ];
+    const shared = matchVoicesToTraits(crowd, plain, 'en-US', 'en');
+    expect(shared.slice(2).map((c) => c.voice.voiceName)).toEqual(['en-b', 'en-c', 'en-b', 'en-c']);
+  });
+
+  it('reads the names in the story’s language', () => {
+    const es = matchVoicesToTraits(
+      [...baseCast('es'), character('a', 'mi abuela'), character('b', 'the old man')],
+      voices,
+      'es-ES',
+      'es',
+    );
+    expect(es[2]).toMatchObject({ gender: 'female', age: 'elder' });
+    expect(es[2]!.voice).toMatchObject({ voiceName: 'es-a', lang: 'es-ES' });
+    expect(Object.keys(es[3]!)).toEqual(['id', 'role', 'name', 'aliases', 'voice']);
   });
 });
 

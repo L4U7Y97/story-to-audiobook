@@ -1,5 +1,6 @@
 import type { Analysis, Character, Story } from '@/format/types';
 import { assignVoices } from '@/cast/assignVoices';
+import { fillTraits, inferTraits } from '@/cast/traits';
 import type { DeviceVoice } from '@/playback/engine';
 import type { StoryDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
@@ -38,8 +39,9 @@ let queue: Promise<unknown> = Promise.resolve();
 const llmCache = new Map<string, LlmResponse>();
 
 /**
- * Analyses a part and stores the result with any new characters. Runs one analysis at a time so
- * that parts analysed in parallel see each other's characters.
+ * Analyses a part and stores the result with any new characters, each with a voice picked for the
+ * traits the analyser found. Runs one analysis at a time so that parts analysed in parallel see
+ * each other's characters.
  */
 export function analyzePart(
   db: StoryDb,
@@ -101,7 +103,12 @@ async function runAnalysis(
     const latest = (await getStory(db, story.id)) ?? story;
     labels = forLatestCast(labels, story.cast, latest.cast);
     const merged = mergeLabels(part.text, labels, latest.cast, part.id, newId);
-    const added = merged.cast.filter((c) => merged.newCharacterIds.includes(c.id));
+    const added = merged.cast
+      .filter((c) => merged.newCharacterIds.includes(c.id))
+      // The heuristic looks for no traits, so its characters take those their names give away
+      // ("the old man") before a voice is picked. A run with Claude has done this already for the
+      // characters the heuristic added, and a trait Claude left out was left out on purpose.
+      .map((c) => (llm ? c : fillTraits(c, inferTraits([c.name, ...c.aliases], story.lang))));
     const voiced: Character[] = assignVoices(
       added,
       latest.cast,

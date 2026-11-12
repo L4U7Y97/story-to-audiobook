@@ -1,3 +1,4 @@
+import { cleanTraits, fillTraits, inferTraits } from '@/cast/traits';
 import {
   TONE_LABELS,
   type Character,
@@ -5,6 +6,7 @@ import {
   type Lang,
   type Mode,
   type Tone,
+  type Traits,
 } from '@/format/types';
 import { isDefaultName, matchCast, namesOf, normaliseName, type CastEntry } from '../castMatch';
 import { NAME_PARTICLES, TITLES } from '../heuristic/lexicon';
@@ -28,8 +30,8 @@ import {
   type LlmUnitLabel,
 } from './schema';
 
-/** Bump when the prompt or the conversion rules change. */
-export const LLM_VERSION = 2;
+/** Bump when the prompt, the output schema or the conversion rules change. */
+export const LLM_VERSION = 3;
 
 const CONTEXT_LINES = 20;
 const MAX_OUTPUT_TOKENS = 16000;
@@ -342,7 +344,9 @@ class LlmRun {
    * Gives each of the model's new characters a speaker: the member it names (see memberNamed),
    * which learns the proposal's other names, or a new character under a fresh code. A proposal
    * with ref "N" only names the narrator, and one under another code the request showed is used
-   * only if it names that member. Returns the speakers by this answer's refs.
+   * only if it names that member. A new character takes the proposal's traits, and one made
+   * earlier in this run takes those it lacked (see fillTraits); a member the story already had
+   * takes none. Returns the speakers by this answer's refs.
    */
   private registerNewCharacters(proposed: LlmOutput['newCharacters']): Map<string, Speaker> {
     const local = new Map<string, Speaker>();
@@ -366,6 +370,7 @@ class LlmRun {
         if (c.gender && !member.entry.gender && member.entry.role !== 'unknown') {
           this.fillGender(member, c.gender);
         }
+        this.fillTraits(member, cleanTraits(c));
         for (const n of [name, ...c.aliases]) {
           if (!matchCast(n, this.entries())) this.addAlias(member, n);
         }
@@ -391,7 +396,8 @@ class LlmRun {
         {
           name,
           aliases,
-          ...(c.gender ? { gender: c.gender } : {}),
+          // A value outside the format's lists ("elderly") leaves that one trait unset.
+          ...cleanTraits(c),
           ...(description ? { description } : {}),
         },
         refs,
@@ -483,6 +489,17 @@ class LlmRun {
       const created = this.newCharacters.find((c) => c.ref === ref);
       if (created) created.gender = gender;
     }
+  }
+
+  /**
+   * Gives a character made earlier in this run the traits it lacks. What it has stays, and a
+   * member the story already had is left alone: its traits are the user's to set.
+   */
+  private fillTraits(speaker: Speaker, found: Traits): void {
+    if (speaker.ref.kind !== 'new') return;
+    const ref = speaker.ref.ref;
+    const at = this.newCharacters.findIndex((c) => c.ref === ref);
+    if (at >= 0) this.newCharacters[at] = fillTraits(this.newCharacters[at]!, found);
   }
 
   /**
@@ -654,7 +671,8 @@ class LlmRun {
   /**
    * The speaker for a heuristic span. A character the heuristic found joins the cast and the
    * model's characters: one matching its name or an alias is reused, and otherwise it is added
-   * as a new character.
+   * as a new character, with the traits its names give away ("the old man"): the heuristic looks
+   * for none, whereas the model leaves a trait out of its own characters on purpose.
    */
   private heuristicSpeaker(ref: SpeakerRef): SpeakerRef {
     if (ref.kind === 'cast') return ref;
@@ -665,7 +683,9 @@ class LlmRun {
     const existing = [c.name, ...c.aliases]
       .map((n) => matchCast(n, entries))
       .find((e) => e !== undefined);
-    const speaker = existing ? this.speakers.get(existing.key)! : this.createCharacter(c);
+    const speaker = existing
+      ? this.speakers.get(existing.key)!
+      : this.createCharacter(fillTraits(c, inferTraits([c.name, ...c.aliases], this.input.lang)));
     this.heuristicRefs.set(ref.ref, speaker.ref);
     return speaker.ref;
   }

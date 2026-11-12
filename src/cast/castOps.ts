@@ -1,16 +1,20 @@
-import type { Analysis, Character, Segment } from '@/format/types';
+import type { Analysis, Character, Lang, Segment, Traits } from '@/format/types';
 import { isDefaultName, NARRATOR_NAME, normaliseName } from '@/analysis/castMatch';
 import { tellerOf } from '@/analysis/reassign';
+import { clashesWithNarrator, repickVoice, spokenVoiceName } from '@/cast/assignVoices';
+import { cleanTraits, fillTraits, inferTraits, TRAIT_KEYS, withTraits } from '@/cast/traits';
+import type { DeviceVoice } from '@/playback/engine';
 
 export type CastOpResult<T> = { ok: true; value: T } | { ok: false; reason: string };
 
 /**
  * Merges character `fromId` into `intoId`: every line spoken by `from` in any analysis becomes
- * `into`'s, and `from`'s name and aliases become aliases of `into`. The narrator and the unknown
- * speaker are never removed (the analysers need them): merging them moves their lines as user
- * corrections, so a re-analysis keeps the move. The narrator also hands the names it was given
- * to `into` and goes back to `defaultNarratorName` (NARRATOR_NAME[story.lang]); the unknown
- * speaker keeps its names.
+ * `into`'s, and `from`'s name and aliases become aliases of `into`. `into` keeps its traits and
+ * takes the ones it lacks from `from` (the unknown speaker never has any); its voice stays as it
+ * is. The narrator and the unknown speaker are never removed (the analysers need them): merging
+ * them moves their lines as user corrections, so a re-analysis keeps the move. The narrator also
+ * hands the names it was given to `into` and goes back to `defaultNarratorName`
+ * (NARRATOR_NAME[story.lang]); the unknown speaker keeps its names.
  */
 export function mergeCharacters(
   cast: readonly Character[],
@@ -29,11 +33,13 @@ export function mergeCharacters(
     from.role === 'unknown'
       ? []
       : [from.name, ...from.aliases].filter((n) => !isDefaultName(n, from.role));
-  const merged: Character = {
+  const renamed: Character = {
     ...into,
     aliases: dedupe([...into.aliases, ...newAliases]).filter((a) => !sameName(a, into.name)),
-    gender: into.gender ?? from.gender,
   };
+  // The unknown speaker has no traits to give or to take.
+  const traitless = into.role === 'unknown' || from.role === 'unknown';
+  const merged = traitless ? renamed : fillTraits(renamed, from);
   const remaining =
     from.role === 'narrator' ? { ...from, name: defaultNarratorName, aliases: [] } : from;
   const updatedCast = cast
@@ -162,6 +168,116 @@ export function setAliases(
 ): CastOpResult<Character[]> {
   if (!cast.some((c) => c.id === id)) return { ok: false, reason: 'character not found' };
   return { ok: true, value: cast.map((c) => (c.id === id ? { ...c, aliases } : c)) };
+}
+
+/**
+ * Sets or clears (undefined) traits of member `id`. Its voice is picked again to match unless it
+ * was set by hand (voice.manual). Nothing actually changing gives the same cast (the array that
+ * was passed in), repicked false. The unknown speaker has no traits, so it is refused. When the
+ * narrator's new voice or pitch comes too near to characters (the same voice within 0.05 of its
+ * pitch, or the very same voice, pitch and rate), those not voiced by hand are picked again too.
+ */
+export function setTraits(
+  cast: Character[],
+  id: string,
+  changes: { [K in keyof Traits]?: Traits[K] | undefined },
+  deviceVoices: readonly DeviceVoice[],
+  locale: string,
+): CastOpResult<{ cast: Character[]; repicked: boolean }> {
+  const character = cast.find((c) => c.id === id);
+  if (!character) return { ok: false, reason: 'character not found' };
+  if (character.role === 'unknown') {
+    return { ok: false, reason: 'the unknown speaker has no traits' };
+  }
+
+  const changed = withTraits(character, changes);
+  const [before, after] = [cleanTraits(character), cleanTraits(changed)];
+  if (TRAIT_KEYS.every((key) => before[key] === after[key])) {
+    return { ok: true, value: { cast, repicked: false } };
+  }
+  const repicked = !character.voice.manual;
+  const updated = repicked
+    ? { ...changed, voice: repickVoice(changed, cast, deviceVoices, locale) }
+    : changed;
+  const updatedCast = cast.map((c) => (c.id === id ? updated : c));
+  return {
+    ok: true,
+    value: {
+      cast: repicked ? clearOfNarrator(updatedCast, character, deviceVoices, locale) : updatedCast,
+      repicked,
+    },
+  };
+}
+
+/**
+ * Picks the voice of member `id` again from its traits, also when it was set by hand. When that
+ * moves the narrator, the characters left too near it are picked again as well (see setTraits).
+ */
+export function repickMember(
+  cast: readonly Character[],
+  id: string,
+  deviceVoices: readonly DeviceVoice[],
+  locale: string,
+): CastOpResult<Character[]> {
+  const character = cast.find((c) => c.id === id);
+  if (!character) return { ok: false, reason: 'character not found' };
+  const voice = repickVoice(character, cast, deviceVoices, locale);
+  const updatedCast = cast.map((c) => (c.id === id ? { ...c, voice } : c));
+  return { ok: true, value: clearOfNarrator(updatedCast, character, deviceVoices, locale) };
+}
+
+/**
+ * After the voice of `before` was picked again: when it is the narrator and the voice it really
+ * speaks with or its pitch changed, every character that can no longer be told from it
+ * (clashesWithNarrator) gets its voice picked again, in cast order, each seeing the narrator and
+ * the picks before it. Voices set by hand stay as they are, and no traits are guessed.
+ */
+function clearOfNarrator(
+  cast: Character[],
+  before: Character,
+  deviceVoices: readonly DeviceVoice[],
+  locale: string,
+): Character[] {
+  const narrator = cast.find((c) => c.id === before.id);
+  if (!narrator || narrator.role !== 'narrator') return cast;
+  const moved =
+    spokenVoiceName(narrator.voice, deviceVoices) !== spokenVoiceName(before.voice, deviceVoices) ||
+    narrator.voice.pitch !== before.voice.pitch;
+  // A clash that was there before is the user's to settle ("Match voices to traits").
+  if (!moved) return cast;
+
+  const out = [...cast];
+  out.forEach((c, i) => {
+    if (c.role !== 'character' || c.voice.manual) return;
+    if (!clashesWithNarrator(c.voice, narrator.voice, deviceVoices)) return;
+    out[i] = { ...c, voice: repickVoice(c, out, deviceVoices, locale) };
+  });
+  return out;
+}
+
+/**
+ * Matches every character's voice to its traits. For each member with role 'character', in cast
+ * order: the traits it lacks are guessed from its name and aliases (inferTraits, fill-only), then,
+ * unless its voice was set by hand, the voice is picked again seeing the narrator, the unknown
+ * speaker, the hand-voiced characters and the characters handled before it. The narrator and the
+ * unknown speaker are untouched.
+ */
+export function matchVoicesToTraits(
+  cast: readonly Character[],
+  deviceVoices: readonly DeviceVoice[],
+  locale: string,
+  lang: Lang,
+): Character[] {
+  // The voices that stay: each pick avoids them, and the picks made before it.
+  const seen = cast.filter((c) => c.role !== 'character' || c.voice.manual);
+  return cast.map((c) => {
+    if (c.role !== 'character') return c;
+    const filled = fillTraits(c, inferTraits([c.name, ...c.aliases], lang));
+    if (filled.voice.manual) return filled;
+    const matched = { ...filled, voice: repickVoice(filled, seen, deviceVoices, locale) };
+    seen.push(matched);
+    return matched;
+  });
 }
 
 /** Lines per character across analyses; characters with none are "unused". */

@@ -6,10 +6,11 @@ import type { LlmTransport } from '@/analysis/llm/client';
 import { reassignSegment } from '@/analysis/reassign';
 import { validateAnalysis } from '@/format/validate';
 import { openStoryDb, type StoryDb } from '@/storage/db';
-import { createStory, getStory, updateStory } from '@/storage/stories';
+import { createStory, defaultLocale, getStory, updateStory } from '@/storage/stories';
 import { addPart, getPart } from '@/storage/parts';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { mergeCharactersInStory } from '@/storage/cast';
+import { assignVoice } from '@/cast/assignVoices';
 import { renameCharacter } from '@/cast/castOps';
 import { splitUnits } from '@/analysis/units';
 import { analyzeHeuristic } from '@/analysis/heuristic';
@@ -64,6 +65,162 @@ describe('analyzePart', () => {
     });
     // The heuristic marks " said Anne." as told by the teller; that mark is never stored.
     expect(analysis.segments.filter((s) => 'teller' in s)).toEqual([]);
+  });
+
+  it('guesses the traits of a character the free analyser names by a description', async () => {
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    const part = await addPart(db, story.id, paste('“Who goes there?” asked the old man.'));
+    await analyzePart(db, part.id, { voices });
+
+    const saved = (await getStory(db, story.id))!;
+    const { voice, ...oldMan } = saved.cast.at(-1)!;
+    expect(oldMan).toStrictEqual({
+      id: oldMan.id,
+      role: 'character',
+      name: 'the old man',
+      aliases: [],
+      gender: 'male',
+      age: 'elder',
+      firstSeenPartId: part.id,
+    });
+    // The voice is picked for those traits, not for a character nobody knows anything about.
+    const locale = defaultLocale('en');
+    expect(voice).toEqual(assignVoice(oldMan, story.cast, voices, locale));
+    expect(voice).not.toEqual(
+      assignVoice({ id: oldMan.id, role: 'character' }, story.cast, voices, locale),
+    );
+  });
+
+  it('reads the name in the story’s language: a Spanish description in a Spanish story', async () => {
+    const spanish = [
+      { name: 'es-a', lang: 'es-ES', isDefault: true },
+      { name: 'es-b', lang: 'es-MX' },
+    ];
+    const story = await createStory(db, { title: 'S', lang: 'es' });
+    const part = await addPart(db, story.id, paste('—¿Quién anda ahí? —preguntó la abuela.'));
+    await analyzePart(db, part.id, { voices: spanish });
+
+    const { voice, ...abuela } = (await getStory(db, story.id))!.cast.at(-1)!;
+    expect(abuela).toStrictEqual({
+      id: abuela.id,
+      role: 'character',
+      name: 'la abuela',
+      aliases: [],
+      gender: 'female',
+      age: 'elder',
+      firstSeenPartId: part.id,
+    });
+    expect(voice).toEqual(assignVoice(abuela, story.cast, spanish, defaultLocale('es')));
+  });
+
+  it('keeps a person called by a title and by the surname alone human: “Mr. Fox … Fox”', async () => {
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    const text = '“Good morning,” said Mr. Fox.\n\n“Is it?” said Anne.\n\n“It is,” said Fox.';
+    const part = await addPart(db, story.id, paste(text));
+    await analyzePart(db, part.id, { voices });
+
+    const saved = (await getStory(db, story.id))!;
+    expect(saved.cast.map((c) => c.name)).toEqual([
+      'Narrator',
+      'Unknown speaker',
+      'Mr. Fox',
+      'Anne',
+    ]);
+    const { voice, ...fox } = saved.cast[2]!;
+    // The surname said alone is an alias, not the name of an animal: no species.
+    expect(fox).toStrictEqual({
+      id: fox.id,
+      role: 'character',
+      name: 'Mr. Fox',
+      aliases: ['Fox'],
+      gender: 'male',
+      firstSeenPartId: part.id,
+    });
+    expect(voice).toEqual(assignVoice(fox, story.cast, voices, defaultLocale('en')));
+    expect(voice).not.toEqual(
+      assignVoice({ ...fox, species: 'animal' }, story.cast, voices, defaultLocale('en')),
+    );
+  });
+
+  it('guesses no trait for a name that gives none away, and writes no empty trait', async () => {
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    const part = await addPart(db, story.id, paste('“Hi,” said Anne.'));
+    await analyzePart(db, part.id, { voices });
+
+    const anne = (await getStory(db, story.id))!.cast.at(-1)!;
+    expect(Object.keys(anne).sort()).toEqual(
+      ['aliases', 'firstSeenPartId', 'id', 'name', 'role', 'voice'].sort(),
+    );
+  });
+
+  it('keeps the traits Claude gave, and guesses none for a character Claude left without', async () => {
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    const text = '“Who goes there?” asked the old man.\n\n“Me,” said the little girl.';
+    const part = await addPart(db, story.id, paste(text));
+    const transport = fakeTransport(({ units }) => ({
+      units: units.map((unit, id) => ({
+        id,
+        spans: [
+          unit.startsWith('“Who')
+            ? { speaker: 'new1', mode: 'speech' }
+            : unit.startsWith('“')
+              ? { speaker: 'new2', mode: 'speech' }
+              : { speaker: 'N', mode: 'narration' },
+        ],
+      })),
+      newCharacters: [
+        { ref: 'new1', name: 'the old man', aliases: [], description: '' },
+        { ref: 'new2', name: 'the little girl', aliases: [], species: 'creature', description: '' },
+      ],
+      aliasAdditions: [],
+    }));
+    await analyzePart(db, part.id, { voices, llm: llm(transport) });
+
+    const saved = (await getStory(db, story.id))!;
+    const [oldMan, girl] = saved.cast.slice(2);
+    // Claude read the names and said nothing more: "the old man" may be a nickname here.
+    expect(oldMan).toStrictEqual({
+      id: oldMan!.id,
+      role: 'character',
+      name: 'the old man',
+      aliases: [],
+      firstSeenPartId: part.id,
+      voice: assignVoice(
+        { id: oldMan!.id, role: 'character' },
+        story.cast,
+        voices,
+        defaultLocale('en'),
+      ),
+    });
+    expect(girl).toStrictEqual({
+      id: girl!.id,
+      role: 'character',
+      name: 'the little girl',
+      aliases: [],
+      species: 'creature',
+      firstSeenPartId: part.id,
+      voice: expect.any(Object),
+    });
+  });
+
+  it('guesses the traits of a character the heuristic names in a chunk Claude refused', async () => {
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    const part = await addPart(db, story.id, paste('“Who goes there?” asked the old man.'));
+    const transport = fakeTransport(() => ({ stopReason: 'refusal', text: '' }));
+    const report = await analyzePart(db, part.id, { voices, llm: llm(transport) });
+
+    expect(report).toMatchObject({ kind: 'mixed', fallbackUnits: 2 });
+    const { voice, ...oldMan } = (await getStory(db, story.id))!.cast.at(-1)!;
+    expect(oldMan).toStrictEqual({
+      id: oldMan.id,
+      role: 'character',
+      name: 'the old man',
+      aliases: [],
+      gender: 'male',
+      age: 'elder',
+      firstSeenPartId: part.id,
+    });
+    expect(voice).toEqual(assignVoice(oldMan, story.cast, voices, defaultLocale('en')));
   });
 
   it('reuses characters from part 1 when analysing part 2', async () => {

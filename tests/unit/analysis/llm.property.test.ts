@@ -5,6 +5,7 @@ import { analyzeHeuristic } from '@/analysis/heuristic';
 import { analyzeLlm } from '@/analysis/llm';
 import { mergeLabels } from '@/analysis/merge';
 import { splitUnits } from '@/analysis/units';
+import { cleanTraits, TRAIT_KEYS } from '@/cast/traits';
 import { segmentText, validateSegments } from '@/format/validate';
 import { baseCast } from '../../helpers/fixtures';
 import { fakeTransport } from '../../helpers/fakeLlm';
@@ -55,12 +56,20 @@ const output = fc.record(
       { maxLength: 14 },
     ),
     newCharacters: fc.array(
-      fc.record({
-        ref: fc.constantFrom('new1', 'new2', 'N', 'c1', 'x1'),
-        name: fc.constantFrom('Tom', 'Anne', 'Pablo', '', ' ', 'Mr. Bennet'),
-        aliases: fc.array(fc.constantFrom('Tommy', 'Anne', '', 'la Nela')),
-        description: fc.string({ maxLength: 10 }),
-      }),
+      fc.record(
+        {
+          ref: fc.constantFrom('new1', 'new2', 'N', 'c1', 'x1'),
+          name: fc.constantFrom('Tom', 'Anne', 'Pablo', '', ' ', 'Mr. Bennet', 'the old man'),
+          aliases: fc.array(fc.constantFrom('Tommy', 'Anne', '', 'la Nela')),
+          description: fc.string({ maxLength: 10 }),
+          // Values the format knows, values it does not, and values that are not even strings.
+          gender: fc.constantFrom('male', 'female', 'other', 'robot', ''),
+          age: fc.constantFrom('child', 'teen', 'adult', 'elder', 'elderly', 'CHILD', '', 7, null),
+          species: fc.constantFrom('human', 'animal', 'creature', 'machine', 'dragon', '', false),
+          size: fc.constantFrom('small', 'large', 'medium', 'average', '', 0),
+        },
+        { requiredKeys: ['ref', 'name', 'aliases', 'description'] },
+      ),
       { maxLength: 3 },
     ),
     aliasAdditions: fc.array(
@@ -112,6 +121,14 @@ describe('LLM output → stored analysis (property)', () => {
           const castIds = new Set(merged.cast.map((c) => c.id));
           expect(validateSegments(text, merged.segments, castIds)).toEqual({ ok: true });
           expect(merged.segments.map((s) => segmentText(text, s)).join('')).toBe(text);
+          // A stored trait is always one the format knows; anything else leaves no key behind.
+          for (const member of merged.cast) {
+            const held = TRAIT_KEYS.filter((key) => key in member);
+            expect(held).toEqual(Object.keys(cleanTraits(member)));
+          }
+          // The run never gives a trait to someone who was in the cast before it.
+          const before = merged.cast.slice(0, cast.length);
+          expect(before.flatMap((m) => TRAIT_KEYS.filter((key) => key in m))).toEqual([]);
         },
       ),
       { numRuns: 300 },

@@ -8,6 +8,7 @@ import { analyzeLlm } from '@/analysis/llm';
 import { chunkUnits, estimateTokens, type ChunkLimits } from '@/analysis/llm/chunking';
 import { LlmError } from '@/analysis/llm/client';
 import { buildUserPrompt, narratorStyleOf, SYSTEM_PROMPT } from '@/analysis/llm/prompt';
+import { LLM_OUTPUT_FORMAT, readLlmOutput } from '@/analysis/llm/schema';
 import { splitUnits } from '@/analysis/units';
 import { validateAnalysis } from '@/format/validate';
 import { openStoryDb, type StoryDb } from '@/storage/db';
@@ -149,7 +150,7 @@ describe('LLM analysis', () => {
 
     const { story, analysis, lines } = await stored(part.id);
     expect(report).toMatchObject({ kind: 'llm', fallbackUnits: 0 });
-    expect(analysis.analyzer).toEqual({ kind: 'llm', model: 'claude-haiku-5-5', version: 2 });
+    expect(analysis.analyzer).toEqual({ kind: 'llm', model: 'claude-haiku-5-5', version: 3 });
     expect(lines).toEqual([
       ['“Hi,”', 'Anne', 'llm'],
       [' said Anne. ', 'Narrator', 'llm'],
@@ -1164,6 +1165,268 @@ describe('characters the model proposes', () => {
     );
     expect(lines[0]).toEqual(['“Hello.”', 'Nick', 'speech']);
     expect(transport.calls[0]!.request.user).toContain('\nc1: Amy\n');
+  });
+});
+
+describe('traits of new characters', () => {
+  /** The trait keys an object holds, whatever their values (toEqual would not see an undefined). */
+  const traitKeys = (c: object) =>
+    Object.keys(c).filter((k) => ['gender', 'age', 'species', 'size'].includes(k));
+
+  it('are stored with a character the model describes', async () => {
+    const { part } = await setup('“Squeak,” said Pip.');
+    const transport = fakeTransport(({ units }) =>
+      labelAll(units, 'new1', {
+        newCharacters: [
+          {
+            ref: 'new1',
+            name: 'Pip',
+            aliases: [],
+            age: 'child',
+            species: 'animal',
+            size: 'small',
+            description: 'a mouse',
+          },
+        ],
+      }),
+    );
+    const report = await analyzePart(db, part.id, { voices, llm: llm(transport) });
+
+    const { story } = await stored(part.id);
+    const pip = story.cast.find((c) => c.name === 'Pip')!;
+    expect(report).toMatchObject({ kind: 'llm', fallbackUnits: 0 });
+    expect(pip).toMatchObject({ age: 'child', species: 'animal', size: 'small' });
+    expect(traitKeys(pip)).toEqual(['age', 'species', 'size']);
+    expect(pip.voice.voiceName).toBeDefined();
+  });
+
+  it('leave out a value the format does not know, and keep the character and its lines', async () => {
+    const { part } = await setup('“Go away,” said Morgana.');
+    const transport = fakeTransport(({ units }) =>
+      labelAll(units, 'new1', {
+        newCharacters: [
+          {
+            ref: 'new1',
+            name: 'Morgana',
+            aliases: [],
+            gender: 'female',
+            age: 'elderly',
+            species: 'creature',
+            size: 'medium',
+            description: 'a fairy',
+          },
+        ],
+      }),
+    );
+    const report = await analyzePart(db, part.id, { voices, llm: llm(transport) });
+
+    const { story, lines } = await stored(part.id);
+    const morgana = story.cast.find((c) => c.name === 'Morgana')!;
+    expect(report).toMatchObject({ kind: 'llm', fallbackUnits: 0 });
+    expect(lines[0]).toEqual(['“Go away,”', 'Morgana', 'llm']);
+    expect(morgana).toMatchObject({ gender: 'female', species: 'creature' });
+    expect(traitKeys(morgana)).toEqual(['gender', 'species']);
+  });
+
+  it('grow when a later answer describes a character of this run again', async () => {
+    const { result } = await analyze(
+      '“Hi,” said Tom.\n\n“Bye,” said Tom.',
+      baseCast('en'),
+      ({ units }) =>
+        labelAll(units, 'new1', {
+          newCharacters: [
+            units[0] === '“Hi,”'
+              ? { ref: 'new1', name: 'Tom', aliases: [], gender: 'male', description: '' }
+              : {
+                  ref: 'new1',
+                  name: 'Tom',
+                  aliases: [],
+                  gender: 'female',
+                  age: 'child',
+                  species: 'animal',
+                  size: 'huge',
+                  description: '',
+                },
+          ],
+        }),
+      { limits: { maxUnits: 2, maxTokens: 10_000 } },
+    );
+    expect(result.fallbackUnits).toBe(0);
+    expect(result.labels.newCharacters).toStrictEqual([
+      { ref: 'x1', name: 'Tom', aliases: [], gender: 'male', age: 'child', species: 'animal' },
+    ]);
+  });
+
+  it('keep what the first answer said when a later one disagrees', async () => {
+    const { result } = await analyze(
+      '“Hi,” said Tom.\n\n“Bye,” said Tom.',
+      baseCast('en'),
+      ({ units }) =>
+        labelAll(units, 'new1', {
+          newCharacters: [
+            {
+              ref: 'new1',
+              name: 'Tom',
+              aliases: [],
+              ...(units[0] === '“Hi,”'
+                ? { age: 'elder', size: 'large' }
+                : { age: 'child', size: 'small', species: 'machine' }),
+              description: '',
+            },
+          ],
+        }),
+      { limits: { maxUnits: 2, maxTokens: 10_000 } },
+    );
+    expect(result.labels.newCharacters).toStrictEqual([
+      { ref: 'x1', name: 'Tom', aliases: [], age: 'elder', size: 'large', species: 'machine' },
+    ]);
+  });
+
+  it('never reach a member of the cast, whatever the model says about it', async () => {
+    const { story, part } = await setup('“Hi,” said Tom.\n\n“Hello,” I said.');
+    const tom = character('tom-id', 'Tom');
+    await updateStory(db, story.id, { cast: [...story.cast, tom] });
+    const transport = fakeTransport(({ units }) =>
+      labelAll(units, 'new1', {
+        newCharacters: [
+          {
+            ref: 'new1',
+            name: 'Tom',
+            aliases: [],
+            gender: 'male',
+            age: 'child',
+            species: 'animal',
+            size: 'small',
+            description: 'a kitten',
+          },
+          {
+            ref: 'N',
+            name: 'Watson',
+            aliases: [],
+            age: 'elder',
+            species: 'human',
+            description: '',
+          },
+        ],
+      }),
+    );
+    await analyzePart(db, part.id, { voices, llm: llm(transport) });
+
+    const { story: after } = await stored(part.id);
+    expect(after.cast.map((c) => c.name)).toEqual(['Narrator', 'Unknown speaker', 'Tom']);
+    expect(after.cast.find((c) => c.id === 'tom-id')).toStrictEqual(tom);
+    expect(after.cast.flatMap(traitKeys)).toEqual([]);
+  });
+
+  it('are guessed from the name of a character only the heuristic found, not of the model’s own', async () => {
+    // Units: 0 “Hi,” · 1 said the little girl. · 2 “Who goes there?” · 3 asked the old man.
+    const { result, lines } = await analyze(
+      '“Hi,” said the little girl.\n\n“Who goes there?” asked the old man.',
+      baseCast('en'),
+      ({ units }) =>
+        units[0] === '“Who goes there?”'
+          ? { stopReason: 'refusal', text: '' }
+          : labelAll(units, 'new1', {
+              newCharacters: [
+                { ref: 'new1', name: 'the little girl', aliases: [], description: '' },
+              ],
+            }),
+      { limits: { maxUnits: 2, maxTokens: 10_000 } },
+    );
+    expect(result.fallbackUnits).toBe(2);
+    expect(lines.filter(([, , mode]) => mode === 'speech')).toEqual([
+      ['“Hi,”', 'the little girl', 'speech'],
+      ['“Who goes there?”', 'the old man', 'speech'],
+    ]);
+    // The model saw the name and left the traits out; the heuristic never looks for them.
+    expect(result.labels.newCharacters).toStrictEqual([
+      { ref: 'x1', name: 'the little girl', aliases: [] },
+      { ref: 'x2', name: 'the old man', aliases: [], gender: 'male', age: 'elder' },
+    ]);
+  });
+
+  it('are guessed in the story’s language: a Spanish description in a Spanish story', async () => {
+    const { result, lines } = await analyze(
+      '—¿Quién anda ahí? —preguntó la abuela.',
+      baseCast('es'),
+      () => ({ stopReason: 'refusal', text: '' }),
+      { lang: 'es' },
+    );
+    expect(result.fallbackUnits).toBeGreaterThan(0);
+    expect(lines.filter(([, , mode]) => mode === 'speech')).toEqual([
+      ['—¿Quién anda ahí?', 'la abuela', 'speech'],
+    ]);
+    expect(result.labels.newCharacters).toStrictEqual([
+      { ref: 'x1', name: 'la abuela', aliases: [], gender: 'female', age: 'elder' },
+    ]);
+  });
+
+  it('are not guessed from the surname of a titled character said alone', async () => {
+    const { result } = await analyze(
+      '“Good morning,” said Mr. Fox.\n\n“Is it?” said Anne.\n\n“It is,” said Fox.',
+      baseCast('en'),
+      () => ({ stopReason: 'refusal', text: '' }),
+    );
+    // "Fox" is the surname of "Mr. Fox", not the name of an animal: no species.
+    expect(result.labels.newCharacters).toStrictEqual([
+      { ref: 'x1', name: 'Mr. Fox', aliases: ['Fox'], gender: 'male' },
+      { ref: 'x2', name: 'Anne', aliases: [] },
+    ]);
+  });
+});
+
+describe('the output schema', () => {
+  const descriptions = {
+    age: 'When the text shows it, one of: child, teen, adult, elder',
+    species:
+      'When the text shows it, one of: human, animal, creature (fantasy being), machine (robot, AI)',
+    size: 'small or large; omit for average',
+  };
+
+  it('tells the model what the three trait fields may hold', () => {
+    const wire = JSON.stringify(LLM_OUTPUT_FORMAT.schema);
+    for (const text of Object.values(descriptions)) expect(wire).toContain(JSON.stringify(text));
+  });
+
+  it('sends the traits as optional plain strings, so that an odd value costs only itself', () => {
+    const schema = LLM_OUTPUT_FORMAT.schema as {
+      properties: {
+        newCharacters: {
+          items: { properties: Record<string, object>; required: string[] };
+        };
+      };
+    };
+    const proposal = schema.properties.newCharacters.items;
+    expect(proposal.required).toEqual(['ref', 'name', 'aliases', 'description']);
+    for (const [key, description] of Object.entries(descriptions)) {
+      expect(proposal.properties[key]).toEqual({ type: 'string', description });
+    }
+    expect(Object.keys(proposal.properties)).toEqual([
+      'ref',
+      'name',
+      'aliases',
+      'gender',
+      'age',
+      'species',
+      'size',
+      'description',
+    ]);
+
+    const read = readLlmOutput(
+      JSON.stringify({
+        units: [],
+        newCharacters: [
+          { ref: 'a', name: 'Ann', aliases: [], description: '' },
+          { ref: 'b', name: 'Bo', aliases: [], age: 'elderly', size: 'medium', description: '' },
+          { ref: 'c', name: 'Cy', aliases: [], age: 7, description: '' },
+        ],
+        aliasAdditions: [],
+      }),
+    );
+    expect(read.newCharacters).toStrictEqual([
+      { ref: 'a', name: 'Ann', aliases: [], description: '' },
+      { ref: 'b', name: 'Bo', aliases: [], age: 'elderly', size: 'medium', description: '' },
+    ]);
   });
 });
 

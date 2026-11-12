@@ -1,5 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import type { Character } from '@/format/types';
 import { analyzePart } from '@/analysis/analyzer';
 import { openStoryDb, type StoryDb } from '@/storage/db';
 import {
@@ -127,6 +128,62 @@ describe('export and import', () => {
     const parts = await listParts(other, story.id);
     expect(parts.map((p) => p.analysisStatus)).toEqual(['pending', 'done']);
     expect(await getAnalysis(other, parts[0]!.id)).toBeUndefined();
+  });
+
+  it('round-trips traits and voices set by hand byte for byte', async () => {
+    const storyId = await sampleStory();
+    const saved = (await getStory(db, storyId))!;
+    const cast = saved.cast.map((c, i): Character => {
+      if (i === 0) return { ...c, gender: 'female', age: 'elder' };
+      // Traits written in another order than the app writes them stay in that order.
+      if (i === 2) {
+        return {
+          ...c,
+          size: 'small',
+          species: 'animal',
+          age: 'child',
+          gender: 'other',
+          voice: { ...c.voice, manual: true },
+        };
+      }
+      return c;
+    });
+    await updateStory(db, storyId, { cast });
+    const first = await exportStory(db, storyId);
+    const parsed = parseExport(JSON.stringify(first));
+    if (!parsed.ok) throw new Error(parsed.reason);
+
+    const { story } = await importStory(other, parsed.data);
+    const second = await exportStory(other, story.id);
+    expect(JSON.stringify(second.story.cast)).toBe(JSON.stringify(first.story.cast));
+    expect(JSON.stringify(second.story.cast)).toContain('"manual":true');
+    expect(normalise(second)).toEqual(normalise(first));
+
+    const { story: copy } = await importStory(db, parsed.data);
+    expect(normalise(await exportStory(db, copy.id))).toEqual(normalise(first));
+  });
+
+  it('drops trait values outside the format on import and keeps the valid ones', async () => {
+    const data = await exportStory(db, await sampleStory());
+    const anne = data.story.cast.find((c) => c.name === 'Anne Shirley')!;
+    const tom = data.story.cast.find((c) => c.name === 'Tom')!;
+    const [anneBefore, tomBefore] = [{ ...anne }, { ...tom }];
+    // A file edited by hand.
+    Object.assign(anne, { gender: 'robot', age: 7, species: null, size: 'small' });
+    Object.assign(tom, { gender: 'male', age: 'ELDER', species: ['animal'], size: '' });
+    const parsed = parseExport(JSON.stringify(data));
+    if (!parsed.ok) throw new Error(parsed.reason);
+
+    const { story } = await importStory(other, parsed.data);
+    const stored = (await getStory(other, story.id))!;
+    for (const cast of [story.cast, stored.cast]) {
+      expect(cast.find((c) => c.id === anne.id)).toStrictEqual({ ...anneBefore, size: 'small' });
+      expect(cast.find((c) => c.id === tom.id)).toStrictEqual({ ...tomBefore, gender: 'male' });
+      expect(Object.keys(cast.find((c) => c.id === anne.id)!)).not.toContain('gender');
+    }
+    expect(stored.cast.filter((c) => c.role !== 'character')).toEqual(
+      data.story.cast.filter((c) => c.role !== 'character'),
+    );
   });
 
   it('refuses text that was edited after export, and stores nothing', async () => {

@@ -1,3 +1,4 @@
+import { cleanTraits } from '@/cast/traits';
 import type { Character, Segment } from '@/format/types';
 import type { LabelResult, SpanLabel } from './labels';
 
@@ -10,9 +11,9 @@ export interface MergeResult {
 }
 
 /**
- * Turns analyser labels into stored segments: gives new characters real ids, applies alias
- * additions to existing characters, and joins adjacent spans with the same speaker, mode and tone
- * within a paragraph (segments never run across a paragraph break).
+ * Turns analyser labels into stored segments: gives new characters real ids (with the traits the
+ * analyser found), applies alias additions to existing characters, and joins adjacent spans with
+ * the same speaker, mode and tone within a paragraph (segments never run across a paragraph break).
  */
 export function mergeLabels(
   text: string,
@@ -27,7 +28,8 @@ export function mergeLabels(
     role: 'character' as const,
     name: c.name,
     aliases: [...new Set(c.aliases.filter((a) => a !== c.name))],
-    ...(c.gender ? { gender: c.gender } : {}),
+    // Only the traits that are set, so that a missing one never becomes a stored undefined.
+    ...cleanTraits(c),
     ...(c.description ? { description: c.description } : {}),
     firstSeenPartId: partId,
   }));

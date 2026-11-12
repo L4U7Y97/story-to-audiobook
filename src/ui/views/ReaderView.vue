@@ -5,6 +5,7 @@ import type { Character, Mode, Segment } from '@/format/types';
 import { modeForAnyone, reassignSegments, tellerOf, type ReassignScope } from '@/analysis/reassign';
 import { assignVoice } from '@/cast/assignVoices';
 import { findTypedNameOwner } from '@/cast/castOps';
+import { inferTraits } from '@/cast/traits';
 import { paragraphStarts } from '@/playback/utterances';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
@@ -289,7 +290,9 @@ async function createSpeaker(name: string, how: { mode?: Mode; scope: PickScope 
   // Someone the cast already knows by that name ("Narrator" included) reads it, not a duplicate.
   const owner = findTypedNameOwner(s.cast, name, s.narratorId);
   if (owner) return choose(owner.id, how);
-  const base = { id: newId(), role: 'character' as const, name, aliases: [] };
+  // What the name gives away ("the old man") goes in first: the voice is picked from it.
+  const traits = inferTraits([name], s.lang);
+  const base = { id: newId(), role: 'character' as const, name, aliases: [], ...traits };
   const voice = assignVoice(base, s.cast, await getEngine().listVoices(), defaultLocale(s.lang));
   await choose(base.id, how, [{ ...base, voice }]);
 }

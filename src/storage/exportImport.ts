@@ -7,6 +7,7 @@ import {
 } from '@/format/types';
 import { sha256 } from '@/format/hash';
 import { validateAnalysis } from '@/format/validate';
+import { cleanTraits, withTraits } from '@/cast/traits';
 import type { StoryDb } from './db';
 import { newId, now } from './ids';
 import { orderByBooks } from './books';
@@ -163,7 +164,9 @@ export async function importStory(db: StoryDb, data: StoryExport): Promise<Impor
         bookOf,
         books ?? [],
       ),
-      cast: data.story.cast.map((c) => {
+      cast: data.story.cast.map((member) => {
+        // A trait value outside the format (a file edited by hand) is dropped: it means "not set".
+        const c = withTraits(member, cleanTraits(member));
         if (c.firstSeenPartId === undefined) return c;
         const copy = { ...c, firstSeenPartId: partIdOf.get(c.firstSeenPartId) };
         if (!copy.firstSeenPartId) delete copy.firstSeenPartId;

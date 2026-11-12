@@ -11,7 +11,7 @@ export const PRICES: Record<string, { input: number; output: number }> = {
 };
 
 /** The output schema the API adds to every request, and the context lines after chunk 1. */
-const SCHEMA_TOKENS = 700;
+const SCHEMA_TOKENS = 900;
 const CONTEXT_TOKENS_PER_LINE = 25;
 /** One `{"id":12,"spans":[{"speaker":"c1","mode":"speech"}]}` entry, plus some tones and splits. */
 const OUTPUT_TOKENS_PER_UNIT = 24;

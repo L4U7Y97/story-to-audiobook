@@ -247,8 +247,27 @@ describe('the cast search', () => {
 
   it('shows only the members whose name or other names match', async () => {
     const host = await openCast(await storeStory(holmes));
+    typeInto(search(host), 'm');
+    await until(() => shownNames(host).length === 1, 'the first filtered cast');
+    expect(shownNames(host)).toEqual(['Holmes']);
+
+    typeInto(search(host), 'mo');
+    await until(() => host.querySelector('[role="status"]'), 'the updated no-match note');
+    expect(shownNames(host)).toEqual([]);
+
     typeInto(search(host), 'wat');
     await until(() => shownNames(host).length === 1, 'the filtered cast');
+    expect(shownNames(host)).toEqual(['Watson']);
+  });
+
+  it('updates while the keyboard is composing text', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const input = search(host);
+    input.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+    input.value = 'wat';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+
+    await until(() => shownNames(host).length === 1, 'the live composed-text filter');
     expect(shownNames(host)).toEqual(['Watson']);
   });
 

@@ -6,6 +6,10 @@ withDefaults(defineProps<{ label?: string }>(), { label: 'Find in cast' });
 const query = defineModel<string>({ required: true });
 const input = ref<HTMLInputElement>();
 
+function onInput(event: Event) {
+  if (event.target instanceof HTMLInputElement) query.value = event.target.value;
+}
+
 /** The clear button goes with the text, so focus moves back to the box rather than the page. */
 function clear() {
   query.value = '';
@@ -24,12 +28,13 @@ function onEscape(event: KeyboardEvent) {
   <div class="cast-filter" role="search">
     <input
       ref="input"
-      v-model="query"
+      :value="query"
       type="search"
       :aria-label="label"
       :placeholder="label"
       autocomplete="off"
       enterkeyhint="search"
+      @input="onInput"
       @keydown.esc="onEscape"
     />
     <button v-if="query" type="button" class="clear" aria-label="Clear search" @click="clear">

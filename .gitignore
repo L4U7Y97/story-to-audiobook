@@ -13,3 +13,4 @@ android/local.properties
 android/app/release
 *.keystore
 *.jks
+tests/fixtures/*/books

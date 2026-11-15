@@ -408,12 +408,12 @@ function ownClauseSubject(
   // (plurals, counts) only before a verb that is no reply ("Mrs. Bennet scolded the twins, and
   // Anne, and nobody expected it, replied" is Anne's).
   const narrowNoun =
-    beforeNoun in DETERMINERS &&
+    DETERMINERS.has(beforeNoun) &&
     (['baby', 'babies', 'children', 'men', 'women'].includes(before) ||
       before.replace(/s$/u, '') in SPEAKER_NOUNS);
   const widerNoun =
     !verbAt(ts, v)?.reply &&
-    (beforeNoun in DETERMINERS || COUNT_WORD.test(beforeNoun)) &&
+    (DETERMINERS.has(beforeNoun) || COUNT_WORD.test(beforeNoun)) &&
     ([
       'baby',
       'babies',
@@ -434,7 +434,7 @@ function ownClauseSubject(
   let d = clause - 2;
   while (
     d > start &&
-    (ts[d]!.text.toLowerCase() in DETERMINERS || COUNT_WORD.test(ts[d]!.text.toLowerCase()))
+    (DETERMINERS.has(ts[d]!.text.toLowerCase()) || COUNT_WORD.test(ts[d]!.text.toLowerCase()))
   ) {
     d--;
   }

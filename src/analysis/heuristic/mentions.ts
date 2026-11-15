@@ -196,20 +196,20 @@ function nameAt(
 
 function descriptorAt(tokens: Token[], i: number): Mention | null {
   const det = tokens[i]!.text.toLowerCase();
-  if (!(det in DETERMINERS)) return null;
+  if (!DETERMINERS.has(det)) return null;
   // det [adjective] [adjective] noun
   for (let n = i + 1; n <= i + 3 && n < tokens.length; n++) {
     const tok = tokens[n]!;
     if (tok.punctBefore || UPPER.test(tok.text)) return null;
     const word = tok.text.toLowerCase();
     // Another determiner or a speech verb ends the phrase: "that her mother".
-    if (word in DETERMINERS || word in VERBS) return null;
+    if (DETERMINERS.has(word) || word in VERBS) return null;
     if (!(word in SPEAKER_NOUNS)) continue;
     const epicene = EPICENE.has(word);
     // "his voice": a voice that has an owner is not a speaker.
     if (epicene && POSSESSIVE_DETERMINERS.has(det)) return null;
     const last = n;
-    const gender = epicene ? undefined : (SPEAKER_NOUNS[word] ?? DETERMINERS[det]);
+    const gender = SPEAKER_NOUNS[word];
     // "her sister Jane": the name that follows is the person.
     const after = tokens[last + 1];
     if (after && !after.punctBefore && isCapitalisedName(after)) {

@@ -1,4 +1,4 @@
-import type { Character, Lang } from '@/format/types';
+import type { Character } from '@/format/types';
 import type { Unit } from '../units';
 import { chunkUnits, DEFAULT_CHUNK_LIMITS, estimateTokens } from './chunking';
 import { buildUserPrompt, promptCast, SYSTEM_PROMPT, type NarratorStyle } from './prompt';
@@ -38,7 +38,6 @@ export function costOf(
 /** Estimates what analysing a part will cost, from the same chunks and prompts the run will send. */
 export function estimateCost(input: {
   text: string;
-  lang: Lang;
   units: readonly Unit[];
   cast: readonly Character[];
   model: string;
@@ -53,7 +52,6 @@ export function estimateCost(input: {
   let outputTokens = 0;
   chunks.forEach((chunk, i) => {
     const user = buildUserPrompt({
-      lang: input.lang,
       cast,
       context: [],
       units: chunk.map((u) => input.text.slice(u.start, u.end)),

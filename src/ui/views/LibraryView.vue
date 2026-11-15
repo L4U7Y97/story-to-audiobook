@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { useRouter } from 'vue-router';
-import type { Lang, Story } from '@/format/types';
+import type { Story } from '@/format/types';
 import { appName } from '@/appInfo';
 import { getAppDb } from '@/storage/db';
 import { createStory, deleteStory, listStories } from '@/storage/stories';
@@ -14,7 +14,6 @@ const router = useRouter();
 const { data: stories } = useLiveQuery(() => listStories(db));
 
 const title = ref('');
-const lang = ref<Lang>('en');
 const creating = ref(false);
 
 const importing = ref(false);
@@ -64,7 +63,7 @@ async function remove(story: Story) {
 async function create() {
   creating.value = true;
   try {
-    const story = await createStory(db, { title: title.value, lang: lang.value });
+    const story = await createStory(db, { title: title.value, lang: 'en' });
     title.value = '';
     await router.push({ name: 'story', params: { id: story.id } });
   } finally {
@@ -98,7 +97,7 @@ function formatDate(iso: string): string {
                 {{ story.books.length }} {{ story.books.length === 1 ? 'book' : 'books' }} ·
               </template>
               {{ story.partIds.length }} {{ story.partIds.length === 1 ? 'part' : 'parts' }} ·
-              {{ story.lang === 'es' ? 'Español' : 'English' }} · {{ formatDate(story.updatedAt) }}
+              {{ formatDate(story.updatedAt) }}
             </span>
           </RouterLink>
           <button
@@ -128,13 +127,6 @@ function formatDate(iso: string): string {
       <label>
         Title
         <input v-model="title" placeholder="e.g. Pride and Prejudice" autocomplete="off" />
-      </label>
-      <label>
-        Language
-        <select v-model="lang">
-          <option value="en">English</option>
-          <option value="es">Español</option>
-        </select>
       </label>
       <button class="primary" type="submit" :disabled="creating">Create story</button>
     </form>

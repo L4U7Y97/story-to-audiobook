@@ -35,8 +35,7 @@ export function useAnalysis(db: StoryDb) {
     for (const part of parts) {
       const e = estimateCost({
         text: part.text,
-        lang: story.lang,
-        units: splitUnits(part.text, story.lang, part.hints),
+        units: splitUnits(part.text, part.hints),
         cast: story.cast,
         model,
       });

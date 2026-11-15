@@ -1,4 +1,4 @@
-import type { Gender } from '@/format/types';
+import type { Character, Gender } from '@/format/types';
 import { TITLES } from './heuristic/lexicon';
 
 /** A character as the analysers see it: existing cast members and ones found during analysis. */
@@ -10,22 +10,25 @@ export interface CastEntry {
   role: 'narrator' | 'character' | 'unknown';
 }
 
+/** A cast member's entry, under its id or another `key`, with an aliases array of its own. */
+export function castEntry(c: Character, key = c.id): CastEntry {
+  return { key, name: c.name, aliases: [...c.aliases], gender: c.gender, role: c.role };
+}
+
 /** The names a story's narrator and unknown speaker get on creation (storage/stories.ts). */
-export const NARRATOR_NAME = { en: 'Narrator', es: 'Narrador' } as const;
-export const UNKNOWN_NAME = { en: 'Unknown speaker', es: 'Desconocido' } as const;
+export const NARRATOR_NAME = 'Narrator';
+export const UNKNOWN_NAME = 'Unknown speaker';
 
-const DEFAULT_NARRATOR_NAMES = new Set(Object.values(NARRATOR_NAME).map((n) => normaliseName(n)));
-const DEFAULT_UNKNOWN_NAMES = new Set(Object.values(UNKNOWN_NAME).map((n) => normaliseName(n)));
+const NORMALISED_NARRATOR_NAME = normaliseName(NARRATOR_NAME);
+const NORMALISED_UNKNOWN_NAME = normaliseName(UNKNOWN_NAME);
 
-/** Title words of both languages, lower-case, without the period ("mr", "doña", "uncle"). */
-const TITLE_WORDS = new Set(
-  [...Object.keys(TITLES.en), ...Object.keys(TITLES.es)].map((t) =>
-    t.replace(/\.$/u, '').toLowerCase(),
-  ),
+/** Title words, lower-case, without the period ("mr", "uncle"). */
+export const TITLE_WORDS = new Set(
+  Object.keys(TITLES).map((t) => t.replace(/\.$/u, '').toLowerCase()),
 );
 
 /** Female titles that go before a family name ("Miss Bingley", "Mrs. Joe", "Madame Defarge"). */
-const FAMILY_TITLES = new Set(['mrs', 'miss', 'ms', 'mme', 'mlle', 'madam', 'madame']);
+export const FAMILY_TITLES = new Set(['mrs', 'miss', 'ms', 'mme', 'mlle', 'madam', 'madame']);
 
 /**
  * The form names are compared in: NFC, ’ = ', no trailing punctuation or possessive ’s,
@@ -47,8 +50,8 @@ export function normaliseName(name: string): string {
 
 /** Whether a name is the default the story gave its narrator or unknown speaker. */
 export function isDefaultName(name: string, role: CastEntry['role']): boolean {
-  if (role === 'narrator') return DEFAULT_NARRATOR_NAMES.has(normaliseName(name));
-  if (role === 'unknown') return DEFAULT_UNKNOWN_NAMES.has(normaliseName(name));
+  if (role === 'narrator') return normaliseName(name) === NORMALISED_NARRATOR_NAME;
+  if (role === 'unknown') return normaliseName(name) === NORMALISED_UNKNOWN_NAME;
   return false;
 }
 
@@ -62,7 +65,8 @@ export function namesOf(entry: CastEntry): string[] {
   return [entry.name, ...entry.aliases].filter((n) => !isDefaultName(n, entry.role));
 }
 
-function split(name: string): { title?: string; words: string[] } {
+/** A name's words as matchCast reads them, with a leading title apart when more words follow it. */
+export function split(name: string): { title?: string; words: string[] } {
   const words = normaliseName(name).split(' ');
   return words.length > 1 && TITLE_WORDS.has(words[0]!)
     ? { title: words[0]!, words: words.slice(1) }
@@ -72,12 +76,12 @@ function split(name: string): { title?: string; words: string[] } {
 /**
  * Finds the cast entry a name refers to:
  * 1. an exact name or alias (see normaliseName), first in cast order;
- * 2. the same name with and without a title ("Darcy" ↔ "Mr. Darcy", "Pablo" ↔ "Don Pablo"); two
- *    different titles never match ("Mr. Bennet" ≠ "Mrs. Bennet"), and a female title before a
- *    single name is a family name, so "Bingley" is not "Miss Bingley" (she may be his sister);
- * 3. an untitled single word matching the last word ("Golfín" → "Teodoro Golfín") or the first
+ * 2. the same name with and without a title ("Darcy" ↔ "Mr. Darcy"); two different titles never
+ *    match ("Mr. Bennet" ≠ "Mrs. Bennet"), and a female title before a single name is a family
+ *    name, so "Bingley" is not "Miss Bingley" (she may be his sister);
+ * 3. an untitled single word matching the last word ("Harker" → "Jonathan Harker") or the first
  *    word ("Amy" → "Amy Elliott") of a multi-word name, or the reverse; a full name with another
- *    first name is someone else ("Carlos Golfín" is not "Golfín" known as "Teodoro Golfín").
+ *    first name is someone else ("Mina Harker" is not "Harker" known as "Jonathan Harker").
  * Rules 2 and 3 need exactly one candidate. See namesOf for the narrator and unknown speaker.
  */
 export function matchCast(name: string, cast: readonly CastEntry[]): CastEntry | undefined {
@@ -122,4 +126,12 @@ export function matchCast(name: string, cast: readonly CastEntry[]): CastEntry |
     });
   });
   return unique(partial);
+}
+
+/** The cast entry of the first of `names` that matches one (see matchCast). */
+export function matchAnyName(
+  names: readonly string[],
+  cast: readonly CastEntry[],
+): CastEntry | undefined {
+  return names.map((n) => matchCast(n, cast)).find((e) => e !== undefined);
 }

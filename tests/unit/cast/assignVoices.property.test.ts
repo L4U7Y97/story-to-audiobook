@@ -33,7 +33,7 @@ const deviceVoices = fc.uniqueArray(
   fc.record(
     {
       name: fc.constantFrom(...VOICE_NAMES),
-      lang: fc.constantFrom('en-US', 'en-GB', 'en_AU', 'es-ES'),
+      lang: fc.constantFrom('en-US', 'en-GB', 'en_AU', 'fr-FR'),
       isDefault: fc.boolean(),
       network: fc.boolean(),
     },
@@ -74,7 +74,7 @@ const CAST_KINDS = ['none', 'fresh', 'voiced', 'pitched'] as const;
  */
 function castBefore(kind: (typeof CAST_KINDS)[number], voices: DeviceVoice[], locale: string) {
   if (kind === 'none') return [];
-  const fresh = baseCast('en');
+  const fresh = baseCast();
   if (kind === 'fresh') return fresh;
   const voiced = fresh.map((c) => ({ ...c, voice: assignVoice(c, [], voices, locale) }));
   if (kind === 'voiced') return voiced;
@@ -157,8 +157,8 @@ describe('assignVoices (property)', () => {
   it('gives one member the same voice whatever else it carries, and never the manual mark', () => {
     fc.assert(
       fc.property(newCharacters, deviceVoices, (characters, voices) => {
-        const [first, ...rest] = assignVoices(characters, baseCast('en'), voices, 'en-US');
-        const cast = [...baseCast('en'), ...rest];
+        const [first, ...rest] = assignVoices(characters, baseCast(), voices, 'en-US');
+        const cast = [...baseCast(), ...rest];
         const { id, role } = first!;
         const again = assignVoice({ id, role, ...cleanTraits(first!) }, cast, voices, 'en-US');
         const marked = { ...first!, voice: { ...first!.voice, manual: true as const } };

@@ -1,5 +1,5 @@
 import type { Mode, Segment } from '@/format/types';
-import { startsParagraph } from './units';
+import { isBlank, joinLeadingBlank, OPENING_QUOTE } from './units';
 
 /**
  * Which lines a manual change covers: the tapped line; it and the later lines of its speaker;
@@ -8,18 +8,13 @@ import { startsParagraph } from './units';
  */
 export type ReassignScope = 'line' | 'following' | 'part' | { through: number };
 
-export interface ReassignOptions {
+interface ReassignOptions {
   narratorId: string;
   /** Scope 'line' only. Undefined = defaultMode. */
   mode?: Mode;
   /** Defaults to 'line'. */
   scope?: ReassignScope;
 }
-
-const NON_WHITESPACE = /\S/u;
-/** Quote marks that open speech, including the Spanish » that reopens it in a new paragraph. */
-const OPENING_QUOTE = /^[“«»"‘']/u;
-const DIALOGUE_DASH = /^(?:--|[—―–])/u;
 
 /**
  * Gives segment `index` to `speakerId` as a user correction, then joins neighbours in the same
@@ -54,18 +49,6 @@ export function reassignSegments(
   );
 }
 
-/** reassignSegments with scope 'line'. */
-export function reassignSegment(
-  text: string,
-  segments: readonly Segment[],
-  index: number,
-  speakerId: string,
-  narratorId: string,
-  mode?: Mode,
-): Segment[] {
-  return reassignSegments(text, segments, index, speakerId, { narratorId, mode });
-}
-
 /**
  * The mode a line gets when it is given to `speakerId` without an explicit choice: how it reads
  * for anyone (modeForAnyone). Other narration stays narration for the narrator or for someone who
@@ -86,8 +69,8 @@ export function defaultMode(
 
 /**
  * How line `index` reads whoever it is given to: speech, thoughts and writing keep their mode,
- * and narration that opens like dialogue (a quote mark, or a dash starting its paragraph) is
- * speech. Undefined for other narration, which depends on who reads it (see defaultMode).
+ * and narration that opens like dialogue (a quote mark) is speech. Undefined for other
+ * narration, which depends on who reads it (see defaultMode).
  */
 export function modeForAnyone(
   text: string,
@@ -97,7 +80,7 @@ export function modeForAnyone(
   const target = segments[index];
   if (!target) return undefined;
   if (target.mode !== 'narration') return target.mode;
-  return opensLikeDialogue(text, target) ? 'speech' : undefined;
+  return OPENING_QUOTE.test(text.slice(target.start, target.end)) ? 'speech' : undefined;
 }
 
 /**
@@ -183,17 +166,6 @@ function scopeRange(
 }
 
 /**
- * Narration that starts with a quote mark, or with a dash at the start of its paragraph (as
- * splitUnits finds paragraphs). A dash after speech in the same paragraph opens the narration of
- * an inciso ('—Hola —dijo Ana.'), also when a hard wrap puts it at the start of a line.
- */
-function opensLikeDialogue(text: string, s: Segment): boolean {
-  const body = text.slice(s.start, s.end).trimStart();
-  if (OPENING_QUOTE.test(body)) return true;
-  return DIALOGUE_DASH.test(body) && startsParagraph(text, s.end - body.length);
-}
-
-/**
  * Cuts segments at the given sorted offsets. A piece of whitespace only joins the piece before
  * it (or the next one at the very start), so no piece is left without words.
  */
@@ -212,12 +184,7 @@ function cutAt(text: string, segments: readonly Segment[], edges: readonly numbe
       else pieces.push(piece);
     }
   }
-  if (pieces.length > 1 && isBlank(text, pieces[0]!)) {
-    const [first, second] = pieces as [Segment, Segment];
-    second.start = first.start;
-    pieces.shift();
-  }
-  return pieces;
+  return joinLeadingBlank(text, pieces);
 }
 
 /** The stretch from a segment's first to its last non-whitespace character (all of it if blank). */
@@ -226,8 +193,4 @@ function wordsOf(text: string, s: Segment): [number, number] {
   const from = s.start + body.length - body.trimStart().length;
   const to = s.end - (body.length - body.trimEnd().length);
   return from < to ? [from, to] : [s.start, s.end];
-}
-
-function isBlank(text: string, s: Segment): boolean {
-  return !NON_WHITESPACE.test(text.slice(s.start, s.end));
 }

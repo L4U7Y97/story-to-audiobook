@@ -8,10 +8,10 @@ import type { DeviceVoice } from '@/playback/engine';
 import { baseCast } from '../../helpers/fixtures';
 
 const voices: DeviceVoice[] = [
-  { name: 'es-default', lang: 'es-ES', isDefault: true },
-  { name: 'es-two', lang: 'es-US' },
-  { name: 'es-cloud', lang: 'es-ES', network: true },
-  { name: 'en-one', lang: 'en-GB' },
+  { name: 'en-default', lang: 'en-US', isDefault: true },
+  { name: 'en-two', lang: 'en-GB' },
+  { name: 'en-cloud', lang: 'en-US', network: true },
+  { name: 'fr-one', lang: 'fr-FR' },
 ];
 
 const newChar = (id: string, gender?: Character['gender']) => ({
@@ -26,24 +26,24 @@ const combo = (c: Character) => `${c.voice.voiceName}|${c.voice.pitch}|${c.voice
 
 describe('assignVoice', () => {
   it('gives the narrator the default voice at neutral pitch and rate', () => {
-    expect(assignVoice({ id: 'n', role: 'narrator' }, [], voices, 'es-ES')).toEqual({
-      voiceName: 'es-default',
-      lang: 'es-ES',
+    expect(assignVoice({ id: 'n', role: 'narrator' }, [], voices, 'en-US')).toEqual({
+      voiceName: 'en-default',
+      lang: 'en-US',
       pitch: 1,
       rate: 1,
     });
   });
 
   it('gives characters an offline voice of the story language other than the narrator’s', () => {
-    const v = assignVoice({ id: 'c', role: 'character' }, [], voices, 'es-ES');
-    expect(v.voiceName).toBe('es-two');
-    expect(v.lang).toBe('es-US');
+    const v = assignVoice({ id: 'c', role: 'character' }, [], voices, 'en-US');
+    expect(v.voiceName).toBe('en-two');
+    expect(v.lang).toBe('en-GB');
   });
 
   it('falls back to the story locale with no matching voices', () => {
-    const v = assignVoice({ id: 'c', role: 'character' }, [], [], 'es-ES');
+    const v = assignVoice({ id: 'c', role: 'character' }, [], [], 'en-US');
     expect(v.voiceName).toBeUndefined();
-    expect(v.lang).toBe('es-ES');
+    expect(v.lang).toBe('en-US');
   });
 
   it('pitches female characters higher than male ones on average', () => {
@@ -57,15 +57,15 @@ describe('assignVoice', () => {
   });
 
   it('is deterministic', () => {
-    const a = assignVoice({ id: 'x', role: 'character' }, [], voices, 'es-ES');
-    expect(assignVoice({ id: 'x', role: 'character' }, [], voices, 'es-ES')).toEqual(a);
+    const a = assignVoice({ id: 'x', role: 'character' }, [], voices, 'en-US');
+    expect(assignVoice({ id: 'x', role: 'character' }, [], voices, 'en-US')).toEqual(a);
   });
 });
 
 describe('assignVoices', () => {
   it('keeps every (voice, pitch, rate) distinct with one device voice and ten characters', () => {
     const oneVoice: DeviceVoice[] = [{ name: 'only', lang: 'en-US', isDefault: true }];
-    const cast = baseCast('en').map((c) => ({
+    const cast = baseCast().map((c) => ({
       ...c,
       voice: assignVoice(c, [], oneVoice, 'en-US'),
     }));
@@ -84,11 +84,11 @@ describe('assignVoices', () => {
   it('rotates characters through the available voices', () => {
     const added = assignVoices(
       [newChar('a'), newChar('b'), newChar('c')],
-      baseCast('es'),
-      [...voices, { name: 'es-three', lang: 'es-MX' }],
-      'es-ES',
+      baseCast(),
+      [...voices, { name: 'en-three', lang: 'en-AU' }],
+      'en-US',
     );
-    expect(added.map((c) => c.voice.voiceName)).toEqual(['es-two', 'es-three', 'es-two']);
+    expect(added.map((c) => c.voice.voiceName)).toEqual(['en-two', 'en-three', 'en-two']);
   });
 });
 
@@ -118,7 +118,7 @@ const namesFor = (count: number, traits: Traits, deviceVoices: DeviceVoice[]) =>
   voiceNames(
     assignVoices(
       ids(count).map((id) => ({ ...newChar(id), ...traits })),
-      baseCast('en'),
+      baseCast(),
       deviceVoices,
       'en-US',
     ),
@@ -128,7 +128,7 @@ describe('assignVoice with traits: the voice', () => {
   const mixed = [en('en-a', true), en('en-b'), en(DAVID), en(ZIRA)];
 
   it('gives a character a voice of its gender rather than an unknown or opposite one', () => {
-    const cast = baseCast('en');
+    const cast = baseCast();
     expect(assignVoice(member('f', { gender: 'female' }), cast, mixed, 'en-US').voiceName).toBe(
       ZIRA,
     );
@@ -162,7 +162,7 @@ describe('assignVoice with traits: the voice', () => {
     const voices = [en(ZIRA, true), en(DAVID)];
     const women = assignVoices(
       ids(8).map((id) => newChar(id, 'female')),
-      baseCast('en'),
+      baseCast(),
       voices,
       'en-US',
     );
@@ -171,16 +171,16 @@ describe('assignVoice with traits: the voice', () => {
     expect(women.every((c) => Math.abs(cents(c.voice.pitch) - 100) >= 10)).toBe(true);
     // There a woman is pitched as on an unknown voice (1.15), not nearer to neutral (1.10).
     const alone = ids(30).map((id) =>
-      assignVoice(member(id, { gender: 'female' }), baseCast('en'), voices, 'en-US'),
+      assignVoice(member(id, { gender: 'female' }), baseCast(), voices, 'en-US'),
     );
     expect(Math.max(...alone.map((v) => v.pitch))).toBe(1.25);
-    expect(
-      assignVoice(member('m', { gender: 'male' }), baseCast('en'), voices, 'en-US'),
-    ).toMatchObject({ voiceName: DAVID });
+    expect(assignVoice(member('m', { gender: 'male' }), baseCast(), voices, 'en-US')).toMatchObject(
+      { voiceName: DAVID },
+    );
   });
 
   it('keeps its distance from a narrator who does not read at pitch 1', () => {
-    const [narrator, unknown] = baseCast('en');
+    const [narrator, unknown] = baseCast();
     const cast = [
       { ...narrator!, voice: { voiceName: ZIRA, lang: 'en-US', pitch: 1.15, rate: 1 } },
       unknown!,
@@ -207,7 +207,7 @@ describe('assignVoice with traits: the voice', () => {
   });
 
   it('reads the narrator’s voice from the cast, substituted as on playback', () => {
-    const [narrator, unknown] = baseCast('en');
+    const [narrator, unknown] = baseCast();
     const voices = [en('en-a', true), en('en-b'), en('en-c')];
     const onB = [{ ...narrator!, voice: { ...narrator!.voice, voiceName: 'en-b' } }, unknown!];
     expect(assignVoice(member('c'), onB, voices, 'en-US').voiceName).toBe('en-a');
@@ -223,7 +223,7 @@ describe('assignVoice with traits: the voice', () => {
     const voices = [en('en-a', true), en(DAVID), en(ZIRA)];
     const boy = assignVoice(
       member('boy', { gender: 'male', age: 'child' }),
-      baseCast('en'),
+      baseCast(),
       voices,
       'en-US',
     );
@@ -280,8 +280,8 @@ describe('assignVoice with traits: the voice', () => {
     const unknown = { id: 'u', role: 'unknown' as const };
     const traits: Traits = { gender: 'female', age: 'child', species: 'machine', size: 'small' };
     const voices = [en('en-a', true), en('en-b'), en(ZIRA), en(ZARVOX)];
-    expect(assignVoice({ ...unknown, ...traits }, baseCast('en'), voices, 'en-US')).toEqual(
-      assignVoice(unknown, baseCast('en'), voices, 'en-US'),
+    expect(assignVoice({ ...unknown, ...traits }, baseCast(), voices, 'en-US')).toEqual(
+      assignVoice(unknown, baseCast(), voices, 'en-US'),
     );
     // It stays a little above neutral (1.1), as it always was.
     const pitches = ids(30).map((id) =>
@@ -344,7 +344,7 @@ describe('assignVoice with traits: pitch and rate', () => {
   // The narrator reads with a cloud voice, which characters never get: `on` is free of it.
   const cloud: DeviceVoice = { name: 'en-cloud', lang: 'en-US', network: true };
   const narratorOnCloud: Character[] = [
-    { ...baseCast('en')[0]!, voice: { voiceName: cloud.name, lang: 'en-US', pitch: 1, rate: 1 } },
+    { ...baseCast()[0]!, voice: { voiceName: cloud.name, lang: 'en-US', pitch: 1, rate: 1 } },
   ];
   /** The same, on the only offline voice of a device. */
   const on = (voice: string, id: string, traits: Traits = {}) =>
@@ -500,7 +500,7 @@ describe('assignVoice with traits: pitch and rate', () => {
   it('keeps members without age, size or species inside 0.75–1.3, however many there are', () => {
     const crowd = assignVoices(
       ids(60).map((id, i) => newChar(id, (['male', 'female', 'other', undefined] as const)[i % 4])),
-      baseCast('en'),
+      baseCast(),
       [en(ZIRA, true)],
       'en-US',
     );
@@ -525,7 +525,7 @@ describe('assignVoice with traits: pitch and rate', () => {
     const voices = [en('en-a', true), en(ZIRA), en(DAVID), en(ANA), en(GRANDPA), en(ZARVOX)];
     const cast = assignVoices(
       all.map((traits, i) => ({ ...newChar(`t${i}`), ...traits })),
-      baseCast('en'),
+      baseCast(),
       voices,
       'en-US',
     );
@@ -546,13 +546,13 @@ describe('assignVoice with traits: pitch and rate', () => {
     const odd = { gender: 'robot', age: 'ancient', species: 'alien', size: 7 } as unknown as Traits;
     const voices = [en('en-a', true), en('en-b'), en(ZIRA), en(ZARVOX)];
     for (const id of ids(5)) {
-      const voice = assignVoice(member(id, odd), baseCast('en'), voices, 'en-US');
-      expect(voice).toStrictEqual(assignVoice(member(id), baseCast('en'), voices, 'en-US'));
+      const voice = assignVoice(member(id, odd), baseCast(), voices, 'en-US');
+      expect(voice).toStrictEqual(assignVoice(member(id), baseCast(), voices, 'en-US'));
       expect(Number.isNaN(voice.pitch) || Number.isNaN(voice.rate)).toBe(false);
     }
     // One good value among bad ones still counts.
     const mixed = { ...odd, gender: 'female' } as Traits;
-    expect(assignVoice(member('x', mixed), baseCast('en'), voices, 'en-US').voiceName).toBe(ZIRA);
+    expect(assignVoice(member('x', mixed), baseCast(), voices, 'en-US').voiceName).toBe(ZIRA);
     // A bad age does not widen the pitch range as a real one would.
     const ancient = { gender: 'male', age: 'ancient' } as unknown as Traits;
     for (const id of ids(10)) {
@@ -620,7 +620,7 @@ describe('assignVoice with traits: pitch and rate', () => {
         for (const b of men.filter((id) => id !== a)) {
           const pair = assignVoices(
             [newChar(a, 'male'), newChar(b, 'male')],
-            baseCast('en'),
+            baseCast(),
             windows,
             'en-US',
           );
@@ -700,24 +700,24 @@ describe('assignVoice with traits: pitch and rate', () => {
 
   it('never gives a character the very voice, pitch and rate the unknown speaker is heard with', () => {
     // As createStory stores them: no voice name, so both speak with the device's best voice.
-    const [narrator, unknown] = baseCast('es');
-    const cast = [narrator!, { ...unknown!, voice: { lang: 'es-ES', pitch: 1.15, rate: 1 } }];
+    const [narrator, unknown] = baseCast();
+    const cast = [narrator!, { ...unknown!, voice: { lang: 'en-US', pitch: 1.15, rate: 1 } }];
     const android: DeviceVoice[] = [
-      { name: 'es-es-x-eee-local', lang: 'es-ES' },
-      { name: 'es-es-x-eed-local', lang: 'es-ES' },
+      { name: 'en-us-x-tpc-local', lang: 'en-US' },
+      { name: 'en-us-x-iom-local', lang: 'en-US' },
     ];
     const heardAs = resolveVoice(cast[1]!.voice, android).voiceName;
-    expect(heardAs).toBe('es-es-x-eee-local');
-    // "la osa": slower for her size, faster for her kind, which can add up to rate 1.
+    expect(heardAs).toBe('en-us-x-tpc-local');
+    // "the she-bear": slower for her size, faster for her kind, which can add up to rate 1.
     const bear: Traits = { gender: 'female', species: 'animal', size: 'large' };
-    const picks = ids(200, 'c').map((id) => assignVoice(member(id, bear), cast, android, 'es-ES'));
+    const picks = ids(200, 'c').map((id) => assignVoice(member(id, bear), cast, android, 'en-US'));
     expect(picks.every((v) => v.voiceName === heardAs)).toBe(true);
     expect(picks.filter((v) => cents(v.pitch) === 115 && cents(v.rate) === 100)).toEqual([]);
   });
 
   it('never gives the narrator the very voice, pitch and rate the unknown speaker is heard with', () => {
     // As createStory stores them: no voice name, so the unknown speaker has the default voice.
-    const [narrator, unknown] = baseCast('en');
+    const [narrator, unknown] = baseCast();
     const cast = [narrator!, { ...unknown!, voice: { lang: 'en-US', pitch: 1.15, rate: 1 } }];
     const deviceVoices = [en(ZIRA, true)];
     // A girl of a fantasy kind on a woman's voice: 1.25 for the child, 0.10 lower for her kind.
@@ -771,12 +771,12 @@ describe('repickVoice', () => {
     );
     const voice = repickVoice(
       lady,
-      [...baseCast('en'), lady],
+      [...baseCast(), lady],
       [en('en-a', true), en(DAVID), en(ZIRA)],
       'en-US',
     );
     expect(voice).toStrictEqual(
-      assignVoice(lady, baseCast('en'), [en('en-a', true), en(DAVID), en(ZIRA)], 'en-US'),
+      assignVoice(lady, baseCast(), [en('en-a', true), en(DAVID), en(ZIRA)], 'en-US'),
     );
     expect(voice.voiceName).toBe(ZIRA);
     expect(Object.keys(voice)).not.toContain('manual');
@@ -787,7 +787,7 @@ describe('repickVoice', () => {
       { gender: 'female' },
       { voiceName: ZIRA, lang: 'en-GB', pitch: 2, rate: 2, manual: true },
     );
-    for (const deviceVoices of [[], [{ name: 'es-x', lang: 'es-ES' }]]) {
+    for (const deviceVoices of [[], [{ name: 'fr-x', lang: 'fr-FR' }]]) {
       const voice = repickVoice(lady, [lady], deviceVoices, 'en-US');
       expect(Object.keys(voice)).toEqual(['voiceName', 'lang', 'pitch', 'rate']);
       expect(voice).toMatchObject({ voiceName: ZIRA, lang: 'en-GB' });
@@ -853,14 +853,14 @@ describe('repickVoice', () => {
   it('ignores the member’s own current voice', () => {
     const deviceVoices = [en('en-a', true), en('en-b'), en('en-c')];
     for (const id of ids(10)) {
-      const first = assignVoice({ id, role: 'character' }, baseCast('en'), deviceVoices, 'en-US');
+      const first = assignVoice({ id, role: 'character' }, baseCast(), deviceVoices, 'en-US');
       const c: Character = { id, role: 'character', name: 'C', aliases: [], voice: first };
-      expect(repickVoice(c, [...baseCast('en'), c], deviceVoices, 'en-US')).toStrictEqual(first);
+      expect(repickVoice(c, [...baseCast(), c], deviceVoices, 'en-US')).toStrictEqual(first);
     }
   });
 
   it('keeps a narrator without traits at neutral pitch and rate even when a character holds them', () => {
-    const [narrator, unknown] = baseCast('en');
+    const [narrator, unknown] = baseCast();
     const twin = { ...newChar('twin'), voice: { lang: 'en-US', pitch: 1, rate: 1 } };
     expect(repickVoice(narrator!, [narrator!, unknown!, twin], [], 'en-US')).toStrictEqual({
       lang: 'en-US',

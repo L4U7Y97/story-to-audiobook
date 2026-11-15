@@ -2,7 +2,7 @@
 
 export const SCHEMA_VERSION = 1;
 
-export type Lang = 'en' | 'es';
+export type Lang = 'en';
 
 /** written = letters, signs, notes read aloud */
 export type Mode = 'narration' | 'speech' | 'thought' | 'written';

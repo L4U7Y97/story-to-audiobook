@@ -26,8 +26,8 @@ const words = (list: string) => list.split(' ').filter(Boolean);
 // is worse than none.
 
 const GENDER_WORDS = new Map<string, VoiceGender>([
-  ...words('female woman mujer femenina femenino').map((w) => [w, 'female'] as const),
-  ...words('male man hombre masculino masculina').map((w) => [w, 'male'] as const),
+  ...words('female woman').map((w) => [w, 'female'] as const),
+  ...words('male man').map((w) => [w, 'male'] as const),
 ]);
 
 function androidVoices(locale: string, female: string, male: string): Array<[string, VoiceGender]> {
@@ -39,15 +39,13 @@ function androidVoices(locale: string, female: string, male: string): Array<[str
   ];
 }
 
-/** Google's Android voices, as "locale-x-code" or "locale-language". No es-MX voice is known. */
+/** Google's Android voices, as "locale-x-code" or "locale-language". */
 const ANDROID_VOICES = new Map<string, VoiceGender>([
   ...androidVoices('en-us', 'tpc iob iog tpf sfg', 'iom iol tpd'),
   ...androidVoices('en-gb', 'gba gbc gbg fis', 'rjs gbb gbd'),
   ...androidVoices('en-au', 'aua auc afh', 'aub aud'),
   ...androidVoices('en-in', 'ena enc ahp cxx', 'end ene'),
   ...androidVoices('en-ng', 'tfn', ''),
-  ...androidVoices('es-es', 'eee eea eec ana', 'eed eef'),
-  ...androidVoices('es-us', 'esc sfb', 'esd esf'),
 ]);
 
 // The name may follow an engine name ("… from Google en-us-x-tpc-network", Chrome OS), and older
@@ -71,41 +69,36 @@ const CHROME_VOICES = new Map<string, VoiceGender>([
   ['google us english', 'female'],
   ['google uk english female', 'female'],
   ['google uk english male', 'male'],
-  ['google espanol', 'male'],
-  ['google espanol de estados unidos', 'female'],
   ...numbered('google us english', [1, 2, 5, 7], [3, 4, 6]),
   ...numbered('chrome os us english', [1, 2, 5, 7, 8], [3, 4, 6]),
   ...numbered('google uk english', [2, 4, 6], [1, 3, 5]),
   ...numbered('chrome os uk english', [7], []),
   ...numbered('google australian english', [1, 3], [2, 4]),
   ...numbered('chrome os australian english', [], [5]),
-  ...numbered('google espanol', [1, 2, 4], [3, 5]),
-  ...numbered('google espanol de estados unidos', [1, 2], [3, 4]),
 ]);
 
 // First names of Microsoft (classic and "Online (Natural)") and Apple (standard, Siri, legacy
-// MacinTalk, Eloquence) voices for English and Spanish, accents removed. A name several engines
-// use has the same gender in all of them.
+// MacinTalk, Eloquence) voices for English, accents removed. A name several engines use has the
+// same gender in all of them.
 const FEMALE_NAMES =
-  'zira hazel susan catherine linda heera helena laura sabina hayley heather hilda ' +
+  'zira hazel susan catherine linda heera hayley heather ' +
   'aria jenny michelle emma ava sonia libby natasha clara neerja emily leah molly yan luna ' +
-  'asilia ezinne rosa imani elvira dalia paloma elena sofia catalina salome ximena maria ' +
-  'belkys ramona andrea lorena teresa marta karla yolanda margarita tania camila karina ' +
-  'valentina paola samantha allison nicky zoe victoria vicki agnes kate serena martha ' +
-  'stephanie fiona karen matilda moira tessa veena isha sangeeta tara monica marisol ' +
-  'paulina angelica isabela francisca soledad jimena kathy shelley flo sandy';
+  'asilia ezinne rosa imani ' +
+  'samantha allison nicky zoe victoria vicki agnes kate serena martha ' +
+  'stephanie fiona karen matilda moira tessa veena isha sangeeta tara ' +
+  'kathy shelley flo sandy';
 const MALE_NAMES =
-  'david mark george james richard ravi sean pablo raul guy eric steffan christopher roger ' +
+  'david mark george james richard ravi sean guy eric steffan christopher roger ' +
   'andrew brian ryan thomas william liam prabhat connor luke mitchell sam wayne chilemba ' +
-  'abeo elimu alvaro jorge alonso tomas marcelo lorenzo gonzalo juan manuel emilio luis ' +
-  'rodrigo javier andres carlos federico roberto mario alex victor mateo sebastian tom ' +
-  'aaron evan nathan bruce daniel oliver arthur jamie lee gordon rishi aman diego fred ' +
+  'abeo elimu ' +
+  'alex tom ' +
+  'aaron evan nathan bruce daniel oliver arthur jamie lee gordon rishi aman fred ' +
   'ralph reed eddy rocko';
 
 const KNOWN_NAMES = new Map<string, KnownName>([
   ...words(FEMALE_NAMES).map((name): [string, KnownName] => [name, { gender: 'female' }]),
   ...words(MALE_NAMES).map((name): [string, KnownName] => [name, { gender: 'male' }]),
-  // Ana is Microsoft's en-US child voice; on a Spanish voice it is just a common woman's name.
+  // Ana is Microsoft's en-US child voice; in another language it is just a common woman's name.
   ['ana', { gender: 'female', age: 'child', lang: 'en' }],
   ['maisie', { gender: 'female', age: 'child' }],
   ['joelle', { gender: 'female', age: 'child' }],
@@ -118,15 +111,15 @@ const KNOWN_NAMES = new Map<string, KnownName>([
 const MULTILINGUAL = 'multilingual';
 
 /**
- * The macOS novelty voices with letters only: English and Spanish display names, former names
- * (Pipe Organ, Princess) and the identifier suffixes that differ from the name (Deranged is
- * Wobble, Hysterical is Jester). None of them is treated as a gendered voice.
+ * The macOS novelty voices with letters only: English display names, former names (Pipe Organ,
+ * Princess) and the identifier suffixes that differ from the name (Deranged is Wobble, Hysterical
+ * is Jester). None of them is treated as a gendered voice.
  */
 const NOVELTY_VOICES = new Set(
   words(
-    'zarvox trinoids cellos violonchelos goodnews buenasnoticias badnews malasnoticias organ ' +
-      'organo pipeorgan bells campanas boing bubbles burbujas bahh wobble deranged whisper ' +
-      'susurro albert jester bufon hysterical superstar superestrella princess',
+    'zarvox trinoids cellos goodnews badnews organ ' +
+      'pipeorgan bells boing bubbles bahh wobble deranged whisper ' +
+      'albert jester hysterical superstar princess',
   ),
 );
 const ROBOTIC_VOICES = new Set(['zarvox', 'trinoids']);
@@ -147,7 +140,7 @@ export function voiceProfile(voice: Pick<DeviceVoice, 'name' | 'lang'>): VoicePr
   // Tokens are runs of letters, so "female" is one token and never reads as "male".
   const tokens = name.split(/[^\p{L}]+/u).filter(Boolean);
   const android = ANDROID_NAME.exec(name)?.[1];
-  // An Android name is made of codes, not words: "es-es-x-ana-local" is not the voice Ana.
+  // An Android name is made of codes, not words.
   const known = android ? undefined : knownName(tokens, language(voice.lang));
   const gender =
     explicitGender(name, tokens) ??
@@ -159,7 +152,7 @@ export function voiceProfile(voice: Pick<DeviceVoice, 'name' | 'lang'>): VoicePr
   return profile;
 }
 
-/** Lower-case and without accents, so that "Mónica" and "Monica" are the same name. */
+/** Lower-case and without accents, so that "Zoë" and "Zoe" are the same name. */
 function fold(name: string): string {
   return name
     .normalize('NFD')
@@ -199,8 +192,8 @@ function chromeGender(name: string): VoiceGender | undefined {
     .replace(/\s*\(natural\)$/, '')
     .replace(/\s+/g, ' ')
     .trim();
-  // A numbered voice is looked up as such first: "Google español 4" is female, "Google español"
-  // male. A number the table lacks is read as the unnumbered voice.
+  // A numbered voice is looked up as such first: "Google US English 3" is male, "Google US
+  // English" female. A number the table lacks is read as the unnumbered voice.
   return CHROME_VOICES.get(plain) ?? CHROME_VOICES.get(plain.replace(/ \d+$/, ''));
 }
 

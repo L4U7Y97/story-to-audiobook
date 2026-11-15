@@ -20,13 +20,12 @@ describe('cost', () => {
   });
 
   it('estimates a chapter from the requests the analysis will send', () => {
-    const { text, labels } = loadFixture('en/pride-ch1');
-    const units = splitUnits(text, labels.lang);
+    const { text } = loadFixture('en/pride-ch1');
+    const units = splitUnits(text);
     const e = estimateCost({
       text,
-      lang: 'en',
       units,
-      cast: baseCast('en'),
+      cast: baseCast(),
       model: 'claude-haiku-5-5',
     });
     expect(e.requests).toBe(1);
@@ -43,15 +42,14 @@ describe('cost', () => {
 
   it('counts the cast lines the run sends, the narrator style included', async () => {
     const text = '“Hi,” I said.\n\nIt rained.';
-    const units = splitUnits(text, 'en');
-    const cast = baseCast('en');
+    const units = splitUnits(text);
+    const cast = baseCast();
     const model = 'claude-haiku-5-5';
     const sent = async (narratorStyle?: NarratorStyle) => {
       const transport = fakeTransport(({ units: u }) => labelAll(u, 'N'));
-      const heuristic = analyzeHeuristic({ text, lang: 'en', units, cast });
+      const heuristic = analyzeHeuristic({ text, units, cast });
       await analyzeLlm({
         text,
-        lang: 'en',
         units,
         cast,
         heuristic,
@@ -63,7 +61,7 @@ describe('cost', () => {
       return transport.calls[0]!.request.user;
     };
     const estimate = (narratorStyle?: NarratorStyle) =>
-      estimateCost({ text, lang: 'en', units, cast, model, narratorStyle }).inputTokens;
+      estimateCost({ text, units, cast, model, narratorStyle }).inputTokens;
 
     const firstPerson = await sent('first person');
     expect(firstPerson).toContain('\nN: the narrator (first person)\n');

@@ -11,7 +11,7 @@ export interface PlannedUtterance extends Utterance {
 
 /**
  * The utterances to speak for a part from a segment onwards. Text is cleaned for speech here
- * (markup underscores, dialogue dashes, hard wraps) — the stored text is never touched.
+ * (markup underscores, dashes, hard wraps) — the stored text is never touched.
  */
 export function buildUtterances(
   part: Pick<Part, 'text'>,
@@ -45,8 +45,7 @@ export function segmentIndexOf(utteranceId: string): number {
 export function cleanForSpeech(text: string): string {
   return text
     .replace(/_/gu, '') // Gutenberg-style _italics_
-    .replace(/(^|\s)(?:--+|[—―–])|(?:--+|[—―–])(?=\s|$)/gu, '$1') // dialogue dashes
-    .replace(/--+|[—―]/gu, ', ') // dashes inside a sentence: a short pause
+    .replace(/--+|[—―]/gu, ', ') // dashes: a short pause
     .replace(/\s+/gu, ' ')
     .trim();
 }
@@ -54,7 +53,7 @@ export function cleanForSpeech(text: string): string {
 /** Splits at sentence ends, then clause punctuation, then spaces, keeping chunks ≤ max. */
 export function chunkText(text: string, max: number): string[] {
   if (text.length <= max) return [text];
-  const sentences = text.match(/[^.!?…]+(?:[.!?…]+["”»’)]*\s*|$)/gu) ?? [text];
+  const sentences = text.match(/[^.!?…]+(?:[.!?…]+["”’)]*\s*|$)/gu) ?? [text];
   const chunks: string[] = [];
   let current = '';
   for (const piece of sentences.flatMap((s) => splitLong(s, max))) {

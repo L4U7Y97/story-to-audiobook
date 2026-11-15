@@ -1,14 +1,12 @@
 // Short multi-part stories written for these tests, covering third person, first person,
 // alternating narrators, frame tales and letters (see heldout.ts). They were written apart from
 // the heuristic, but its first-person rules were then measured and tuned against them.
-// A few passages adapt public-domain novels (Bleak House, Dracula, Don Quixote) for their
-// narrator structure.
+// A few passages adapt public-domain novels (Bleak House, Dracula) for their narrator structure.
 // Each expectation names the PERSON who should voice the unit containing the needle's first
 // character. 'N' is the impersonal (third-person) narrator and must be the story's narrator entry.
 // Any other person may be voiced by any single cast id (the narrator entry or a character), but
 // every person needs their own id. `soft` marks status-quo-acceptable misses (a letter or a
 // character's unquoted tale read by the frame narrator): `alt` lists the acceptable fallback.
-import type { Lang } from '@/format/types';
 
 export interface Expect {
   needle: string;
@@ -25,7 +23,6 @@ export interface PartSpec {
 export interface StorySpec {
   id: string;
   scenario: string;
-  lang: Lang;
   /** Ordinary third-person story: any change is a false positive. */
   third: boolean;
   parts: PartSpec[];
@@ -42,7 +39,6 @@ export const STORIES: StorySpec[] = [
   {
     id: 'T1 pov heading + free direct thought',
     scenario: 'a',
-    lang: 'en',
     third: true,
     forbiddenNarratorAliases: ['Margaret'],
     parts: [
@@ -75,7 +71,6 @@ The door opened behind her.
   {
     id: 'T2 letter inside third person',
     scenario: 'a/e',
-    lang: 'en',
     third: true,
     forbiddenNarratorAliases: ['Jane', 'Lizzy'],
     parts: [
@@ -117,7 +112,6 @@ She folded it and put it in her pocket.
   {
     id: 'T3 intrusive "dear reader" narrator',
     scenario: 'g',
-    lang: 'en',
     third: true,
     forbiddenNarratorAliases: ['Becky'],
     parts: [
@@ -145,70 +139,8 @@ She folded it and put it in her pocket.
     ],
   },
   {
-    id: 'T4 es third person, subjectless tags',
-    scenario: 'a/f',
-    lang: 'es',
-    third: true,
-    parts: [
-      p(
-        `Ana y Pedro caminaban por la orilla del río, sin prisa, mirando cómo bajaba el agua.
-
-—¿Vienes conmigo mañana? —preguntó Ana.
-
-—No puedo —respondió.
-
-—¿Por qué no?
-
-—Tengo que trabajar —contestó, sin mirarla.
-
-—Siempre tienes que trabajar.`,
-        [
-          { needle: 'Ana y Pedro', who: 'N' },
-          { needle: '—¿Vienes conmigo', who: 'Ana' },
-          { needle: '—No puedo', who: 'Pedro' },
-          { needle: '—¿Por qué no?', who: 'Ana' },
-          { needle: '—Tengo que trabajar', who: 'Pedro' },
-          { needle: '—Siempre tienes', who: 'Ana' },
-        ],
-      ),
-    ],
-  },
-  {
-    id: 'T4b es third person, back-and-forth with subjectless tags',
-    scenario: 'a/f',
-    lang: 'es',
-    third: true,
-    parts: [
-      p(
-        `En la cocina, Julián se sentó junto al fuego, y Rosa le sirvió un plato de sopa sin decir nada.
-
-—¿Has visto a la niña? —preguntó Julián al cabo de un rato.
-
-—Esta mañana —respondió—. Iba hacia el río con su hermano.
-
-—¿Siempre van juntos?
-
-—Siempre.
-
-—¿Y no tiene miedo?
-
-—No tiene miedo de nada —contestó, y siguió fregando.`,
-        [
-          { needle: 'En la cocina', who: 'N' },
-          { needle: '—¿Has visto', who: 'Julián' },
-          { needle: '—Esta mañana', who: 'Rosa' },
-          { needle: '—¿Siempre van', who: 'Julián' },
-          { needle: '—Siempre.', who: 'Rosa' },
-          { needle: '—¿Y no tiene', who: 'Julián' },
-          { needle: '—No tiene miedo', who: 'Rosa' },
-        ],
-      ),
-    ],
-  },
-  {
     id: 'T5 chapter-name heading + interior monologue, 2 parts',
     scenario: 'a',
-    lang: 'en',
     third: true,
     forbiddenNarratorAliases: ['Anna', 'Tom'],
     parts: [
@@ -253,109 +185,11 @@ The market was crowded, and Tom lost sight of her twice before he found her at t
       ),
     ],
   },
-  {
-    id: 'T6 es letter inside third person',
-    scenario: 'a/e',
-    lang: 'es',
-    third: true,
-    forbiddenNarratorAliases: ['Andrés', 'Rosario'],
-    parts: [
-      p(
-        `Cuando Rosario volvió del mercado encontró una carta sobre la mesa de la cocina. La abrió de pie, sin quitarse el abrigo.
-
-Querida Rosario:
-
-Te escribo deprisa porque sale el correo. Estoy bien, aunque echo de menos la casa y a todos vosotros. No le digas nada a madre de lo que te conté.
-
-Tu hermano,
-Andrés
-
-Rosario guardó la carta en el bolsillo del delantal.
-
-—¿Qué dice? —preguntó su madre desde la puerta.
-
-—Que está bien —contestó Rosario.
-
-—¿Nada más?
-
-—Nada más.`,
-        [
-          { needle: 'Cuando Rosario', who: 'N' },
-          { needle: 'Querida Rosario', who: 'Andrés', soft: true, alt: 'N' },
-          { needle: 'Te escribo', who: 'Andrés', soft: true, alt: 'N' },
-          { needle: 'Tu hermano', who: 'Andrés', soft: true, alt: 'N' },
-          { needle: 'Rosario guardó', who: 'N' },
-          { needle: '—¿Qué dice?', who: 'Madre' },
-          { needle: '—Que está bien', who: 'Rosario' },
-          { needle: '—¿Nada más?', who: 'Madre' },
-          { needle: '—Nada más.', who: 'Rosario' },
-        ],
-      ),
-    ],
-  },
-  {
-    id: 'T7 es pov heading',
-    scenario: 'a',
-    lang: 'es',
-    third: true,
-    forbiddenNarratorAliases: ['Inés'],
-    parts: [
-      p(
-        `INÉS
-
-Inés se despertó tarde aquel domingo. Desde la ventana veía el patio, la higuera, el gato dormido sobre el muro.
-
-—¿Bajas a desayunar? —gritó su madre desde la escalera.
-
-—Ahora voy.
-
-—El café se enfría.
-
-—Ya voy, mamá.`,
-        [
-          { needle: 'INÉS', who: 'N' },
-          { needle: 'Inés se despertó', who: 'N' },
-          { needle: '—¿Bajas', who: 'Madre' },
-          { needle: '—Ahora voy', who: 'Inés' },
-          { needle: '—El café', who: 'Madre' },
-          { needle: '—Ya voy', who: 'Inés' },
-        ],
-      ),
-    ],
-  },
-  {
-    id: 'T8 es heading + free indirect first person',
-    scenario: 'a',
-    lang: 'es',
-    third: true,
-    forbiddenNarratorAliases: ['Carmen'],
-    parts: [
-      p(
-        `CARMEN
-
-Carmen cerró la puerta y se quedó quieta en el pasillo. No volveré, no volveré nunca. Me lo prometí y lo cumpliré, aunque me muera de hambre.
-
-—¿Carmen? —llamó su tía desde el salón—. ¿Eres tú?
-
-—Sí, tía.
-
-—Ven un momento.`,
-        [
-          { needle: 'CARMEN', who: 'N' },
-          { needle: 'Carmen cerró', who: 'N' },
-          { needle: '—¿Carmen?', who: 'Tía' },
-          { needle: '—Sí, tía', who: 'Carmen' },
-          { needle: '—Ven un momento', who: 'Tía' },
-        ],
-      ),
-    ],
-  },
 
   // ------------------------------------------------------------------ (b) one first-person narrator
   {
     id: 'B watson, named only by others, 2 parts',
     scenario: 'b',
-    lang: 'en',
     third: false,
     tellers: ['Watson'],
     parts: [
@@ -424,7 +258,6 @@ I knocked. A maid opened the door and looked at us with frightened eyes.
   {
     id: 'X1 third party addressed, narrator replies (no alias!)',
     scenario: 'b',
-    lang: 'en',
     third: false,
     tellers: ['I'],
     forbiddenNarratorAliases: ['Tom'],
@@ -464,7 +297,6 @@ I knocked. A maid opened the door and looked at us with frightened eyes.
   {
     id: 'X1b same, longer first-person opening',
     scenario: 'b',
-    lang: 'en',
     third: false,
     tellers: ['I'],
     forbiddenNarratorAliases: ['Tom'],
@@ -504,7 +336,6 @@ I knocked. A maid opened the door and looked at us with frightened eyes.
   {
     id: 'X4 observer narrator between two speakers',
     scenario: 'b',
-    lang: 'en',
     third: false,
     tellers: ['I'],
     parts: [
@@ -540,7 +371,6 @@ I looked from one to the other and wished I were somewhere else.
   {
     id: 'X2 "I am English," (not a name)',
     scenario: 'b',
-    lang: 'en',
     third: false,
     tellers: ['I'],
     forbiddenNarratorAliases: ['English'],
@@ -565,7 +395,6 @@ I looked from one to the other and wished I were somewhere else.
   {
     id: 'X3 place-name chapter heading',
     scenario: 'b',
-    lang: 'en',
     third: false,
     tellers: ['I'],
     forbiddenNarratorAliases: ['Thornfield'],
@@ -595,7 +424,6 @@ The carriage stopped at last, and a servant came out with a lantern to help me d
   {
     id: 'C alternating en: AMY / NICK / (no heading) Amy',
     scenario: 'c',
-    lang: 'en',
     third: false,
     tellers: ['Amy', 'Nick'],
     parts: [
@@ -676,60 +504,11 @@ At eleven the door opened.
       ),
     ],
   },
-  {
-    id: 'CE alternating es: MARTA / DIEGO',
-    scenario: 'c/f',
-    lang: 'es',
-    third: false,
-    tellers: ['Marta', 'Diego'],
-    parts: [
-      p(
-        `MARTA
-
-Aquel verano volví al pueblo después de diez años. Diego me esperaba en la estación, más delgado de lo que yo recordaba.
-
-—Has tardado —me dijo.
-
-—El tren venía lleno.
-
-—Siempre viene lleno.
-
-Le di la maleta y caminamos en silencio hasta la plaza.`,
-        [
-          { needle: 'MARTA', who: 'Marta' },
-          { needle: 'Aquel verano', who: 'Marta' },
-          { needle: '—Has tardado', who: 'Diego' },
-          { needle: '—El tren', who: 'Marta' },
-          { needle: '—Siempre viene', who: 'Diego' },
-          { needle: 'Le di la maleta', who: 'Marta' },
-        ],
-      ),
-      p(
-        `DIEGO
-
-Marta no había cambiado nada. Lo pensé mientras la miraba cruzar la plaza con aquella maleta absurda que se empeñó en llevar ella sola.
-
-—¿Quieres un café? —le pregunté.
-
-—Quiero dormir —contestó Marta.
-
-—Primero el café.`,
-        [
-          { needle: 'DIEGO', who: 'Diego' },
-          { needle: 'Marta no había', who: 'Diego' },
-          { needle: '—¿Quieres un café', who: 'Diego' },
-          { needle: '—Quiero dormir', who: 'Marta' },
-          { needle: '—Primero el café', who: 'Diego' },
-        ],
-      ),
-    ],
-  },
 
   // ------------------------------------------------------------------ (d) teller change inside a chapter
   {
     id: 'D1 frame, unquoted takeover with colon cue',
     scenario: 'd',
-    lang: 'en',
     third: false,
     tellers: ['Frame', 'Hale'],
     parts: [
@@ -768,7 +547,6 @@ Here Mrs. Hale stopped and looked at the fire, and I did not like to press her.
   {
     id: 'D2 frame, unquoted takeover without colon cue',
     scenario: 'd',
-    lang: 'en',
     third: false,
     tellers: ['Frame', 'Hale'],
     parts: [
@@ -807,7 +585,6 @@ Here Mrs. Hale stopped and looked at the fire, and I did not like to press her.
   {
     id: 'D3 quoted multi-paragraph tale in third person',
     scenario: 'd',
-    lang: 'en',
     third: true,
     parts: [
       p(
@@ -841,7 +618,6 @@ Nobody spoke for a while.
   {
     id: 'E dracula-like: journal, letter, diary',
     scenario: 'e',
-    lang: 'en',
     third: false,
     tellers: ['Jonathan', 'Mina', 'Seward'],
     parts: [
@@ -890,81 +666,10 @@ DR. SEWARD’S DIARY
     ],
   },
 
-  // ------------------------------------------------------------------ (f) Spanish first person
-  {
-    id: 'F es first person, pro-drop and "me preguntó"',
-    scenario: 'f',
-    lang: 'es',
-    third: false,
-    tellers: ['I'],
-    parts: [
-      p(
-        `Cuando llegué al hospital, mi hermano ya estaba despierto. Me senté junto a la cama y le cogí la mano.
-
-—¿Qué hora es? —me preguntó.
-
-—Las seis —respondí.
-
-—¿De la tarde?
-
-—De la mañana. Has dormido toda la noche.
-
-Entró una enfermera con una bandeja y nos miró a los dos.
-
-—Tiene que comer algo —dijo.
-
-—No tengo hambre —protestó mi hermano.
-
-—Come —le dije—. Hazlo por mí.`,
-        [
-          { needle: 'Cuando llegué', who: 'I' },
-          { needle: '—¿Qué hora es?', who: 'Hermano' },
-          { needle: '—Las seis', who: 'I' },
-          { needle: '—¿De la tarde?', who: 'Hermano' },
-          { needle: '—De la mañana', who: 'I' },
-          { needle: 'Entró una enfermera', who: 'I' },
-          { needle: '—Tiene que comer', who: 'Enfermera' },
-          { needle: '—No tengo hambre', who: 'Hermano' },
-          { needle: '—Come —le dije', who: 'I' },
-        ],
-      ),
-    ],
-  },
-
   // ------------------------------------------------------------------ (g) narrator outside the events / mixed
-  {
-    id: 'G1 es authorial "yo" outside the events',
-    scenario: 'g',
-    lang: 'es',
-    third: true,
-    parts: [
-      p(
-        `En un lugar de la Mancha, de cuyo nombre no quiero acordarme, vivía un hidalgo que se llamaba Alonso Quijano. Yo no sé bien por qué perdió el juicio, pero lo perdió.
-
-Una mañana entró su sobrina en la sala y lo encontró armado.
-
-—¿Adónde va vuestra merced, tío? —preguntó la sobrina.
-
-—A buscar aventuras —respondió don Alonso.
-
-—¿Y quién cuidará de la casa?
-
-—Tú, que eres moza y discreta.`,
-        [
-          { needle: 'En un lugar', who: 'N' },
-          { needle: 'Una mañana', who: 'N' },
-          { needle: '—¿Adónde va', who: 'Sobrina' },
-          { needle: '—A buscar', who: 'Alonso' },
-          { needle: '—¿Y quién', who: 'Sobrina' },
-          { needle: '—Tú, que eres', who: 'Alonso' },
-        ],
-      ),
-    ],
-  },
   {
     id: 'G2 first-person frame, then third-person chapter',
     scenario: 'g',
-    lang: 'en',
     third: false,
     tellers: ['Frame'],
     parts: [
@@ -999,7 +704,6 @@ The ship left Bristol on a grey morning in March. Captain Reed stood on the quar
   {
     id: 'G3 third, then first-person character (Esther), then third',
     scenario: 'g',
-    lang: 'en',
     third: false,
     tellers: ['Esther'],
     parts: [

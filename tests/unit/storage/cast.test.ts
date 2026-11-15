@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Character, Lang, Story } from '@/format/types';
+import type { Character, Story } from '@/format/types';
 import { assignVoice } from '@/cast/assignVoices';
 import type { DeviceVoice } from '@/playback/engine';
 import { openStoryDb, type StoryDb } from '@/storage/db';
@@ -18,8 +18,8 @@ const voices: DeviceVoice[] = [
   { name: 'en-a', lang: 'en-US', isDefault: true },
   { name: DAVID, lang: 'en-US' },
   { name: ZIRA, lang: 'en-US' },
-  { name: 'es-a', lang: 'es-ES', isDefault: true },
-  { name: 'es-b', lang: 'es-ES' },
+  { name: 'fr-a', lang: 'fr-FR', isDefault: true },
+  { name: 'fr-b', lang: 'fr-FR' },
 ];
 const byHand = { voiceName: 'en-a', lang: 'en-US', pitch: 1.4, rate: 0.7, manual: true as const };
 
@@ -42,8 +42,8 @@ const character = (id: string, name: string, more: Partial<Character> = {}): Cha
 });
 
 /** A story whose cast is the narrator, the unknown speaker and `characters`, last updated long ago. */
-async function storyWith(characters: Character[], lang: Lang = 'en'): Promise<Story> {
-  const story = await createStory(db, { title: 'S', lang });
+async function storyWith(characters: Character[]): Promise<Story> {
+  const story = await createStory(db, { title: 'S', lang: 'en' });
   await updateStory(db, story.id, { cast: [...story.cast, ...characters] });
   await db.stories.update(story.id, { updatedAt: '2000-01-01T00:00:00.000Z' });
   return (await getStory(db, story.id))!;
@@ -69,7 +69,7 @@ describe('setTraitsInStory', () => {
     const after = (await getStory(db, story.id))!;
     const alex = after.cast.find((c) => c.id === 'a')!;
     expect(alex.gender).toBe('female');
-    // The locale is the story language's default one.
+    // The locale is DEFAULT_LOCALE (en-US).
     expect(alex.voice).toStrictEqual(assignVoice(alex, story.cast, voices, 'en-US'));
     expect(alex.voice.voiceName).toBe(ZIRA);
     expect(after.cast.filter((c) => c.id !== 'a')).toEqual(story.cast.filter((c) => c.id !== 'a'));
@@ -100,12 +100,6 @@ describe('setTraitsInStory', () => {
       repicked: false,
     });
     expect(await getStory(db, story.id)).toEqual(story);
-  });
-
-  it('uses the voices of the story’s language', async () => {
-    const story = await storyWith([character('a', 'Alba')], 'es');
-    await setTraitsInStory(db, story.id, 'a', { species: 'animal' }, voices);
-    expect((await member(story.id, 'a')).voice).toMatchObject({ voiceName: 'es-b', lang: 'es-ES' });
   });
 
   it('throws for a missing story, a missing member and the unknown speaker', async () => {
@@ -143,22 +137,6 @@ describe('repickVoiceInStory', () => {
     expect(after.updatedAt > story.updatedAt).toBe(true);
   });
 
-  it('uses the voices of the story’s language', async () => {
-    // Set by hand to the narrator's own voice: the pick moves it to the other Spanish one.
-    const story = await storyWith(
-      [
-        character('a', 'Alba', {
-          voice: { voiceName: 'es-a', lang: 'es-ES', pitch: 1.4, rate: 0.7, manual: true },
-        }),
-      ],
-      'es',
-    );
-    await repickVoiceInStory(db, story.id, 'a', voices);
-    const { voice } = await member(story.id, 'a');
-    expect(voice).toMatchObject({ voiceName: 'es-b', lang: 'es-ES' });
-    expect(Object.keys(voice)).not.toContain('manual');
-  });
-
   it('throws for a missing story or member, and changes nothing when the write fails', async () => {
     const story = await storyWith([character('a', 'Alex')]);
     await expect(repickVoiceInStory(db, 'nope', 'a', voices)).rejects.toThrow(
@@ -189,18 +167,6 @@ describe('matchVoicesInStory', () => {
     expect(after.cast[3]).toMatchObject({ gender: 'female', age: 'elder', voice: byHand });
     expect(after.cast[4]!.voice.voiceName).toBe(ZIRA);
     expect(after.updatedAt > story.updatedAt).toBe(true);
-  });
-
-  it('reads the names in the story’s language and uses its voices', async () => {
-    const story = await storyWith(
-      [character('a', 'mi abuela'), character('b', 'the old man')],
-      'es',
-    );
-    await matchVoicesInStory(db, story.id, voices);
-    const [abuela, man] = (await getStory(db, story.id))!.cast.slice(2);
-    expect(abuela).toMatchObject({ gender: 'female', age: 'elder' });
-    expect(abuela!.voice).toMatchObject({ voiceName: 'es-b', lang: 'es-ES' });
-    expect(Object.keys(man!)).toEqual(Object.keys(story.cast[3]!));
   });
 
   it('throws for a missing story, and changes nothing when the write fails', async () => {

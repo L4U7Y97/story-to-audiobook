@@ -71,7 +71,7 @@ export function labelAll(units: readonly string[], speaker: string, extra: objec
     units: units.map((text, id) => ({
       id,
       spans: [
-        /^[“"«—]/u.test(text) ? { speaker, mode: 'speech' } : { speaker: 'N', mode: 'narration' },
+        /^[“"]/u.test(text) ? { speaker, mode: 'speech' } : { speaker: 'N', mode: 'narration' },
       ],
     })),
     newCharacters: [],

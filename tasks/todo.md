@@ -2,6 +2,8 @@
 
 Plan: [plan.md](plan.md) · Spec: [SPEC.md](../SPEC.md)
 
+Spanish support was removed on 2026-11-13 ([english-only.md](../docs/intent/english-only.md)): the tasks below that mention Spanish (`es`) record how the MVP was built, not the app today.
+
 Standard verification for every task unless noted:
 
 ```
@@ -183,7 +185,7 @@ npm test
 
 ### Checkpoint C: first playable slice
 
-- [ ] All tests pass; the en and es fixtures play end-to-end on desktop with multiple voices
+- [ ] All tests pass; the en fixtures play end-to-end on desktop with multiple voices
 - [ ] Review with the human before Android work
 
 ---

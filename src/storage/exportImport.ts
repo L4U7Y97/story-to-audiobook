@@ -87,7 +87,7 @@ export function parseExport(json: string): ParseResult {
     !isObject(story) ||
     typeof story.id !== 'string' ||
     typeof story.title !== 'string' ||
-    (story.lang !== 'en' && story.lang !== 'es') ||
+    story.lang !== 'en' ||
     !Array.isArray(story.partIds) ||
     (story.books !== undefined &&
       (!Array.isArray(story.books) ||

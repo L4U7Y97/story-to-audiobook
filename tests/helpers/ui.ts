@@ -4,7 +4,7 @@
 import { vi } from 'vitest';
 import { createApp, defineComponent, h, shallowRef, type App, type Component } from 'vue';
 import { createMemoryHistory, createRouter } from 'vue-router';
-import type { Character, Lang, Mode, Segment, Traits } from '@/format/types';
+import type { Character, Mode, Segment, Traits } from '@/format/types';
 import type { DeviceVoice } from '@/playback/engine';
 import type { PlayerSnapshot } from '@/playback/player';
 import { getAppDb } from '@/storage/db';
@@ -93,12 +93,9 @@ const voice = { lang: 'en-US', pitch: 1, rate: 1 };
  */
 export async function storeStory(
   chunks: Chunk[],
-  {
-    lang = 'en',
-    characters = [],
-  }: { lang?: Lang; characters?: Array<{ name: string; aliases?: string[] } & Traits> } = {},
+  { characters = [] }: { characters?: Array<{ name: string; aliases?: string[] } & Traits> } = {},
 ): Promise<StoredStory> {
-  const story = await createStory(db, { title: 'Story', lang });
+  const story = await createStory(db, { title: 'Story', lang: 'en' });
   const ids: Record<string, string> = {
     N: story.narratorId,
     U: story.cast.find((c) => c.role === 'unknown')!.id,

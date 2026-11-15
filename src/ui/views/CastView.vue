@@ -3,7 +3,7 @@ import { computed, onMounted, ref } from 'vue';
 import type { Character, VoiceSettings } from '@/format/types';
 import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
-import { defaultLocale, getStory, updateStory } from '@/storage/stories';
+import { DEFAULT_LOCALE, getStory, updateStory } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
 import {
   matchVoicesInStory,
@@ -115,10 +115,9 @@ const deviceVoices = ref<DeviceVoice[]>([]);
 onMounted(async () => {
   deviceVoices.value = await voicesReady;
 });
-const locale = computed(() => (story.value ? defaultLocale(story.value.lang) : 'en-US'));
-/** The voices a picker lists, each with what is known of it: "es-es-x-eee-local (female)". */
+/** The voices a picker lists, each with what is known of it: "en-us-x-tpc-local (female)". */
 const voiceChoices = computed(() => {
-  const forLang = voicesForLang(deviceVoices.value, locale.value);
+  const forLang = voicesForLang(deviceVoices.value, DEFAULT_LOCALE);
   return (forLang.length ? forLang : deviceVoices.value).map((v) => {
     const notes = [voiceProfile(v).gender, v.network ? 'online' : undefined].filter(Boolean);
     return { name: v.name, label: notes.length ? `${v.name} (${notes.join(', ')})` : v.name };
@@ -228,8 +227,7 @@ function leaveMatch() {
 }
 
 async function preview(character: Character) {
-  const sample =
-    story.value?.lang === 'es' ? `Hola, soy ${character.name}.` : `Hello, I am ${character.name}.`;
+  const sample = `Hello, I am ${character.name}.`;
   await player.preview(sample, character.voice);
 }
 

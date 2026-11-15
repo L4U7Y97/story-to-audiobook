@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it } from 'vitest';
-import type { Analysis, Character, Lang, Part, Segment } from '@/format/types';
+import type { Analysis, Character, Part, Segment } from '@/format/types';
 import {
   castUsage,
   filterCast,
@@ -22,7 +22,7 @@ import { resolveVoice } from '@/cast/resolveVoice';
 import type { DeviceVoice } from '@/playback/engine';
 import { analyzePart } from '@/analysis/analyzer';
 import { reassignSegments } from '@/analysis/reassign';
-import { NARRATOR_NAME, UNKNOWN_NAME } from '@/analysis/castMatch';
+import { UNKNOWN_NAME } from '@/analysis/castMatch';
 import { validateAnalysis } from '@/format/validate';
 import { openStoryDb, type StoryDb } from '@/storage/db';
 import { createStory, getStory, updateStory } from '@/storage/stories';
@@ -64,7 +64,7 @@ async function segmentAt(db: StoryDb, part: Part, quote: string) {
 
 describe('mergeCharacters', () => {
   const cast = [
-    ...baseCast('en'),
+    ...baseCast(),
     character('a', 'Elizabeth', ['Lizzy']),
     character('b', 'Miss Bennet', ['Eliza', 'lizzy']),
   ];
@@ -98,7 +98,7 @@ describe('mergeCharacters', () => {
   });
 
   it('moves a named narrator’s names to the character and its lines as user corrections', () => {
-    const [narrator, unknown] = baseCast('en');
+    const [narrator, unknown] = baseCast();
     const named = [
       { ...narrator!, name: 'Watson', aliases: ['Dr. Watson'] },
       unknown!,
@@ -152,7 +152,7 @@ describe('mergeCharacters', () => {
   });
 
   describe('traits', () => {
-    const [narrator, unknown] = baseCast('en');
+    const [narrator, unknown] = baseCast();
     const merge = (into: Character, from: Character) => {
       const cast = [...new Set([narrator!, unknown!, into, from])];
       const result = mergeCharacters(cast, [], from.id, into.id);
@@ -224,7 +224,7 @@ describe('setTraits', () => {
   const byHand = { voiceName: 'en-a', lang: 'en-US', pitch: 1.4, rate: 0.7, manual: true as const };
   // The unknown speaker as createStory stores it, a little higher than the narrator: a narrator
   // with traits keeps clear of the voice the unknown speaker is heard with.
-  const [narrator, unknown] = baseCast('en');
+  const [narrator, unknown] = baseCast();
   const cast: Character[] = [
     narrator!,
     { ...unknown!, voice: { lang: 'en-US', pitch: 1.15, rate: 1 } },
@@ -319,7 +319,7 @@ describe('repickMember', () => {
   ];
   const byHand = { voiceName: 'en-a', lang: 'en-US', pitch: 1.4, rate: 0.7, manual: true as const };
   const cast: Character[] = [
-    ...baseCast('en'),
+    ...baseCast(),
     { ...character('a', 'Alex'), gender: 'female', voice: byHand },
     character('b', 'Blake'),
   ];
@@ -343,8 +343,8 @@ describe('repickMember', () => {
   });
 
   it('gives the same voice again to a member that already has the automatic one', () => {
-    const first = assignVoice(character('b', 'Blake'), baseCast('en'), voices, 'en-US');
-    const own = [...baseCast('en'), { ...character('b', 'Blake'), voice: first }];
+    const first = assignVoice(character('b', 'Blake'), baseCast(), voices, 'en-US');
+    const own = [...baseCast(), { ...character('b', 'Blake'), voice: first }];
     const result = repickMember(own, 'b', voices, 'en-US');
     expect(result.ok && result.value[2]!.voice).toStrictEqual(first);
   });
@@ -366,7 +366,7 @@ describe('a narrator picked again (setTraits, repickMember)', () => {
   ];
   /** A new story's cast as createStory stores it: both on the device's default voice. */
   const fresh = (): Character[] => {
-    const [narrator, unknown] = baseCast('en');
+    const [narrator, unknown] = baseCast();
     return [narrator!, { ...unknown!, voice: { lang: 'en-US', pitch: 1.15, rate: 1 } }];
   };
   const cents = (n: number) => Math.round(n * 100);
@@ -562,10 +562,10 @@ describe('matchVoicesToTraits', () => {
     { name: 'en-a', lang: 'en-US', isDefault: true },
     { name: DAVID, lang: 'en-US' },
     { name: ZIRA, lang: 'en-US' },
-    { name: 'es-a', lang: 'es-ES' },
+    { name: 'fr-a', lang: 'fr-FR' },
   ];
   const byHand = { voiceName: 'en-a', lang: 'en-US', pitch: 1.4, rate: 0.7, manual: true as const };
-  const [narrator, unknown] = baseCast('en');
+  const [narrator, unknown] = baseCast();
   const cast: Character[] = [
     character('man', 'the old man'),
     { ...narrator!, gender: 'female', name: 'Grandma Rose' },
@@ -575,7 +575,7 @@ describe('matchVoicesToTraits', () => {
     { ...character('ann', 'Ann'), gender: 'female' },
     { ...character('eve', 'Eve'), gender: 'female' },
   ];
-  const matched = matchVoicesToTraits(cast, voices, 'en-US', 'en');
+  const matched = matchVoicesToTraits(cast, voices, 'en-US');
   const get = (id: string) => matched.find((c) => c.id === id)!;
 
   it('keeps the cast in order and leaves the narrator and the unknown speaker untouched', () => {
@@ -629,31 +629,19 @@ describe('matchVoicesToTraits', () => {
     ];
     const on = (voiceName: string) => ({ voiceName, lang: 'en-US', pitch: 1, rate: 1 });
     const crowd: Character[] = [
-      ...baseCast('en'),
+      ...baseCast(),
       { ...character('h', 'Hal'), voice: { ...on('en-b'), manual: true } },
       { ...character('x', 'Xu'), voice: on('en-c') },
       { ...character('y', 'Yo'), voice: on('en-c') },
       { ...character('z', 'Zed'), voice: on('en-c') },
     ];
-    const shared = matchVoicesToTraits(crowd, plain, 'en-US', 'en');
+    const shared = matchVoicesToTraits(crowd, plain, 'en-US');
     expect(shared.slice(2).map((c) => c.voice.voiceName)).toEqual(['en-b', 'en-c', 'en-b', 'en-c']);
-  });
-
-  it('reads the names in the story’s language', () => {
-    const es = matchVoicesToTraits(
-      [...baseCast('es'), character('a', 'mi abuela'), character('b', 'the old man')],
-      voices,
-      'es-ES',
-      'es',
-    );
-    expect(es[2]).toMatchObject({ gender: 'female', age: 'elder' });
-    expect(es[2]!.voice).toMatchObject({ voiceName: 'es-a', lang: 'es-ES' });
-    expect(Object.keys(es[3]!)).toEqual(['id', 'role', 'name', 'aliases', 'voice']);
   });
 });
 
 describe('renameCharacter / aliases', () => {
-  const cast = [...baseCast('en'), character('a', 'his wife')];
+  const cast = [...baseCast(), character('a', 'his wife')];
 
   it('keeps the old name as an alias', () => {
     const result = renameCharacter(cast, 'a', '  Mrs.   Bennet ');
@@ -678,9 +666,9 @@ describe('renameCharacter / aliases', () => {
   });
 
   it('does not alias a default name or the same name written differently', () => {
-    const unnamed = cast.map((c) => (c.id === 'unknown' ? { ...c, name: UNKNOWN_NAME.es } : c));
-    const unknown = renameCharacter(unnamed, 'unknown', 'Una voz');
-    expect(unknown.ok && unknown.value[1]).toMatchObject({ name: 'Una voz', aliases: [] });
+    const unnamed = cast.map((c) => (c.id === 'unknown' ? { ...c, name: UNKNOWN_NAME } : c));
+    const unknown = renameCharacter(unnamed, 'unknown', 'A voice');
+    expect(unknown.ok && unknown.value[1]).toMatchObject({ name: 'A voice', aliases: [] });
     const respelled = renameCharacter([...cast, character('o', "O'Brien")], 'o', 'O’Brien');
     expect(respelled.ok && respelled.value[3]).toMatchObject({ name: 'O’Brien', aliases: [] });
   });
@@ -689,21 +677,18 @@ describe('renameCharacter / aliases', () => {
     const nick = cast.map((c) => (c.id === 'narrator' ? { ...c, name: 'Nick' } : c));
     const unnamed = renameCharacter(nick, 'narrator', 'Narrator');
     expect(unnamed.ok && unnamed.value[0]).toMatchObject({ name: 'Narrator', aliases: [] });
-    const ines = cast.map((c) => (c.id === 'narrator' ? { ...c, name: 'Inés' } : c));
-    const es = renameCharacter(ines, 'narrator', NARRATOR_NAME.es);
-    expect(es.ok && es.value[0]).toMatchObject({ name: 'Narrador', aliases: [] });
     const listed = cast.map((c) => (c.id === 'narrator' ? { ...c, aliases: ['Nick'] } : c));
     const again = renameCharacter(listed, 'narrator', 'Narrator');
     expect(again.ok && again.value[0]).toMatchObject({ name: 'Narrator', aliases: ['Nick'] });
   });
 
   it('keeps no old names for the unknown speaker, only the names merged into it', () => {
-    const named = cast.map((c) => (c.id === 'unknown' ? { ...c, name: 'Una voz' } : c));
-    const renamed = renameCharacter(named, 'unknown', 'Voces');
-    expect(renamed.ok && renamed.value[1]).toMatchObject({ name: 'Voces', aliases: [] });
-    const merged = cast.map((c) => (c.id === 'unknown' ? { ...c, aliases: ['una voz'] } : c));
-    const kept = renameCharacter(merged, 'unknown', 'Voces');
-    expect(kept.ok && kept.value[1]).toMatchObject({ name: 'Voces', aliases: ['una voz'] });
+    const named = cast.map((c) => (c.id === 'unknown' ? { ...c, name: 'A voice' } : c));
+    const renamed = renameCharacter(named, 'unknown', 'Voices');
+    expect(renamed.ok && renamed.value[1]).toMatchObject({ name: 'Voices', aliases: [] });
+    const merged = cast.map((c) => (c.id === 'unknown' ? { ...c, aliases: ['a voice'] } : c));
+    const kept = renameCharacter(merged, 'unknown', 'Voices');
+    expect(kept.ok && kept.value[1]).toMatchObject({ name: 'Voices', aliases: ['a voice'] });
   });
 
   it('rejects empty names', () => {
@@ -718,10 +703,10 @@ describe('renameCharacter / aliases', () => {
 });
 
 describe('findNameOwner', () => {
-  const [narrator, unknown] = baseCast('en');
+  const [narrator, unknown] = baseCast();
   const cast: Character[] = [
     { ...narrator!, aliases: ['Watson'] },
-    { ...unknown!, name: UNKNOWN_NAME.en },
+    { ...unknown!, name: UNKNOWN_NAME },
     character('jane', 'Jane', ['Miss Bennet']),
     character('obrien', 'Mr. O’Brien'),
   ];
@@ -742,34 +727,28 @@ describe('findNameOwner', () => {
 });
 
 describe('findTypedNameOwner', () => {
-  const [narrator, unknown] = baseCast('en');
+  const [narrator, unknown] = baseCast();
   const tom = character('tom', 'Tom', ['Tommy']);
-  const cast: Character[] = [narrator!, { ...unknown!, name: UNKNOWN_NAME.en }, tom];
-  const es: Character[] = [
-    { ...narrator!, name: NARRATOR_NAME.es },
-    { ...unknown!, name: UNKNOWN_NAME.es },
-    tom,
-  ];
+  const cast: Character[] = [narrator!, { ...unknown!, name: UNKNOWN_NAME }, tom];
 
   it('reads the narrator’s default name as the narrator, named or not', () => {
     expect(findTypedNameOwner(cast, 'narrator', 'narrator')?.id).toBe('narrator');
-    expect(findTypedNameOwner(es, 'Narrador', 'narrator')?.id).toBe('narrator');
     const watson = cast.map((c) => (c.id === 'narrator' ? { ...c, name: 'Watson' } : c));
     expect(findTypedNameOwner(watson, 'Narrator', 'narrator')?.id).toBe('narrator');
     expect(findTypedNameOwner(cast, 'tommy', 'narrator')?.id).toBe('tom');
   });
 
   it('leaves the unknown speaker’s default name free, and the narrator’s on its own card', () => {
-    expect(findTypedNameOwner(es, 'Desconocido', 'narrator')).toBeUndefined();
+    expect(findTypedNameOwner(cast, 'Unknown speaker', 'narrator')).toBeUndefined();
     expect(findTypedNameOwner(cast, 'Narrator', 'narrator', 'narrator')).toBeUndefined();
   });
 });
 
 describe('findNameClash', () => {
-  const [narrator, unknown] = baseCast('en');
+  const [narrator, unknown] = baseCast();
   const cast: Character[] = [
     narrator!,
-    { ...unknown!, name: UNKNOWN_NAME.en },
+    { ...unknown!, name: UNKNOWN_NAME },
     character('elizabeth', 'Elizabeth', ['Lizzy']),
     character('jane', 'Jane'),
     character('kit', 'Kit'),
@@ -833,8 +812,6 @@ describe('findNameClash', () => {
     const crowd = cast.map((c) => (c.id === 'unknown' ? { ...c, name: 'Crowd' } : c));
     expect(clash('jane', 'crowd', [], crowd)).toEqual(['crowd', 'unknown']);
     expect(clash('jane', 'Unknown speaker')).toBeUndefined();
-    const es = cast.map((c) => (c.id === 'unknown' ? { ...c, name: UNKNOWN_NAME.es } : c));
-    expect(clash('jane', 'Desconocido', ['Unknown speaker'], es)).toBeUndefined();
   });
 });
 
@@ -923,18 +900,18 @@ describe('saveAnalysis alias additions', () => {
     await saveAnalysis(db, forPart(first, tom.id));
     await saveAnalysis(db, forPart(second, tom.id));
 
-    await saveAnalysis(
-      db,
-      forPart(first, story.narratorId),
-      { added: [], aliasAdditions: [], pruneUnusedCharacters: true },
-    );
+    await saveAnalysis(db, forPart(first, story.narratorId), {
+      added: [],
+      aliasAdditions: [],
+      pruneUnusedCharacters: true,
+    });
     expect((await getStory(db, story.id))!.cast.some((c) => c.id === tom.id)).toBe(true);
 
-    await saveAnalysis(
-      db,
-      forPart(second, story.narratorId),
-      { added: [], aliasAdditions: [], pruneUnusedCharacters: true },
-    );
+    await saveAnalysis(db, forPart(second, story.narratorId), {
+      added: [],
+      aliasAdditions: [],
+      pruneUnusedCharacters: true,
+    });
     const cast = (await getStory(db, story.id))!.cast;
     expect(cast.some((c) => c.id === tom.id)).toBe(false);
     expect(cast.filter((c) => c.role !== 'character')).toHaveLength(2);
@@ -947,11 +924,11 @@ describe('mergeCharactersInStory', () => {
     await db?.delete();
   });
 
-  async function marianela() {
+  async function pride() {
     db = openStoryDb(`cast-${Math.random()}`);
-    const { text } = loadFixture('es/marianela-ch1');
-    const story = await createStory(db, { title: 'Marianela', lang: 'es' });
-    const cut = text.indexOf('--¿Va usted al establecimiento?');
+    const { text } = loadFixture('en/pride-ch1');
+    const story = await createStory(db, { title: 'Pride and Prejudice', lang: 'en' });
+    const cut = text.indexOf('“My dear Mr. Bennet,” replied his wife');
     const one = await addPart(db, story.id, paste(text.slice(0, cut)));
     const two = await addPart(db, story.id, paste(text.slice(cut)));
     await analyzePart(db, one.id, { voices: [] });
@@ -961,51 +938,51 @@ describe('mergeCharactersInStory', () => {
     return { db, story, parts: [one, two], id };
   }
 
-  async function emptyStory(lang: Lang) {
+  async function emptyStory() {
     db = openStoryDb(`cast-${Math.random()}`);
-    return { db, story: await createStory(db, { title: 'S', lang }) };
+    return { db, story: await createStory(db, { title: 'S', lang: 'en' }) };
   }
 
   it('rewrites every part and keeps all analyses valid', async () => {
-    const { db, story, parts, id } = await marianela();
-    const doctor = id('el doctor');
-    const golfin = id('Golfín');
-    // Where "el doctor" spoke before the merge, per part (segment start offsets).
-    const doctorLines = new Map<string, number[]>();
+    const { db, story, parts, id } = await pride();
+    const wife = id('his wife');
+    const lady = id('his lady');
+    // Where "his wife" spoke before the merge, per part (segment start offsets).
+    const wifeLines = new Map<string, number[]>();
     for (const p of parts) {
       const a = (await getAnalysis(db, p.id))!;
-      doctorLines.set(
+      wifeLines.set(
         p.id,
-        a.segments.filter((s) => s.speakerId === doctor).map((s) => s.start),
+        a.segments.filter((s) => s.speakerId === wife).map((s) => s.start),
       );
     }
-    expect([...doctorLines.values()].flat().length).toBeGreaterThan(0);
-    await mergeCharactersInStory(db, story.id, doctor, golfin);
+    expect([...wifeLines.values()].flat().length).toBeGreaterThan(0);
+    await mergeCharactersInStory(db, story.id, wife, lady);
 
     const after = (await getStory(db, story.id))!;
-    expect(after.cast.some((c) => c.id === doctor)).toBe(false);
-    expect(after.cast.find((c) => c.id === golfin)!.aliases).toContain('el doctor');
+    expect(after.cast.some((c) => c.id === wife)).toBe(false);
+    expect(after.cast.find((c) => c.id === lady)!.aliases).toContain('his wife');
     const ids = new Set(after.cast.map((c) => c.id));
     for (const p of parts) {
       const a = (await getAnalysis(db, p.id))!;
-      expect(a.segments.some((s) => s.speakerId === doctor)).toBe(false);
+      expect(a.segments.some((s) => s.speakerId === wife)).toBe(false);
       expect(validateAnalysis((await getPart(db, p.id))!, a, ids)).toEqual({ ok: true });
 
       // Playback reads those lines with the surviving character's voice.
       const part = (await getPart(db, p.id))!;
       const queue = buildUtterances(part, a, after.cast, 0, 1);
-      const golfinVoice = after.cast.find((c) => c.id === golfin)!.voice;
-      for (const start of doctorLines.get(p.id)!) {
+      const ladyVoice = after.cast.find((c) => c.id === lady)!.voice;
+      for (const start of wifeLines.get(p.id)!) {
         const index = a.segments.findIndex((s) => s.start <= start && start < s.end);
         const spoken = queue.filter((u) => u.segmentIndex === index);
         expect(spoken.length).toBeGreaterThan(0);
-        for (const u of spoken) expect(u.voice).toEqual(golfinVoice);
+        for (const u of spoken) expect(u.voice).toEqual(ladyVoice);
       }
     }
   });
 
   it('rolls back completely when writing an analysis fails', async () => {
-    const { db, story, id } = await marianela();
+    const { db, story, id } = await pride();
     const before = await getStory(db, story.id);
     const analysesBefore = await db.analyses.toArray();
     db.analyses.hook('creating', () => {
@@ -1015,14 +992,14 @@ describe('mergeCharactersInStory', () => {
       throw new Error('disk full');
     });
     await expect(
-      mergeCharactersInStory(db, story.id, id('el doctor'), id('Golfín')),
+      mergeCharactersInStory(db, story.id, id('his wife'), id('his lady')),
     ).rejects.toThrow();
     expect(await getStory(db, story.id)).toEqual(before);
     expect(await db.analyses.toArray()).toEqual(analysesBefore);
   });
 
   it('gives later lines to the narrator a duplicate was merged into', async () => {
-    const { db, story } = await emptyStory('en');
+    const { db, story } = await emptyStory();
     const one = await addPart(db, story.id, paste('“Come here, Kit,” said Abel.\n\n“Coming.”'));
     await analyzePart(db, one.id, { voices: [] });
     const kit = (await getStory(db, story.id))!.cast.find((c) => c.name === 'Kit');
@@ -1040,7 +1017,7 @@ describe('mergeCharactersInStory', () => {
   });
 
   it('keeps lines merged off the unknown speaker when the part is analysed again', async () => {
-    const { db, story } = await emptyStory('en');
+    const { db, story } = await emptyStory();
     const unknown = story.cast.find((c) => c.role === 'unknown')!.id;
     const part = await addPart(
       db,
@@ -1064,17 +1041,17 @@ describe('mergeCharactersInStory', () => {
     expect((await segmentAt(db, part, '“Who goes there?”'))?.speakerId).toBe(rochester!.id);
   });
 
-  it('gives the narrator back the default name of the story’s language', async () => {
-    const { db, story } = await emptyStory('es');
-    const named = story.cast.map((c) => (c.id === story.narratorId ? { ...c, name: 'Inés' } : c));
-    await updateStory(db, story.id, { cast: [...named, character('julian', 'Julián')] });
-    await mergeCharactersInStory(db, story.id, story.narratorId, 'julian');
+  it('gives the narrator back its default name', async () => {
+    const { db, story } = await emptyStory();
+    const named = story.cast.map((c) => (c.id === story.narratorId ? { ...c, name: 'Kit' } : c));
+    await updateStory(db, story.id, { cast: [...named, character('abel', 'Abel')] });
+    await mergeCharactersInStory(db, story.id, story.narratorId, 'abel');
     const after = (await getStory(db, story.id))!.cast;
     expect(after.find((c) => c.id === story.narratorId)).toMatchObject({
-      name: 'Narrador',
+      name: 'Narrator',
       aliases: [],
     });
-    expect(after.find((c) => c.id === 'julian')!.aliases).toEqual(['Inés']);
+    expect(after.find((c) => c.id === 'abel')!.aliases).toEqual(['Kit']);
   });
 });
 
@@ -1131,7 +1108,7 @@ describe('partsToldBy', () => {
 describe('filterCast', () => {
   const cast: Character[] = [
     { ...character('n', 'Narrator'), role: 'narrator' },
-    character('j', 'José Arcadio', ['the colonel']),
+    character('r', 'Renée Walker', ['the colonel']),
     character('o', 'Mrs. O’Brien'),
     character('d', 'Mr Darcy'),
   ];
@@ -1146,22 +1123,22 @@ describe('filterCast', () => {
   });
 
   it('keeps everyone, in order, for a blank query', () => {
-    const everyone = ['Narrator', 'José Arcadio', 'Mrs. O’Brien', 'Mr Darcy'];
+    const everyone = ['Narrator', 'Renée Walker', 'Mrs. O’Brien', 'Mr Darcy'];
     expect(names('')).toEqual(everyone);
     expect(names('   ')).toEqual(everyone);
   });
 
   it('matches part of a name, ignoring case and accents', () => {
-    expect(names('jose')).toEqual(['José Arcadio']);
-    expect(names('ARCA')).toEqual(['José Arcadio']);
+    expect(names('renee')).toEqual(['Renée Walker']);
+    expect(names('WALK')).toEqual(['Renée Walker']);
   });
 
   it('matches other names, and straight or curly apostrophes alike', () => {
-    expect(names('colonel')).toEqual(['José Arcadio']);
+    expect(names('colonel')).toEqual(['Renée Walker']);
     expect(names("o'bri")).toEqual(['Mrs. O’Brien']);
   });
 
   it('finds nobody for a name no one has', () => {
-    expect(names('Aureliano')).toEqual([]);
+    expect(names('Heathcliff')).toEqual([]);
   });
 });

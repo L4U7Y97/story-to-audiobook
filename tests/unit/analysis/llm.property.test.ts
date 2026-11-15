@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import type { Character, Lang } from '@/format/types';
+import type { Character } from '@/format/types';
 import { analyzeHeuristic } from '@/analysis/heuristic';
 import { analyzeLlm } from '@/analysis/llm';
 import { mergeLabels } from '@/analysis/merge';
@@ -10,14 +10,13 @@ import { segmentText, validateSegments } from '@/format/validate';
 import { baseCast } from '../../helpers/fixtures';
 import { fakeTransport } from '../../helpers/fakeLlm';
 
-const TEXTS: Array<[Lang, string]> = [
-  ['en', '“Hi,” said Anne. “Where is Tom?”\n\nTom looked up. “Here.”\n\nThe end.'],
-  ['es', '—¿Quién es? —preguntó Pablo—. No veo nada.\n\n—Soy yo —dijo Nela.\n\nCallaron.'],
-  ['en', 'Anne smiled. Hello there, Tom.\n\nShe thought: this is odd. “Is it?”'],
+const TEXTS = [
+  '“Hi,” said Anne. “Where is Tom?”\n\nTom looked up. “Here.”\n\nThe end.',
+  'Anne smiled. Hello there, Tom.\n\nShe thought: this is odd. “Is it?”',
 ];
 
 const cast: Character[] = [
-  ...baseCast('en'),
+  ...baseCast(),
   {
     id: 'anne',
     role: 'character',
@@ -28,7 +27,7 @@ const cast: Character[] = [
 ];
 
 const pieces = [
-  ...new Set(TEXTS.flatMap(([, t]) => [...t.split(/\s+/u), ...t.split('\n\n'), t.slice(0, 7)])),
+  ...new Set(TEXTS.flatMap((t) => [...t.split(/\s+/u), ...t.split('\n\n'), t.slice(0, 7)])),
   ' ',
   '\n\n',
 ];
@@ -59,8 +58,8 @@ const output = fc.record(
       fc.record(
         {
           ref: fc.constantFrom('new1', 'new2', 'N', 'c1', 'x1'),
-          name: fc.constantFrom('Tom', 'Anne', 'Pablo', '', ' ', 'Mr. Bennet', 'the old man'),
-          aliases: fc.array(fc.constantFrom('Tommy', 'Anne', '', 'la Nela')),
+          name: fc.constantFrom('Tom', 'Anne', '', ' ', 'Mr. Bennet', 'the old man'),
+          aliases: fc.array(fc.constantFrom('Tommy', 'Anne', '')),
           description: fc.string({ maxLength: 10 }),
           // Values the format knows, values it does not, and values that are not even strings.
           gender: fc.constantFrom('male', 'female', 'other', 'robot', ''),
@@ -100,14 +99,13 @@ describe('LLM output → stored analysis (property)', () => {
         fc.integer({ min: 0, max: TEXTS.length - 1 }),
         fc.array(reply, { minLength: 1, maxLength: 4 }),
         async (which, replies) => {
-          const [lang, text] = TEXTS[which]!;
-          const units = splitUnits(text, lang);
-          const heuristic = analyzeHeuristic({ text, lang, units, cast });
+          const text = TEXTS[which]!;
+          const units = splitUnits(text);
+          const heuristic = analyzeHeuristic({ text, units, cast });
           let n = 0;
           const transport = fakeTransport(() => replies[n++ % replies.length]!);
           const result = await analyzeLlm({
             text,
-            lang,
             units,
             cast,
             heuristic,

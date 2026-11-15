@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { Lang, Segment } from '@/format/types';
+import type { Segment } from '@/format/types';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { getStory } from '@/storage/stories';
 import ReaderView from '@/ui/views/ReaderView.vue';
@@ -32,9 +32,8 @@ const tint = (el: Element | null | undefined) =>
 async function fixSpeakers(
   chunks: Chunk[],
   characters: Array<{ name: string; aliases?: string[] }>,
-  lang: Lang = 'en',
 ) {
-  const story = await storeStory(chunks, { characters, lang });
+  const story = await storeStory(chunks, { characters });
   const host = await mountView(ReaderView, { id: story.storyId, partId: story.partId });
   await until(() => lines(host).length === chunks.length, 'the lines');
   button(host, 'Fix speakers')!.click();
@@ -187,36 +186,6 @@ describe('the speaker picker', () => {
     // A name that tells nothing leaves no trait behind, not even an empty one.
     await until(() => !host.querySelector('.sheet'), 'the picker to close');
     expect(Object.keys(await add(2, 'Mary'))).toEqual(['id', 'role', 'name', 'aliases', 'voice']);
-  });
-
-  it('reads a new character’s name in the story’s language', async () => {
-    // The narrator reads with the device's first voice, a man's. A pick that ignored the traits
-    // would take the next voice, whose name tells nothing.
-    stubVoices.push(
-      { name: 'Microsoft Pablo - Spanish (Spain)', lang: 'es-ES' },
-      { name: 'es-plain', lang: 'es-ES' },
-      { name: 'Microsoft Helena - Spanish (Spain)', lang: 'es-ES' },
-    );
-    const { story, host } = await fixSpeakers(
-      [
-        ['—¿Dónde estabas?', 'U', 'speech'],
-        [' —preguntó Tom.', 'N', 'narration'],
-      ],
-      [{ name: 'Tom' }],
-      'es',
-    );
-    const sheet = await tap(host, 0);
-    typeInto(sheet.querySelector<HTMLInputElement>('form.new input')!, 'la abuela');
-    submit(sheet.querySelector('form.new')!);
-    const added = await until(
-      async () => (await getStory(db, story.storyId))!.cast.find((c) => c.name === 'la abuela'),
-      'la abuela in the cast',
-    );
-    expect(added).toMatchObject({
-      gender: 'female',
-      age: 'elder',
-      voice: { voiceName: 'Microsoft Helena - Spanish (Spain)', lang: 'es-ES' },
-    });
   });
 });
 

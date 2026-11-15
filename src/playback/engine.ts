@@ -4,7 +4,7 @@ import type { VoiceSettings } from '@/format/types';
 export interface DeviceVoice {
   /** Unique id: SpeechSynthesisVoice.voiceURI on the web, Voice.getName() on Android. */
   name: string;
-  /** BCP-47, e.g. "es-ES". */
+  /** BCP-47, e.g. "en-GB". */
   lang: string;
   isDefault?: boolean;
   /** Needs a network connection to speak (cloud voices). */
@@ -43,7 +43,7 @@ export interface SpeechEngine {
   lastSpoken?(): Promise<{ utteranceId: string; at: number } | undefined>;
 }
 
-/** Voices whose language matches a locale's language ("es" matches "es-AR"). */
+/** Voices whose language matches a locale's language ("en" matches "en-AU"). */
 export function voicesForLang(voices: readonly DeviceVoice[], locale: string): DeviceVoice[] {
   const lang = locale.split('-')[0]!.toLowerCase();
   return voices.filter((v) => v.lang.toLowerCase().split(/[-_]/)[0] === lang);

@@ -7,7 +7,6 @@ import {
   coalesce,
   defaultMode,
   modeForAnyone,
-  reassignSegment,
   reassignSegments,
   tellerOf,
 } from '@/analysis/reassign';
@@ -53,23 +52,25 @@ function tiled(pieces: Array<[string, string, Mode, Partial<Segment>?]>) {
 const text = '“Hi,” she said, “bye.”\n\nNext.';
 const segments = [seg(0, 5, 'u'), seg(5, 16, 'n'), seg(16, 24, 'u'), seg(24, 29, 'n')];
 
-describe('reassignSegment', () => {
+describe('reassignSegments: one line', () => {
   it('marks the change as a user correction and defaultMode keeps quotes as speech, even for the narrator', () => {
-    const out = reassignSegment(text, segments, 0, 'anne', 'n');
+    const out = reassignSegments(text, segments, 0, 'anne', { narratorId: 'n' });
     expect(out[0]).toEqual({ start: 0, end: 5, speakerId: 'anne', mode: 'speech', source: 'user' });
-    const byNarrator = reassignSegment(text, segments, 0, 'n', 'n');
+    const byNarrator = reassignSegments(text, segments, 0, 'n', { narratorId: 'n' });
     expect(byNarrator[0]).toMatchObject({ speakerId: 'n', mode: 'speech' });
-    const spoken = reassignSegment(text, segments, 1, 'anne', 'n');
+    const spoken = reassignSegments(text, segments, 1, 'anne', { narratorId: 'n' });
     expect(spoken[1]).toMatchObject({ speakerId: 'anne', mode: 'speech' });
-    const narrated = reassignSegment(text, segments, 1, 'n', 'n');
+    const narrated = reassignSegments(text, segments, 1, 'n', { narratorId: 'n' });
     expect(narrated[1]).toMatchObject({ speakerId: 'n', mode: 'narration', source: 'user' });
-    const thought = reassignSegment(text, segments, 1, 'n', 'n', 'thought');
+    const thought = reassignSegments(text, segments, 1, 'n', { narratorId: 'n', mode: 'thought' });
     expect(thought[1]).toMatchObject({ speakerId: 'n', mode: 'thought' });
   });
 
   it('honours an explicit mode and drops the old tone', () => {
     const toned = [seg(0, 5, 'u', { tone: { label: 'shout' } }), ...segments.slice(1)];
-    expect(reassignSegment(text, toned, 0, 'anne', 'n', 'thought')[0]).toEqual({
+    expect(
+      reassignSegments(text, toned, 0, 'anne', { narratorId: 'n', mode: 'thought' })[0],
+    ).toEqual({
       start: 0,
       end: 5,
       speakerId: 'anne',
@@ -79,9 +80,9 @@ describe('reassignSegment', () => {
   });
 
   it('joins neighbours that now sound the same, within the paragraph only', () => {
-    let out = reassignSegment(text, segments, 0, 'anne', 'n');
-    out = reassignSegment(text, out, 2, 'anne', 'n');
-    out = reassignSegment(text, out, 1, 'anne', 'n', 'speech');
+    let out = reassignSegments(text, segments, 0, 'anne', { narratorId: 'n' });
+    out = reassignSegments(text, out, 2, 'anne', { narratorId: 'n' });
+    out = reassignSegments(text, out, 1, 'anne', { narratorId: 'n', mode: 'speech' });
     expect(out.map((s) => [s.start, s.end, s.speakerId])).toEqual([
       [0, 24, 'anne'],
       [24, 29, 'n'],
@@ -96,41 +97,14 @@ describe('defaultMode', () => {
     expect(defaultMode(text, told, 3, 'bob', 'n')).toBe('speech');
   });
 
-  it('reads narration that opens with a quote mark, or a dash line, as speech', () => {
+  it('reads narration that opens with a quote mark as speech', () => {
     expect(defaultMode('“Hi,” she said.', [seg(0, 15, 'n')], 0, 'n', 'n')).toBe('speech');
-    const es = tiled([
-      ['—Hola ', 'u', 'speech'],
-      ['—dijo Ana.\n\n', 'n', 'narration'],
-      ['—¿Vienes?', 'n', 'narration'],
-    ]);
-    expect(defaultMode(es.text, es.segments, 2, 'n', 'n')).toBe('speech');
-    expect(defaultMode(es.text, es.segments, 2, 'ana', 'n')).toBe('speech');
-    // An inciso opens with a dash too, but it is narration.
-    expect(defaultMode(es.text, es.segments, 1, 'n', 'n')).toBe('narration');
   });
 
-  it('reads an inciso that a hard wrap puts at the start of a line as narration', () => {
-    // Blank lines separate the paragraphs, so the newline before '—dijo' only wraps the line. (A
-    // turn after a single newline, '—Hola.\n—Adiós.', is read the same way, as splitUnits does.)
-    const wrapped = tiled([
-      ['Llovía.\n\n', 'n', 'narration'],
-      ['—No sé si vendrá\n', 'u', 'speech'],
-      ['—dijo Ana—', 'n', 'narration'],
-      ['. Ya veremos.', 'u', 'speech'],
-    ]);
-    expect(defaultMode(wrapped.text, wrapped.segments, 2, 'n', 'n')).toBe('narration');
-    expect(reassignSegment(wrapped.text, wrapped.segments, 2, 'n', 'n')[2]).toMatchObject({
-      speakerId: 'n',
-      mode: 'narration',
-      source: 'user',
-    });
-    // With no blank line in the text every newline starts a paragraph, so a dash after one opens
-    // dialogue.
-    const lines = tiled([
-      ['Ana entró.\n', 'n', 'narration'],
-      ['—¿Vienes?', 'n', 'narration'],
-    ]);
-    expect(defaultMode(lines.text, lines.segments, 1, 'n', 'n')).toBe('speech');
+  it('reads narration that opens with a single quote mark as speech too, past a paragraph break', () => {
+    expect(defaultMode('‘Hi,’ she said.', [seg(0, 15, 'n')], 0, 'n', 'n')).toBe('speech');
+    expect(defaultMode("'Hi,' she said.", [seg(0, 15, 'n')], 0, 'n', 'n')).toBe('speech');
+    expect(defaultMode('\n\n‘Hi,’ she said.', [seg(0, 17, 'n')], 0, 'n', 'n')).toBe('speech');
   });
 });
 
@@ -304,7 +278,9 @@ describe('re-running analysis keeps user corrections', () => {
     const before = (await getAnalysis(db, part.id))!;
     expect(before.segments[0]!.speakerId).not.toBe(narrator);
 
-    const fixed = reassignSegment(part.text, before.segments, 0, narrator, narrator);
+    const fixed = reassignSegments(part.text, before.segments, 0, narrator, {
+      narratorId: narrator,
+    });
     await saveAnalysis(db, { ...before, segments: fixed });
     await analyzePart(db, part.id, { voices: [] });
 

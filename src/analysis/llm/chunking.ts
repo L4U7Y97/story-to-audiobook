@@ -1,4 +1,4 @@
-import type { Unit } from '../units';
+import { groupByParagraph, type Unit } from '../units';
 
 export interface ChunkLimits {
   maxUnits: number;
@@ -10,7 +10,7 @@ export const DEFAULT_CHUNK_LIMITS: ChunkLimits = { maxUnits: 300, maxTokens: 600
 
 /**
  * A rough token count for prompt sizing and cost estimates. Claude's current tokenizer averages
- * about three characters per token for English and Spanish prose.
+ * about three characters per token for English prose.
  */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3);
@@ -21,18 +21,8 @@ export function estimateTokens(text: string): number {
  * paragraph's speech and its dialogue tag are labelled together; a paragraph larger than a whole
  * chunk is split between units.
  */
-export function chunkUnits(
-  text: string,
-  units: readonly Unit[],
-  limits: ChunkLimits = DEFAULT_CHUNK_LIMITS,
-): Unit[][] {
-  const paragraphs: Unit[][] = [];
-  for (const unit of units) {
-    const last = paragraphs.at(-1);
-    if (last && last[0]!.paragraph === unit.paragraph) last.push(unit);
-    else paragraphs.push([unit]);
-  }
-
+export function chunkUnits(text: string, units: readonly Unit[], limits: ChunkLimits): Unit[][] {
+  const paragraphs = groupByParagraph(units);
   const tokens = (u: Unit) => estimateTokens(text.slice(u.start, u.end));
   const chunks: Unit[][] = [];
   let current: Unit[] = [];

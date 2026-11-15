@@ -1,4 +1,4 @@
-import type { Character, Lang, Segment } from '@/format/types';
+import type { Character, Segment } from '@/format/types';
 import { splitUnits } from '@/analysis/units';
 import { mergeLabels } from '@/analysis/merge';
 import { analyzeHeuristic } from '@/analysis/heuristic';
@@ -15,14 +15,14 @@ export interface Judgement {
 }
 
 /** Analyses a story part by part with the heuristic, carrying the cast forward as the app does. */
-export function analyseStory(
-  lang: Lang,
-  texts: string[],
-): { parts: Array<{ text: string; segments: Segment[] }>; cast: Character[] } {
-  let cast = baseCast(lang);
+export function analyseStory(texts: string[]): {
+  parts: Array<{ text: string; segments: Segment[] }>;
+  cast: Character[];
+} {
+  let cast = baseCast();
   let ids = 0;
   const parts = texts.map((text, p) => {
-    const result = analyzeHeuristic({ text, lang, units: splitUnits(text, lang), cast });
+    const result = analyzeHeuristic({ text, units: splitUnits(text), cast });
     const merged = mergeLabels(text, result, cast, `p${p}`, () => `c${p}-${++ids}`);
     cast = merged.cast.map((c) => ('voice' in c ? c : { ...c, voice: cast[0]!.voice }));
     return { text, segments: merged.segments };
@@ -37,10 +37,7 @@ export function analyseStory(
  * one id, the narrator included); anyone left is pinned to the id voicing most of their lines.
  */
 export function judgeStory(story: StorySpec): Judgement {
-  const { parts, cast } = analyseStory(
-    story.lang,
-    story.parts.map((p) => p.text),
-  );
+  const { parts, cast } = analyseStory(story.parts.map((p) => p.text));
   const narratorId = cast.find((c) => c.role === 'narrator')!.id;
   const unknownId = cast.find((c) => c.role === 'unknown')!.id;
   const items = story.parts.flatMap((spec, i) => {

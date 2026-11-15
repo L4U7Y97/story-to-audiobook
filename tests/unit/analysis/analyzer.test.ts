@@ -3,10 +3,10 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { Character } from '@/format/types';
 import { analyzePart } from '@/analysis/analyzer';
 import type { LlmTransport } from '@/analysis/llm/client';
-import { reassignSegment } from '@/analysis/reassign';
+import { reassignSegments } from '@/analysis/reassign';
 import { validateAnalysis } from '@/format/validate';
 import { openStoryDb, type StoryDb } from '@/storage/db';
-import { createStory, defaultLocale, getStory, updateStory } from '@/storage/stories';
+import { createStory, DEFAULT_LOCALE, getStory, updateStory } from '@/storage/stories';
 import { addPart, getPart } from '@/storage/parts';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { mergeCharactersInStory } from '@/storage/cast';
@@ -84,33 +84,11 @@ describe('analyzePart', () => {
       firstSeenPartId: part.id,
     });
     // The voice is picked for those traits, not for a character nobody knows anything about.
-    const locale = defaultLocale('en');
+    const locale = DEFAULT_LOCALE;
     expect(voice).toEqual(assignVoice(oldMan, story.cast, voices, locale));
     expect(voice).not.toEqual(
       assignVoice({ id: oldMan.id, role: 'character' }, story.cast, voices, locale),
     );
-  });
-
-  it('reads the name in the story’s language: a Spanish description in a Spanish story', async () => {
-    const spanish = [
-      { name: 'es-a', lang: 'es-ES', isDefault: true },
-      { name: 'es-b', lang: 'es-MX' },
-    ];
-    const story = await createStory(db, { title: 'S', lang: 'es' });
-    const part = await addPart(db, story.id, paste('—¿Quién anda ahí? —preguntó la abuela.'));
-    await analyzePart(db, part.id, { voices: spanish });
-
-    const { voice, ...abuela } = (await getStory(db, story.id))!.cast.at(-1)!;
-    expect(abuela).toStrictEqual({
-      id: abuela.id,
-      role: 'character',
-      name: 'la abuela',
-      aliases: [],
-      gender: 'female',
-      age: 'elder',
-      firstSeenPartId: part.id,
-    });
-    expect(voice).toEqual(assignVoice(abuela, story.cast, spanish, defaultLocale('es')));
   });
 
   it('keeps a person called by a title and by the surname alone human: “Mr. Fox … Fox”', async () => {
@@ -136,9 +114,9 @@ describe('analyzePart', () => {
       gender: 'male',
       firstSeenPartId: part.id,
     });
-    expect(voice).toEqual(assignVoice(fox, story.cast, voices, defaultLocale('en')));
+    expect(voice).toEqual(assignVoice(fox, story.cast, voices, DEFAULT_LOCALE));
     expect(voice).not.toEqual(
-      assignVoice({ ...fox, species: 'animal' }, story.cast, voices, defaultLocale('en')),
+      assignVoice({ ...fox, species: 'animal' }, story.cast, voices, DEFAULT_LOCALE),
     );
   });
 
@@ -185,12 +163,7 @@ describe('analyzePart', () => {
       name: 'the old man',
       aliases: [],
       firstSeenPartId: part.id,
-      voice: assignVoice(
-        { id: oldMan!.id, role: 'character' },
-        story.cast,
-        voices,
-        defaultLocale('en'),
-      ),
+      voice: assignVoice({ id: oldMan!.id, role: 'character' }, story.cast, voices, DEFAULT_LOCALE),
     });
     expect(girl).toStrictEqual({
       id: girl!.id,
@@ -220,13 +193,13 @@ describe('analyzePart', () => {
       age: 'elder',
       firstSeenPartId: part.id,
     });
-    expect(voice).toEqual(assignVoice(oldMan, story.cast, voices, defaultLocale('en')));
+    expect(voice).toEqual(assignVoice(oldMan, story.cast, voices, DEFAULT_LOCALE));
   });
 
   it('reuses characters from part 1 when analysing part 2', async () => {
-    const { text } = loadFixture('es/marianela-ch1');
-    const cut = text.indexOf('--¿Va usted al establecimiento?');
-    const story = await createStory(db, { title: 'Marianela', lang: 'es' });
+    const { text } = loadFixture('en/pride-ch1');
+    const cut = text.indexOf('“My dear Mr. Bennet,” replied his wife');
+    const story = await createStory(db, { title: 'Pride and Prejudice', lang: 'en' });
     const one = await addPart(db, story.id, paste(text.slice(0, cut)));
     const two = await addPart(db, story.id, paste(text.slice(cut)));
 
@@ -239,9 +212,9 @@ describe('analyzePart', () => {
     expect(afterTwo.slice(0, afterOne.length)).toEqual(
       afterOne.map((c) => ({ ...c, aliases: expect.any(Array) })),
     );
-    const golfin = afterOne.find((c) => c.name === 'Golfín')!;
+    const bennet = afterOne.find((c) => c.name === 'Mr. Bennet')!;
     const speakers = new Set((await getAnalysis(db, two.id))!.segments.map((s) => s.speakerId));
-    expect(speakers.has(golfin.id)).toBe(true);
+    expect(speakers.has(bennet.id)).toBe(true);
   });
 
   it('keeps cast edits made while an analysis runs', async () => {
@@ -318,14 +291,14 @@ describe('analyzePart', () => {
   });
 
   it('keeps the lines of a character merged into the narrator while Claude runs', async () => {
-    const story = await createStory(db, { title: 'S', lang: 'es' });
+    const story = await createStory(db, { title: 'S', lang: 'en' });
     await updateStory(db, story.id, {
-      cast: [...story.cast, character('ines', 'Inés'), character('ramon', 'don Ramón')],
+      cast: [...story.cast, character('nell', 'Nell'), character('ramsay', 'Mr. Ramsay')],
     });
     const part = await addPart(
       db,
       story.id,
-      paste('—No podía dormir.\n\n—Ni yo —respondió don Ramón.'),
+      paste('“I couldn’t sleep.”\n\n“Nor could I,” replied Mr. Ramsay.'),
     );
     const held = heldTransport(() => ({
       units: [
@@ -334,22 +307,22 @@ describe('analyzePart', () => {
         { id: 2, spans: [{ speaker: 'N', mode: 'narration' }] },
       ],
       newCharacters: [],
-      aliasAdditions: [{ characterId: 'c1', alias: 'Nesita' }],
+      aliasAdditions: [{ characterId: 'c1', alias: 'Nellie' }],
     }));
     const running = analyzePart(db, part.id, { voices, llm: llm(held.transport) });
     await held.requested;
-    await mergeCharactersInStory(db, story.id, 'ines', story.narratorId);
+    await mergeCharactersInStory(db, story.id, 'nell', story.narratorId);
     held.release();
     await running;
 
     const saved = (await getStory(db, story.id))!;
     const analysis = (await getAnalysis(db, part.id))!;
-    expect(saved.cast.map((c) => c.name)).toEqual(['Narrador', 'Desconocido', 'don Ramón']);
-    // The name Claude found for Inés goes where she went.
-    expect(saved.cast.find((c) => c.id === story.narratorId)!.aliases).toEqual(['Inés', 'Nesita']);
+    expect(saved.cast.map((c) => c.name)).toEqual(['Narrator', 'Unknown speaker', 'Mr. Ramsay']);
+    // The name Claude found for Nell goes where she went.
+    expect(saved.cast.find((c) => c.id === story.narratorId)!.aliases).toEqual(['Nell', 'Nellie']);
     expect(analysis.segments.map((s) => s.speakerId)).toEqual([
       story.narratorId,
-      'ramon',
+      'ramsay',
       story.narratorId,
     ]);
     expect((await getPart(db, part.id))!.analysisStatus).toBe('done');
@@ -369,7 +342,9 @@ describe('analyzePart', () => {
     // The Reader's "New character": one save adds Grace and gives her the line.
     const before = (await getAnalysis(db, part.id))!;
     const index = before.segments.findIndex(isQuestion);
-    const segments = reassignSegment(text, before.segments, index, 'grace', story.narratorId);
+    const segments = reassignSegments(text, before.segments, index, 'grace', {
+      narratorId: story.narratorId,
+    });
     await saveAnalysis(
       db,
       { ...before, segments },
@@ -397,7 +372,9 @@ describe('analyzePart', () => {
     const running = analyzePart(db, part.id, { voices, llm: llm(held.transport) });
     await held.requested;
     const before = (await getAnalysis(db, part.id))!;
-    const segments = reassignSegment(text, before.segments, 0, 'grace', story.narratorId);
+    const segments = reassignSegments(text, before.segments, 0, 'grace', {
+      narratorId: story.narratorId,
+    });
     await saveAnalysis(
       db,
       { ...before, segments },
@@ -448,9 +425,9 @@ describe('heuristic pipeline performance', () => {
     const { text: base } = loadFixture('en/pride-ch1');
     const words = base.split(/\s+/).length;
     const text = Array.from({ length: Math.ceil(5000 / words) }, () => base).join('\n\n');
-    const cast = baseCast('en');
+    const cast = baseCast();
     const t0 = performance.now();
-    const labels = analyzeHeuristic({ text, lang: 'en', units: splitUnits(text, 'en'), cast });
+    const labels = analyzeHeuristic({ text, units: splitUnits(text), cast });
     mergeLabels(text, labels, cast, 'p', () => crypto.randomUUID());
     expect(performance.now() - t0).toBeLessThan(1000);
   });

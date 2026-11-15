@@ -13,7 +13,7 @@ export interface SpanLabel {
   source: SegmentSource;
   /**
    * Internal, never stored: the heuristic gave this span to the narrator only because it is
-   * narration or an "I" line ("I said", "—respondí"), so whoever tells that stretch voices it.
+   * narration or an "I" line ("I said"), so whoever tells that stretch voices it.
    * The LLM analyser uses it for units it labels with the heuristic.
    */
   teller?: true;

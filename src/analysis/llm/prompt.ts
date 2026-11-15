@@ -1,4 +1,4 @@
-import type { Analysis, Character, Gender, Lang, Mode } from '@/format/types';
+import type { Analysis, Character, Gender, Mode } from '@/format/types';
 import { isDefaultName } from '../castMatch';
 
 /** How the narrator has told the story's analysed parts (see narratorStyleOf). */
@@ -24,8 +24,7 @@ export interface ContextLine {
   previousPart?: boolean;
 }
 
-export interface PromptInput {
-  lang: Lang;
+interface PromptInput {
   cast: readonly PromptCharacter[];
   /** Already-labelled units just before the chunk. */
   context: readonly ContextLine[];
@@ -37,29 +36,28 @@ export interface PromptInput {
 export const SYSTEM_PROMPT = `You label stories for a multi-voice audiobook. Each cast member has their own voice, and the narration is read by whoever tells the story at that point, which can be N or a character. For every numbered unit of the story, say who voices it and how.
 
 Modes:
-- "narration": the teller's text, including dialogue tags such as "she said" or "—dijo Ana—".
+- "narration": the teller's text, including dialogue tags such as "she said".
 - "speech": words someone says aloud.
-- "thought": someone's unspoken thoughts (often in italics or after "thought", "pensó").
+- "thought": someone's unspoken thoughts (often in italics or after "thought").
 - "written": a letter, note, diary entry, sign or inscription that is read out. The speaker is its writer, or the current teller when the writer is unknown.
 
 Speakers are cast codes. Use U only when the text gives no way to tell who is speaking, never for narration. Work out unattributed dialogue from context: alternating speakers in a conversation (the teller included), who was addressed, who is present.
 
 Who tells the story:
 - N is the main narrator: an impersonal storyteller, or the "I" telling the story. Third-person narration is N's, even when it follows one character or its chapter is headed with a character's name.
-- A first-person teller uses one code for their narration, speech ("I said", "—dije") and thoughts.
+- A first-person teller uses one code for their narration, speech ("I said") and thoughts.
 - The "I" is N if N's cast line names them, or if N has no name yet and nothing shows the "I" is someone else. If N's line says "third person" or names someone else, the "I" is a character: use their code (new if needed) for everything they tell, letters and diaries included.
 - The narrating voice can change between parts and within one: at a heading naming someone ("AMY", "Mina Murray's Journal"), a scene break, a tale a character tells, a letter or diary. Otherwise keep the teller of the context lines.
-- When the text reveals the name of N's "I", add it to aliasAdditions for "N". Never add the narrator, "I" or "yo" as a new character.
+- When the text reveals the name of N's "I", add it to aliasAdditions for "N". Never add the narrator or "I" as a new character.
 
 New characters: when someone not in the cast speaks, thinks, writes or tells part of the story, add them to newCharacters with a fresh ref ("new1", "new2", …) and use that ref as the speaker. Use the name the text gives them; an unnamed character gets a short description as the name ("the innkeeper"). Do not add people who are only mentioned. Before adding anyone, check the cast: a nickname, surname, title or description of an existing character ("Lizzy", "Mr. Darcy", "his wife") is that character, so use their code and, when the text uses a new name for them, add it to aliasAdditions. A name the cast shows for N is N.
 
-Tone: add a tone only when the text clearly signals it (a verb such as "whispered" or "gritó", an adverb, or obvious emotion). Otherwise leave it out.
+Tone: add a tone only when the text clearly signals it (a verb such as "whispered", an adverb, or obvious emotion). Otherwise leave it out.
 
 Spans: give each unit one span without "text". Split a unit into several spans only when it mixes voices (for example narration followed by unquoted speech). Then give every span its "text", copied character for character from the unit, so that the spans together reproduce the unit exactly.
 
 Label every unit under "Units to label" exactly once, in order, by its number. The context lines are already labelled; do not label them.`;
 
-const LANGUAGE: Record<Lang, string> = { en: 'English', es: 'Spanish' };
 const CONTEXT_CHARS = 200;
 
 /** The cast under its prompt codes: N for the narrator, U for the unknown speaker, c1… for the rest. */
@@ -137,12 +135,7 @@ function shorten(text: string): string {
 
 /** The user message for one chunk. Unit texts are JSON strings so every character is explicit. */
 export function buildUserPrompt(input: PromptInput): string {
-  const lines = [
-    `Story language: ${LANGUAGE[input.lang]}`,
-    '',
-    'Cast:',
-    ...input.cast.map(describe),
-  ];
+  const lines = ['Story language: English', '', 'Cast:', ...input.cast.map(describe)];
   if (input.context.length) {
     lines.push('', 'Context (already labelled):');
     let lastPrevious = input.context.length - 1;

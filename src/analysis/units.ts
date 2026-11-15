@@ -1,4 +1,5 @@
-import type { Hint, Lang } from '@/format/types';
+import type { Hint } from '@/format/types';
+import { VERBS } from './heuristic/lexicon';
 
 /**
  * A unit is the smallest piece of text that gets a speaker label. Units tile the text exactly
@@ -15,7 +16,7 @@ export interface Unit {
 }
 
 /** emphasis = narration covered by an emphasis hint (e.g. EPUB italics): a thought candidate. */
-export type UnitKind = 'narration' | 'speech' | 'emphasis';
+type UnitKind = 'narration' | 'speech' | 'emphasis';
 
 interface Piece {
   start: number;
@@ -24,32 +25,61 @@ interface Piece {
   paragraph: number;
 }
 
-const DASHES = '—―–';
 const LETTER_OR_DIGIT = /[\p{L}\p{N}]/u;
 const WHITESPACE = /\s/u;
 const NON_WHITESPACE = /\S/u;
-const SINGLE_QUOTE_OPENERS_BEFORE = new Set(['(', '[', '{', '—', '–', '"', '“', '«', '-']);
+const SINGLE_QUOTE_OPENERS_BEFORE = new Set(['(', '[', '{', '—', '–', '"', '“', '-']);
 /** A text with a blank line in it separates paragraphs only by blank lines. */
 const BLANK_LINE = /\n[^\S\n]*\n/;
+/** Text that opens with a quote mark, after any whitespace: "“Hello,” she said." */
+export const OPENING_QUOTE = /^\s*[“"‘']/u;
+
+/** The speech and thought verbs of tags: "said", "asked", "thought", "whispered"… */
+const TAG_VERB = `(?:${Object.keys(VERBS).join('|')})`;
+/** A sentence ends right before: "She laughed. ‘…" (closing quotes and brackets may follow). */
+const SENTENCE_ENDED = /[.!?…][”’"')\]]*\s+$/u;
+/** A speech verb, a few more words, then a comma or colon right before: "said the old man, ‘…". */
+const VERB_BEFORE = new RegExp(
+  String.raw`(?<!\p{L})${TAG_VERB}(?!\p{L})[^.!?…”"]{0,30}[,:]\s*$`,
+  'u',
+);
+/**
+ * A speech verb right before, with at most "on", a pronoun or a name (maybe after "to") and an
+ * -ly adverb between it and a comma or colon: "Then he said, ‘…", "Pip told her, ‘…", "he
+ * declared: ‘…", "Then he went on, ‘…".
+ */
+const VERB_RIGHT_BEFORE = new RegExp(
+  String.raw`(?<!\p{L})${TAG_VERB}(?!\p{L})(?:\s+on)?(?:\s+(?:to\s+)?(?:me|him|her|us|them|you|\p{Lu}[\p{L}’'-]*))?(?:\s+\p{Ll}+ly)?[,:]\s*$`,
+  'u',
+);
+/** Who says a tag: a pronoun, "the old man", or a name of up to three capitalised words. */
+const TAG_SUBJECT = String.raw`(?:he|she|they|I|we|you|it|(?:the|a|an|his|her|their|my|our|your)(?:\s+\p{L}+){1,3}|\p{Lu}[\p{L}’'-]*(?:\s+\p{Lu}[\p{L}’'-]*){0,2})`;
+/** A tag right after a closing quote: "she thought", "Bi De asked", "said Pip". */
+const TAG_AFTER = new RegExp(
+  String.raw`^,?\s+(?:${TAG_SUBJECT}\s+(?:\p{Ll}+ly\s+)?${TAG_VERB}|${TAG_VERB}\s+${TAG_SUBJECT})(?!\p{L})`,
+  'u',
+);
 
 /**
- * Splits text into units at paragraph breaks, quoted speech (“…”, «…», "…", ‘…’, '…') and
- * dash dialogue (—Hola —dijo Ana—. ¿Vienes?). When the text contains blank lines, only blank
- * lines separate paragraphs (single newlines are hard wraps); otherwise every newline does.
+ * Splits text into units at paragraph breaks and quoted speech (“…”, "…", ‘…’, '…'). When the
+ * text contains blank lines, only blank lines separate paragraphs (single newlines are hard
+ * wraps); otherwise every newline does. Single quotes are speech only where dialogue goes (see
+ * singleOpensSpeech), unless the text writes its dialogue in single quotes.
  */
-export function splitUnits(text: string, lang: Lang, hints: readonly Hint[] = []): Unit[] {
+export function splitUnits(text: string, hints: readonly Hint[] = []): Unit[] {
   if (text.length === 0) return [];
 
   const pieces: Piece[] = [];
   const separator = BLANK_LINE.test(text) ? /\n[^\S\n]*\n\s*/g : /\n\s*/g;
+  const breaks = [...text.matchAll(separator)];
+  const singleDialogue = dialogueInSingleQuotes(text, [
+    0,
+    ...breaks.map((m) => m.index + m[0].length),
+  ]);
   let paragraph = 0;
   let paraStart = 0;
-  // A «…» quotation the last paragraph left open (see scanQuotes).
-  let open: OpenQuote | null = null;
-  for (const match of text.matchAll(separator)) {
-    const scanned = scanParagraph(text, paraStart, match.index, paragraph, lang, open);
-    pieces.push(...scanned.pieces);
-    open = scanned.open;
+  for (const match of breaks) {
+    pieces.push(...scanParagraph(text, paraStart, match.index, paragraph, singleDialogue));
     pieces.push({
       start: match.index,
       end: match.index + match[0].length,
@@ -59,7 +89,7 @@ export function splitUnits(text: string, lang: Lang, hints: readonly Hint[] = []
     paraStart = match.index + match[0].length;
     paragraph++;
   }
-  pieces.push(...scanParagraph(text, paraStart, text.length, paragraph, lang, open).pieces);
+  pieces.push(...scanParagraph(text, paraStart, text.length, paragraph, singleDialogue));
 
   const merged = mergeBlankPieces(text, splitAtEmphasis(text, pieces, hints));
   const paragraphNumbers = new Map<number, number>();
@@ -70,84 +100,33 @@ export function splitUnits(text: string, lang: Lang, hints: readonly Hint[] = []
   });
 }
 
-/**
- * Whether a paragraph starts at `offset`, as splitUnits splits them: only whitespace lies before
- * it, back to the start of the text or to a paragraph break (a hard wrap is not one).
- */
-export function startsParagraph(text: string, offset: number): boolean {
-  let from = offset;
-  while (from > 0 && WHITESPACE.test(text[from - 1]!)) from--;
-  if (from === 0) return true;
-  const gap = text.slice(from, offset);
-  return BLANK_LINE.test(text) ? BLANK_LINE.test(gap) : gap.includes('\n');
-}
-
-function scanParagraph(
-  text: string,
-  start: number,
-  end: number,
-  paragraph: number,
-  lang: Lang,
-  continued: OpenQuote | null,
-): { pieces: Piece[]; open: OpenQuote | null } {
-  if (start >= end) return { pieces: [], open: null };
-  const lead = start + (text.slice(start, end).length - text.slice(start, end).trimStart().length);
-  if (lang === 'es' && dashLength(text, lead, end) > 0) {
-    return { pieces: scanDashDialogue(text, start, lead, end, paragraph), open: null };
+/** Units grouped by paragraph, in order. */
+export function groupByParagraph(units: readonly Unit[]): Unit[][] {
+  const groups: Unit[][] = [];
+  for (const u of units) {
+    const group = groups.at(-1);
+    if (group && group[0]!.paragraph === u.paragraph) group.push(u);
+    else groups.push([u]);
   }
-  return scanQuotes(text, start, lead, end, paragraph, continued);
-}
-
-/** Length of a dialogue dash at i: one of —―– or a run of two or more hyphens ("--"). */
-function dashLength(text: string, i: number, end: number): number {
-  if (i >= end) return 0;
-  if (DASHES.includes(text[i]!)) return 1;
-  let j = i;
-  while (j < end && text[j] === '-') j++;
-  return j - i >= 2 ? j - i : 0;
+  return groups;
 }
 
 /**
- * Spanish dash dialogue. Every dash toggles between speech and narration (the inciso).
- * A dash that opens narration belongs to it ("—dijo Ana"). A dash that leaves narration closes it
- * ("Ana—") unless it is preceded by whitespace and followed by text, which opens new speech.
+ * Whether the text writes its dialogue in single quotes (‘Hello,’ she said.): more of its
+ * paragraphs open with a single quote than with a double one. Its single quotes are then speech
+ * wherever they open, like double quotes.
  */
-function scanDashDialogue(
-  text: string,
-  start: number,
-  lead: number,
-  end: number,
-  paragraph: number,
-): Piece[] {
-  const pieces: Piece[] = [];
-  let kind: UnitKind = 'speech';
-  let pieceStart = start;
-  let i = lead + dashLength(text, lead, end);
-
-  const cut = (at: number, next: UnitKind) => {
-    if (at > pieceStart) pieces.push({ start: pieceStart, end: at, kind, paragraph });
-    pieceStart = at;
-    kind = next;
-  };
-
-  while (i < end) {
-    const len = dashLength(text, i, end);
-    if (len === 0) {
-      i++;
-      continue;
-    }
-    if (kind === 'speech') {
-      cut(i, 'narration');
-    } else {
-      const before = i === start ? ' ' : text[i - 1]!;
-      const after = i + len < end ? text[i + len]! : ' ';
-      const opensSpeech = WHITESPACE.test(before) && !WHITESPACE.test(after);
-      cut(opensSpeech ? i : i + len, 'speech');
-    }
-    i += len;
+function dialogueInSingleQuotes(text: string, paragraphStarts: number[]): boolean {
+  let single = 0;
+  let double = 0;
+  for (const start of paragraphStarts) {
+    let i = start;
+    while (i < text.length && WHITESPACE.test(text[i]!)) i++;
+    const quote = openingQuote(text, i, start, text.length);
+    if (quote?.single) single++;
+    else if (quote) double++;
   }
-  cut(end, kind);
-  return pieces;
+  return single > double;
 }
 
 interface OpenQuote {
@@ -155,34 +134,35 @@ interface OpenQuote {
   single: boolean;
 }
 
-/**
- * Quoted speech in one paragraph. `continued` is a «…» quotation the paragraph before left open:
- * a paragraph starting with "»" carries it on (Spanish comillas de seguir). Returns the «…»
- * quotation this paragraph leaves open, if any.
- */
-function scanQuotes(
+/** Quoted speech in one paragraph. `singleDialogue`: the text writes dialogue in single quotes. */
+function scanParagraph(
   text: string,
   start: number,
-  lead: number,
   end: number,
   paragraph: number,
-  continued: OpenQuote | null,
-): { pieces: Piece[]; open: OpenQuote | null } {
+  singleDialogue: boolean,
+): Piece[] {
   const pieces: Piece[] = [];
-  const continues = continued?.close === '»' && text[lead] === '»';
-  let open: OpenQuote | null = continues ? continued : null;
+  let open: OpenQuote | null = null;
   let pieceStart = start;
+  let lead = start;
+  while (lead < end && WHITESPACE.test(text[lead]!)) lead++;
 
   const cut = (at: number, kind: UnitKind) => {
     if (at > pieceStart) pieces.push({ start: pieceStart, end: at, kind, paragraph });
     pieceStart = at;
   };
 
-  for (let i = continues ? lead + 1 : start; i < end; i++) {
+  for (let i = start; i < end; i++) {
     const ch = text[i]!;
     if (open === null) {
       const quote = openingQuote(text, i, start, end);
-      if (quote) {
+      if (
+        quote &&
+        (!quote.single ||
+          singleDialogue ||
+          singleOpensSpeech(text, i, lead, start, end, quote.close))
+      ) {
         cut(i, 'narration');
         open = quote;
       }
@@ -192,17 +172,15 @@ function scanQuotes(
     }
   }
   // A quote left open at the end of a paragraph continues to its end (multi-paragraph speech
-  // repeats the opening quote on each paragraph, or opens it with "»").
+  // repeats the opening quote on each paragraph).
   cut(end, open ? 'speech' : 'narration');
-  return { pieces, open: open?.close === '»' ? open : null };
+  return pieces;
 }
 
 function openingQuote(text: string, i: number, start: number, end: number): OpenQuote | null {
   switch (text[i]) {
     case '“':
       return { close: '”', single: false };
-    case '«':
-      return { close: '»', single: false };
     case '"':
       return { close: '"', single: false };
     case '‘':
@@ -229,6 +207,41 @@ function isClosingSingle(text: string, i: number, start: number, end: number): b
   const before = i > start ? text[i - 1]! : ' ';
   const after = i + 1 < end ? text[i + 1]! : ' ';
   return !WHITESPACE.test(before) && !LETTER_OR_DIGIT.test(after);
+}
+
+/**
+ * Whether the single quote at `i` opens speech, in a text whose dialogue is in double quotes.
+ * There a single-quoted stretch is dialogue only where dialogue goes: at the start of its
+ * paragraph (‘You are late,’ the crow said.), at the start of a sentence with a tag right after
+ * it (She laughed. ‘Of course,’ she thought.), or right after a speech verb and a comma or colon
+ * (Then he said, ‘Fine.’). In a paragraph a single-quoted line opens, the rest of that line may
+ * come after a longer tag (‘Yes,’ said the old man, ‘and no.’). Anywhere else it is the teller's:
+ * emphasis, a scare quote, a word named or a thought (a ‘quiet’ morning; He went home, ‘tired’ but
+ * happy.). `lead`: where the paragraph's text starts.
+ */
+function singleOpensSpeech(
+  text: string,
+  i: number,
+  lead: number,
+  start: number,
+  end: number,
+  close: string,
+): boolean {
+  if (i === lead) return true;
+  const before = text.slice(start, i);
+  const lineOpened = text[lead] === '‘' || text[lead] === "'";
+  if ((lineOpened ? VERB_BEFORE : VERB_RIGHT_BEFORE).test(before)) return true;
+  if (!SENTENCE_ENDED.test(before)) return false;
+  const closing = closingSingle(text, i, start, end, close);
+  return closing >= 0 && TAG_AFTER.test(text.slice(closing + 1, Math.min(end, closing + 80)));
+}
+
+/** Where the single quote opened at `i` closes in its paragraph, or -1. */
+function closingSingle(text: string, i: number, start: number, end: number, close: string): number {
+  for (let k = i + 1; k < end; k++) {
+    if (text[k] === close && isClosingSingle(text, k, start, end)) return k;
+  }
+  return -1;
 }
 
 /** Splits narration pieces where an emphasis hint (≥ 2 words, inside the piece) begins and ends. */
@@ -263,7 +276,7 @@ function splitAtEmphasis(text: string, pieces: Piece[], hints: readonly Hint[]):
 function mergeBlankPieces(text: string, pieces: Piece[]): Piece[] {
   const out: Piece[] = [];
   for (const piece of pieces) {
-    const blank = !NON_WHITESPACE.test(text.slice(piece.start, piece.end));
+    const blank = isBlank(text, piece);
     const last = out.at(-1);
     if (last && (blank || (last.kind === piece.kind && last.paragraph === piece.paragraph))) {
       last.end = piece.end;
@@ -271,11 +284,25 @@ function mergeBlankPieces(text: string, pieces: Piece[]): Piece[] {
       out.push({ ...piece });
     }
   }
-  // Leading whitespace (before any spoken content) joins the first non-blank piece.
-  if (out.length > 1 && !NON_WHITESPACE.test(text.slice(out[0]!.start, out[0]!.end))) {
-    const [first, second] = out as [Piece, Piece];
-    second.start = first.start;
-    out.shift();
+  return joinLeadingBlank(text, out);
+}
+
+/** Whether a stretch of the text is whitespace only. */
+export function isBlank(text: string, range: { start: number; end: number }): boolean {
+  return !NON_WHITESPACE.test(text.slice(range.start, range.end));
+}
+
+/**
+ * Joins leading whitespace (before any spoken content) to the piece after it, the first one with
+ * words in it. Changes `pieces` and returns it.
+ */
+export function joinLeadingBlank<T extends { start: number; end: number }>(
+  text: string,
+  pieces: T[],
+): T[] {
+  if (pieces.length > 1 && isBlank(text, pieces[0]!)) {
+    pieces[1]!.start = pieces[0]!.start;
+    pieces.shift();
   }
-  return out;
+  return pieces;
 }

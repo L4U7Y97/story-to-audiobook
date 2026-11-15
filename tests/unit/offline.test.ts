@@ -82,11 +82,11 @@ describe('offline without an API key', () => {
   });
 
   it('imports an exported story and plays it without any network request', async () => {
-    const source = await createStory(db, { title: 'Exported', lang: 'es' });
+    const source = await createStory(db, { title: 'Exported', lang: 'en' });
     const part = await addPart(db, source.id, {
-      title: 'Uno',
+      title: 'One',
       source: { kind: 'paste' },
-      text: '—Hola —dijo Ana.',
+      text: '“Hello,” said Anne.',
     });
     await useAnalysis(db).run(part, 'heuristic');
     const file = JSON.stringify(await exportStory(db, source.id));

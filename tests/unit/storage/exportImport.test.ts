@@ -37,7 +37,7 @@ afterEach(async () => {
 
 /** A story with two analysed parts, a renamed character and a saved position. */
 async function sampleStory(): Promise<string> {
-  const story = await createStory(db, { title: 'Ana y Tom', lang: 'en' });
+  const story = await createStory(db, { title: 'Anne and Tom', lang: 'en' });
   const p1 = await addPart(db, story.id, {
     title: 'One',
     source: { kind: 'paste' },
@@ -211,9 +211,9 @@ describe('export and import', () => {
   });
 
   it('names the file after the story', () => {
-    expect(exportFileName({ title: 'Marianela: Capítulo 1' })).toBe(
-      'marianela-capitulo-1.story.json',
+    expect(exportFileName({ title: 'The Fiancée: Chapter 1' })).toBe(
+      'the-fiancee-chapter-1.story.json',
     );
-    expect(exportFileName({ title: '¿?' })).toBe('story.story.json');
+    expect(exportFileName({ title: '“?”' })).toBe('story.story.json');
   });
 });

@@ -3,13 +3,23 @@ import {
   TONE_LABELS,
   type Character,
   type Gender,
-  type Lang,
   type Mode,
   type Tone,
   type Traits,
 } from '@/format/types';
-import { isDefaultName, matchCast, namesOf, normaliseName, type CastEntry } from '../castMatch';
-import { NAME_PARTICLES, TITLES } from '../heuristic/lexicon';
+import {
+  castEntry,
+  FAMILY_TITLES,
+  isDefaultName,
+  matchAnyName,
+  matchCast,
+  namesOf,
+  normaliseName,
+  split,
+  TITLE_WORDS,
+  type CastEntry,
+} from '../castMatch';
+import { NAME_PARTICLES, POSSESSIVE_DETERMINERS } from '../heuristic/lexicon';
 import type { AliasAddition, LabelResult, NewCharacter, SpanLabel, SpeakerRef } from '../labels';
 import type { Unit } from '../units';
 import { chunkUnits, DEFAULT_CHUNK_LIMITS, type ChunkLimits } from './chunking';
@@ -31,7 +41,7 @@ import {
 } from './schema';
 
 /** Bump when the prompt, the output schema or the conversion rules change. */
-export const LLM_VERSION = 3;
+export const LLM_VERSION = 4;
 
 const CONTEXT_LINES = 20;
 const MAX_OUTPUT_TOKENS = 16000;
@@ -39,69 +49,16 @@ const MAX_OUTPUT_TOKENS = 16000;
 const MIN_SPLIT_UNITS = 8;
 
 /** What a model may call the narrator that is not a name. */
-const NARRATOR_PLACEHOLDERS = new Set([
-  'i',
-  'me',
-  'myself',
-  'yo',
-  'mí',
-  'narrator',
-  'the narrator',
-  'narrador',
-  'narradora',
-  'el narrador',
-  'la narradora',
-]);
-/** First words of a description rather than a name ("his lady", "la abuela"). */
-const DESCRIPTION_STARTS = new Set([
-  'his',
-  'her',
-  'their',
-  'my',
-  'your',
-  'our',
-  'the',
-  'a',
-  'an',
-  'el',
-  'la',
-  'los',
-  'las',
-  'un',
-  'una',
-  'su',
-  'sus',
-  'mi',
-  'mis',
-  'tu',
-  'tus',
-]);
-/** Title words of both languages, lower-case, without the period ("mr", "doña"). */
-const TITLE_WORDS = new Set(
-  [...Object.keys(TITLES.en), ...Object.keys(TITLES.es)].map((t) =>
-    t.replace(/\.$/u, '').toLowerCase(),
-  ),
-);
-/** Female titles that go before a family name, as in matchCast's rule 2 ("Mrs. Joe"). */
-const FAMILY_TITLES = new Set(['mrs', 'miss', 'ms', 'mme', 'mlle', 'madam', 'madame']);
-/** Those that also go before a woman's first name ("Miss Elizabeth"), never her husband's. */
+const NARRATOR_PLACEHOLDERS = new Set(['i', 'me', 'myself', 'narrator', 'the narrator']);
+/** First words of a description rather than a name ("his lady"). */
+const DESCRIPTION_STARTS = new Set([...POSSESSIVE_DETERMINERS, 'the', 'a', 'an']);
+/** Family titles also put before a woman's first name ("Miss Elizabeth"), never her husband's. */
 const OWN_NAME_TITLES = new Set(['miss', 'ms', 'mlle']);
-/** Words that join a name without naming anyone ("Inés de Suárez", "Ortega y Gasset"). */
-const NAME_JOINERS = new Set([
-  ...NAME_PARTICLES.en,
-  ...NAME_PARTICLES.es,
-  'the',
-  'of',
-  'el',
-  'la',
-  'los',
-  'las',
-  'y',
-]);
+/** Words that join a name without naming anyone ("Maxim de Winter", "Catherine of Aragon"). */
+const NAME_JOINERS = new Set([...NAME_PARTICLES, 'the', 'of']);
 
-export interface LlmAnalyzeInput {
+interface LlmAnalyzeInput {
   text: string;
-  lang: Lang;
   units: readonly Unit[];
   cast: readonly Character[];
   /** The heuristic's labels for the same units: the fallback for anything the model gets wrong. */
@@ -120,7 +77,7 @@ export interface LlmAnalyzeInput {
   onProgress?: (done: number, total: number) => void;
 }
 
-export interface LlmAnalyzeResult {
+interface LlmAnalyzeResult {
   labels: LabelResult;
   /** Units labelled by the heuristic because the model's answer for them was unusable. */
   fallbackUnits: number;
@@ -186,13 +143,7 @@ class LlmRun {
       const c = input.cast[i]!;
       this.speakers.set(shown.code, {
         ref: { kind: 'cast', id: c.id },
-        entry: {
-          key: shown.code,
-          name: c.name,
-          aliases: [...c.aliases],
-          gender: c.gender,
-          role: c.role,
-        },
+        entry: castEntry(c, shown.code),
         shown,
       });
       this.codeOfId.set(c.id, shown.code);
@@ -248,7 +199,6 @@ class LlmRun {
 
     const { text } = this.input;
     const user = buildUserPrompt({
-      lang: this.input.lang,
       cast: [...this.speakers.values()].map((s) => this.promptCharacter(s)),
       context: this.context,
       units: chunk.map((u) => text.slice(u.start, u.end)),
@@ -503,9 +453,9 @@ class LlmRun {
   }
 
   /**
-   * Whether the model may give N this name: a capitalised real name (not a default name; "doña
-   * Inés" counts) that no character has, and that fits N's names if N has any (see fitsNames), so
-   * that another narrator's name never lands on N.
+   * Whether the model may give N this name: a capitalised real name (not a default name) that no
+   * character has, and that fits N's names if N has any (see fitsNames), so that another
+   * narrator's name never lands on N.
    */
   private isNarratorAlias(name: string): boolean {
     if (isDefaultName(name, 'narrator') || isDefaultName(name, 'unknown')) return false;
@@ -553,14 +503,17 @@ class LlmRun {
       starts[0] = unit.start;
     }
 
-    return spans.map((span, i) => ({
-      start: starts[i]!,
-      end: i + 1 < spans.length ? starts[i + 1]! : unit.end,
-      speaker: speakers[i]!.ref,
-      mode: span.mode,
-      ...(toTone(span.tone) ? { tone: toTone(span.tone)! } : {}),
-      source: 'llm' as const,
-    }));
+    return spans.map((span, i) => {
+      const tone = toTone(span.tone);
+      return {
+        start: starts[i]!,
+        end: i + 1 < spans.length ? starts[i + 1]! : unit.end,
+        speaker: speakers[i]!.ref,
+        mode: span.mode,
+        ...(tone ? { tone } : {}),
+        source: 'llm' as const,
+      };
+    });
   }
 
   private codeOf(ref: SpeakerRef): string {
@@ -679,13 +632,10 @@ class LlmRun {
     const known = this.heuristicRefs.get(ref.ref);
     if (known) return known;
     const c = this.input.heuristic.newCharacters.find((n) => n.ref === ref.ref)!;
-    const entries = this.entries();
-    const existing = [c.name, ...c.aliases]
-      .map((n) => matchCast(n, entries))
-      .find((e) => e !== undefined);
+    const existing = matchAnyName([c.name, ...c.aliases], this.entries());
     const speaker = existing
       ? this.speakers.get(existing.key)!
-      : this.createCharacter(fillTraits(c, inferTraits([c.name, ...c.aliases], this.input.lang)));
+      : this.createCharacter(fillTraits(c, inferTraits([c.name, ...c.aliases])));
     this.heuristicRefs.set(ref.ref, speaker.ref);
     return speaker.ref;
   }
@@ -762,7 +712,7 @@ function isFamilyTitleOf(name: string, entry: CastEntry): boolean {
   return full.length === 0 || full.some((words) => words.slice(1).includes(family));
 }
 
-/** "I", "the narrator", "yo"…: what a model may call a teller, which is not a name. */
+/** "I", "the narrator"…: what a model may call a teller, which is not a name. */
 function isPlaceholder(name: string): boolean {
   return NARRATOR_PLACEHOLDERS.has(normaliseName(name));
 }
@@ -774,12 +724,6 @@ function untitledWords(name: string): string[] {
     .filter((w) => w && !TITLE_WORDS.has(w));
 }
 
-/** A full name as matchCast reads one: two or more words, not starting with a title. */
-function isFullName(name: string): boolean {
-  const words = normaliseName(name).split(' ');
-  return words.length > 1 && !TITLE_WORDS.has(words[0]!);
-}
-
 /**
  * Whether `name` is a full name of someone other than a proposal called by the words `own`, when
  * only `word`, one of those words, links them: as in matchCast's rule 3, it has another surname
@@ -787,14 +731,16 @@ function isFullName(name: string): boolean {
  * when `word` is the surname, and either when `word` is in between.
  */
 function disagrees(name: string, own: readonly string[], word: string): boolean {
-  if (!isFullName(name)) return false;
+  // A full name as matchCast reads one: two or more words, not starting with a title.
+  const full = split(name);
+  if (full.title || full.words.length < 2) return false;
   const words = untitledWords(name);
   return (
     (word !== own[0] && words[0] !== own[0]) || (word !== own.at(-1) && words.at(-1) !== own.at(-1))
   );
 }
 
-/** The words of a name that identify someone: no titles and no joining words ("de", "y"). */
+/** The words of a name that identify someone: no titles and no joining words ("de", "of"). */
 function nameWords(name: string): string[] {
   return untitledWords(name).filter((w) => !NAME_JOINERS.has(w));
 }
@@ -803,7 +749,7 @@ function nameWords(name: string): string[] {
  * Whether a name fits N's names: it shares a word with one of them ("Dr. Watson" and "John
  * Watson"), or one of the two is a single word of the other ("Della" and "Della Street"), and as
  * a full name it keeps the first name of every full name N has, as matchCast's rule 3 does ("Amy
- * Dunne" is not "Nick Dunne", "Pedro de Valdivia" is not "Inés de Suárez").
+ * Dunne" is not "Nick Dunne").
  */
 function fitsNames(own: readonly string[], name: string): boolean {
   const wanted = nameWords(name);
@@ -828,7 +774,7 @@ function isWordOf(word: string, name: string): boolean {
   );
 }
 
-/** Whether a name starts with a capital letter, or does after a lower-case title ("doña Inés"). */
+/** Whether a name starts with a capital letter, or does after a lower-case title ("mr. Darcy"). */
 function startsCapitalised(name: string): boolean {
   const [first = '', second] = name.split(/\s+/u);
   if (/^\p{Lu}/u.test(first)) return true;

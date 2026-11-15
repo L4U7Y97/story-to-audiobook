@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { Character, Lang, Traits } from '@/format/types';
+import type { Character, Traits } from '@/format/types';
 import { splitUnits } from '@/analysis/units';
 import { analyzeHeuristic } from '@/analysis/heuristic';
 import {
@@ -10,7 +10,7 @@ import {
   inferTraits,
   withTraits,
 } from '@/cast/traits';
-import { baseCast, loadFixture } from '../../helpers/fixtures';
+import { baseCast } from '../../helpers/fixtures';
 
 const voice = { lang: 'en-US', pitch: 1, rate: 1 };
 const member = (traits: Traits = {}): Character => ({
@@ -217,8 +217,8 @@ describe('fillTraits', () => {
 });
 
 /** Checks the exact object, so an undefined-valued key fails too. */
-const expectTraits = (names: string[], lang: Lang, expected: Traits) => {
-  const traits = inferTraits(names, lang);
+const expectTraits = (names: string[], expected: Traits) => {
+  const traits = inferTraits(names);
   expect(traits, names.join(' / ')).toStrictEqual(expected);
   expect(Object.keys(traits).sort(), names.join(' / ')).toEqual(Object.keys(expected).sort());
 };
@@ -236,14 +236,14 @@ describe('inferTraits, English', () => {
     ['Michael Wolf', {}],
     ['Kid', {}],
     ['Baby', {}],
-    ['León Felipe', {}],
+    ['Rooster Cogburn', {}],
     ['Bear', { species: 'animal' }],
     ['Rabbit', { species: 'animal' }],
     ['Grandma', { gender: 'female', age: 'elder' }],
     ['Grandma Rose', { gender: 'female', age: 'elder' }],
     ['Granny Smith', { gender: 'female', age: 'elder' }],
   ])('pins “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -270,7 +270,7 @@ describe('inferTraits, English', () => {
     ['Grandpa Joe', { gender: 'male', age: 'elder' }],
     ['Granddad', { gender: 'male', age: 'elder' }],
   ])('reads the elderly in “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -295,7 +295,7 @@ describe('inferTraits, English', () => {
     ['the little child', { age: 'child' }],
     ['the tiny baby', { age: 'child' }],
   ])('reads children in “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -318,7 +318,7 @@ describe('inferTraits, English', () => {
     ['Devil’s Child', {}],
     ['Lucy’s', {}],
   ])('reads past a possessive in “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -336,7 +336,7 @@ describe('inferTraits, English', () => {
     ['the stranger', {}],
     ['the doctor', {}],
   ])('reads the gender of “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -364,7 +364,7 @@ describe('inferTraits, English', () => {
     ['the girl from the dragon cave', { gender: 'female' }],
     ['the man who feeds the bear', { gender: 'male' }],
   ])('reads the species of “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -386,7 +386,7 @@ describe('inferTraits, English', () => {
     ['the great king', { gender: 'male' }],
     ['the great detective', {}],
   ])('reads the size of “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -410,7 +410,7 @@ describe('inferTraits, English', () => {
     ['Lucy', {}],
     ['The', {}],
   ])('reads only a species or a grandparent from the bare word “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each([
@@ -428,13 +428,13 @@ describe('inferTraits, English', () => {
     'Fox Mulder',
     'Rose Grandma',
     'Grandma Rose’s cat',
-    'León Felipe',
+    'Rooster Cogburn',
     // An initial is no article.
     'A. Bear',
     '',
     '   ',
   ])('reads nothing from the name “%s”', (name) => {
-    expectTraits([name], 'en', {});
+    expectTraits([name], {});
   });
 
   it.each<[string, Traits]>([
@@ -444,7 +444,7 @@ describe('inferTraits, English', () => {
     ['My Fair Lady', { gender: 'female' }],
     ['the Grinch', {}],
   ])('reads a capitalised description like “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -465,7 +465,7 @@ describe('inferTraits, English', () => {
     ['the boy riding the dragon', {}],
     ['the man beside the old lady', {}],
   ])('stops at the end of what “%s” says about its head', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -482,7 +482,7 @@ describe('inferTraits, English', () => {
     ['the little bear', { species: 'animal', size: 'small' }],
     ['the bear', { species: 'animal', size: 'large' }],
   ])('gives the young one in “%s” no size of its kind', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it.each<[string, Traits]>([
@@ -498,381 +498,86 @@ describe('inferTraits, English', () => {
     ['the old man', { gender: 'male', age: 'elder' }],
     ['the little old man', { gender: 'male', age: 'elder', size: 'small' }],
   ])('reads no elder from an age in years in “%s”', (name, expected) => {
-    expectTraits([name], 'en', expected);
+    expectTraits([name], expected);
   });
 
   it('compares whole words in lower case, whatever the spacing and punctuation', () => {
-    expectTraits(['The Old Man'], 'en', { gender: 'male', age: 'elder' });
-    expectTraits(['THE LITTLE GIRL'], 'en', { gender: 'female', age: 'child' });
-    expectTraits(['  the   old  man '], 'en', { gender: 'male', age: 'elder' });
-    expectTraits(['“the old man,”'], 'en', { gender: 'male', age: 'elder' });
-    expectTraits(['GRANDMA'], 'en', { gender: 'female', age: 'elder' });
+    expectTraits(['The Old Man'], { gender: 'male', age: 'elder' });
+    expectTraits(['THE LITTLE GIRL'], { gender: 'female', age: 'child' });
+    expectTraits(['  the   old  man '], { gender: 'male', age: 'elder' });
+    expectTraits(['“the old man,”'], { gender: 'male', age: 'elder' });
+    expectTraits(['GRANDMA'], { gender: 'female', age: 'elder' });
     // No stemming and no partial words.
-    expectTraits(['the dogs'], 'en', {});
-    expectTraits(['the catfish'], 'en', {});
-    expectTraits(['the mans'], 'en', {});
-    expectTraits(['Grandmaster'], 'en', {});
+    expectTraits(['the dogs'], {});
+    expectTraits(['the catfish'], {});
+    expectTraits(['the mans'], {});
+    expectTraits(['Grandmaster'], {});
   });
 
   it('reads the curly and the straight apostrophe alike', () => {
     for (const apostrophe of ['’', "'"]) {
-      expectTraits([`Lucy${apostrophe}s grandmother`], 'en', { gender: 'female', age: 'elder' });
-      expectTraits([`the boy${apostrophe}s mother`], 'en', { gender: 'female' });
-      expectTraits([`the witch${apostrophe}s cat`], 'en', { species: 'animal' });
+      expectTraits([`Lucy${apostrophe}s grandmother`], { gender: 'female', age: 'elder' });
+      expectTraits([`the boy${apostrophe}s mother`], { gender: 'female' });
+      expectTraits([`the witch${apostrophe}s cat`], { species: 'animal' });
     }
   });
 
-  it('does not read Spanish descriptions in an English story', () => {
-    expectTraits(['la abuela'], 'en', {});
-    expectTraits(['Abuela'], 'en', {});
-    expectTraits(['el lobo'], 'en', {});
-  });
-});
-
-describe('inferTraits, Spanish', () => {
-  it.each<[string, Traits]>([
-    // Pinned by the design.
-    ['la abuela', { gender: 'female', age: 'elder' }],
-    ['mi abuela', { gender: 'female', age: 'elder' }],
-    ['mi viejo', { gender: 'male' }],
-    ['Abuela', { gender: 'female', age: 'elder' }],
-    ['Abuela Rosa', { gender: 'female', age: 'elder' }],
-    ['Dragón', { species: 'creature' }],
-    ['León Felipe', {}],
-  ])('pins “%s”', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it.each<[string, Traits]>([
-    ['el abuelo', { gender: 'male', age: 'elder' }],
-    ['su abuelo', { gender: 'male', age: 'elder' }],
-    ['la abuelita', { gender: 'female', age: 'elder' }],
-    ['abuelito', { gender: 'male', age: 'elder' }],
-    ['la abuela Rosa', { gender: 'female', age: 'elder' }],
-    ['la abuela de Lucía', { gender: 'female', age: 'elder' }],
-    ['Abuelo Paco', { gender: 'male', age: 'elder' }],
-    ['el viejo', { gender: 'male', age: 'elder' }],
-    ['la vieja', { gender: 'female', age: 'elder' }],
-    ['un anciano', { gender: 'male', age: 'elder' }],
-    ['la anciana', { gender: 'female', age: 'elder' }],
-    ['una anciana', { gender: 'female', age: 'elder' }],
-    ['el pobre viejo', { gender: 'male', age: 'elder' }],
-    ['el viejo de la montaña', { gender: 'male', age: 'elder' }],
-    // "mi viejo" and "su vieja" are a father and a mother.
-    ['su vieja', { gender: 'female' }],
-    ['mi anciano', { gender: 'male' }],
-    // "un viejo amigo" has known someone for long.
-    ['un viejo amigo', { gender: 'male' }],
-    ['el viejo pescador', { gender: 'male' }],
-    // Old right before or after hombre, mujer, señor or señora.
-    ['el hombre viejo', { gender: 'male', age: 'elder' }],
-    ['el viejo hombre', { gender: 'male', age: 'elder' }],
-    ['la anciana señora', { gender: 'female', age: 'elder' }],
-    ['la mujer anciana', { gender: 'female', age: 'elder' }],
-    ['el señor', { gender: 'male' }],
-    ['la mujer', { gender: 'female' }],
-    // Not before other nouns: the noun after it is the person.
-    ['la vieja bruja', { gender: 'female' }],
-    ['el anciano rey', { gender: 'male' }],
-    ['el viejo lobo', { gender: 'male', species: 'animal' }],
-    // A bare word is a grandparent, never just someone old.
-    ['Viejo', {}],
-    ['Anciana', {}],
-  ])('reads the elderly in “%s”', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it.each<[string, Traits]>([
-    ['el niño', { gender: 'male', age: 'child' }],
-    ['la niña', { gender: 'female', age: 'child' }],
-    ['la nena', { gender: 'female', age: 'child' }],
-    ['el nene', { gender: 'male', age: 'child' }],
-    ['el bebé', { age: 'child' }],
-    ['la niña pequeña', { gender: 'female', age: 'child' }],
-    ['la niña del dragón', { gender: 'female', age: 'child' }],
-    // Words for teenagers and young adults too: gender only.
-    ['el chico', { gender: 'male' }],
-    ['la chica', { gender: 'female' }],
-    ['el muchacho', { gender: 'male' }],
-    ['la muchacha', { gender: 'female' }],
-    ['el mozo', { gender: 'male' }],
-    ['la moza', { gender: 'female' }],
-    // "joven" takes its gender from the article.
-    ['el joven', { gender: 'male' }],
-    ['la joven', { gender: 'female' }],
-    ['una joven', { gender: 'female' }],
-    ['mi joven', {}],
-    ['la joven princesa', { gender: 'female' }],
-    // Only "pequeño" makes a child of them.
-    ['la pequeña muchacha', { gender: 'female', age: 'child' }],
-    ['el chico pequeño', { gender: 'male', age: 'child' }],
-    ['el chico grande', { gender: 'male' }],
-    // Never from a nickname.
-    ['Niño', {}],
-    ['Nena', {}],
-    ['Bebé', {}],
-    ['Chico', {}],
-  ])('reads children in “%s”', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it.each<[string, Traits]>([
-    ['el lobo', { gender: 'male', species: 'animal' }],
-    ['la loba', { gender: 'female', species: 'animal' }],
-    ['la zorra', { gender: 'female', species: 'animal' }],
-    ['el gato', { gender: 'male', species: 'animal' }],
-    ['la gallina', { gender: 'female', species: 'animal' }],
-    ['el gallo', { gender: 'male', species: 'animal' }],
-    ['la yegua', { gender: 'female', species: 'animal' }],
-    // A noun with one form for both sexes gives no gender, whatever its article.
-    ['la liebre', { species: 'animal' }],
-    ['la rana', { species: 'animal' }],
-    ['el sapo', { species: 'animal' }],
-    ['la serpiente', { species: 'animal' }],
-    ['el ratón', { species: 'animal', size: 'small' }],
-    ['la hormiga', { species: 'animal', size: 'small' }],
-    ['el oso', { gender: 'male', species: 'animal', size: 'large' }],
-    ['el elefante', { species: 'animal', size: 'large' }],
-    ['el dragón', { species: 'creature', size: 'large' }],
-    ['el gigante', { species: 'creature', size: 'large' }],
-    ['el gigante egoísta', { species: 'creature', size: 'large' }],
-    ['el hada', { species: 'creature', size: 'small' }],
-    ['el fantasma', { species: 'creature' }],
-    ['la sirena', { gender: 'female', species: 'creature' }],
-    ['el unicornio', { species: 'creature' }],
-    ['el robot', { species: 'machine' }],
-    ['la máquina', { species: 'machine' }],
-    ['el ordenador', { species: 'machine' }],
-    // The words after "de", "del", "con", "que" and "en" describe someone else.
-    ['el rey de los gigantes', { gender: 'male' }],
-    ['la mujer del oso', { gender: 'female' }],
-    ['el hombre que cuida al león', { gender: 'male' }],
-    ['la niña con el perro', { gender: 'female', age: 'child' }],
-    // A witch is human.
-    ['la bruja', { gender: 'female' }],
-  ])('reads the species of “%s”', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it.each<[string, Traits]>([
-    ['el perro pequeño', { gender: 'male', species: 'animal', size: 'small' }],
-    ['el pequeño perro', { gender: 'male', species: 'animal', size: 'small' }],
-    ['el ratón enorme', { species: 'animal', size: 'large' }],
-    ['el gran oso', { gender: 'male', species: 'animal', size: 'large' }],
-    ['el lobo grande', { gender: 'male', species: 'animal', size: 'large' }],
-    ['el dragón diminuto', { species: 'creature', size: 'small' }],
-    ['el oso gigante', { gender: 'male', species: 'animal', size: 'large' }],
-    ['el hombre enorme', { gender: 'male', size: 'large' }],
-    ['la mujer diminuta', { gender: 'female', size: 'small' }],
-    // "gran" before a person is "great".
-    ['el gran rey', { gender: 'male' }],
-    ['la gran señora', { gender: 'female' }],
-    // With a brother or a sister "pequeño" tells the age.
-    ['su hermana pequeña', { gender: 'female' }],
-    ['mi hermano grande', { gender: 'male' }],
-  ])('reads the size of “%s”', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it.each<[string, Traits]>([
-    ['Gata', { gender: 'female', species: 'animal' }],
-    ['Lobo', { gender: 'male', species: 'animal' }],
-    ['Conejo', { gender: 'male', species: 'animal' }],
-    ['Liebre', { species: 'animal' }],
-    // No size from a nickname.
-    ['Ratón', { species: 'animal' }],
-    ['Oso', { gender: 'male', species: 'animal' }],
-    ['Gigante', { species: 'creature' }],
-    ['Hada', { species: 'creature' }],
-    ['Sirena', { gender: 'female', species: 'creature' }],
-    ['Robot', { species: 'machine' }],
-    ['Bruja', {}],
-    ['Rey', {}],
-    ['Remedios', {}],
-  ])('reads only a species or a grandparent from the bare word “%s”', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it.each([
-    'León Felipe',
-    'Don León',
-    'doña Remedios',
-    'Julián',
-    'la Nela',
-    'Lobo Pérez',
-    'Tío Conejo',
-    'Rosa Abuela',
-    '',
-  ])('reads nothing from the name “%s”', (name) => {
-    expectTraits([name], 'es', {});
-  });
-
-  it.each<[string, Traits]>([
-    // What follows "y", "a", "junto a" or "sobre" is about someone or something else.
-    ['la vieja y el lobo', { gender: 'female', age: 'elder' }],
-    ['el viejo y la niña', { gender: 'male', age: 'elder' }],
-    ['el niño y su perro', { gender: 'male', age: 'child' }],
-    ['el hombre sobre el caballo', { gender: 'male' }],
-    ['la mujer junto al niño', { gender: 'female' }],
-    // The head is a word nobody knows, so the noun after it is not taken for it.
-    ['el guardia junto a la niña', {}],
-    ['la enfermera junto al bebé', {}],
-    ['el jinete a caballo', {}],
-    ['el desconocido sobre el caballo', {}],
-    ['el soldado sobre el dragón', {}],
-    ['el pastor y su perro', {}],
-    ['el capitán y su perro', {}],
-  ])('stops at the end of what “%s” says about its head', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it.each<[string, Traits]>([
-    // A capital after the article marks a nickname or an honorific: no child and no size.
-    ['El Nene', { gender: 'male' }],
-    ['la Nena', { gender: 'female' }],
-    ['El Niño', { gender: 'male' }],
-    ['la niña Chole', { gender: 'female' }],
-    ['el niño Goyito', { gender: 'male' }],
-    ['“la Nena”', { gender: 'female' }],
-    ['El Oso', { gender: 'male', species: 'animal' }],
-    ['el Ratón', { species: 'animal' }],
-    ['el Gigante', { species: 'creature' }],
-    // An elder stays one.
-    ['la abuela Rosa', { gender: 'female', age: 'elder' }],
-    ['La Abuela', { gender: 'female', age: 'elder' }],
-    ['el Viejo', { gender: 'male', age: 'elder' }],
-    // Lower-case words are a description, and so is a capital after "de".
-    ['El niño', { gender: 'male', age: 'child' }],
-    ['la nena', { gender: 'female', age: 'child' }],
-    ['la niña pequeña', { gender: 'female', age: 'child' }],
-    ['la niña de Lucía', { gender: 'female', age: 'child' }],
-    ['el oso', { gender: 'male', species: 'animal', size: 'large' }],
-    // A name in capitals throughout tells nothing about its words.
-    ['EL NIÑO', { gender: 'male', age: 'child' }],
-    ['EL OSO', { gender: 'male', species: 'animal', size: 'large' }],
-  ])('reads a capitalised word after the article in “%s” as a nickname', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it('reads a title-cased description in English as before', () => {
-    expectTraits(['The Little Girl'], 'en', { gender: 'female', age: 'child' });
-    expectTraits(['The Bear'], 'en', { species: 'animal', size: 'large' });
-  });
-
-  it.each<[string, Traits]>([
-    ['el oso bebé', { gender: 'male', species: 'animal' }],
-    ['el joven oso', { gender: 'male', species: 'animal' }],
-    ['el elefante bebé', { species: 'animal' }],
-    ['el joven dragón', { species: 'creature' }],
-    ['el gran oso bebé', { gender: 'male', species: 'animal', size: 'large' }],
-    ['el ratón bebé', { species: 'animal', size: 'small' }],
-    ['el oso', { gender: 'male', species: 'animal', size: 'large' }],
-  ])('gives the young one in “%s” no size of its kind', (name, expected) => {
-    expectTraits([name], 'es', expected);
-  });
-
-  it('reads decomposed (NFD) letters like composed ones', () => {
-    // Built here, so no editor or formatter can compose the letters again.
-    const nfd = (name: string) => name.normalize('NFD');
-    expect(nfd('niño')).not.toBe('niño');
-    expect(nfd('niño')).toHaveLength(5);
-    expectTraits([nfd('el niño')], 'es', { gender: 'male', age: 'child' });
-    expectTraits([nfd('la niña')], 'es', { gender: 'female', age: 'child' });
-    expectTraits([nfd('Dragón')], 'es', { species: 'creature' });
-    expectTraits([nfd('el ratón')], 'es', { species: 'animal', size: 'small' });
-    expectTraits([nfd('la máquina')], 'es', { species: 'machine' });
-    expectTraits([nfd('Abuela Lucía'), nfd('el perro pequeño')], 'es', {
-      gender: 'female',
-      age: 'elder',
-      species: 'animal',
-      size: 'small',
-    });
-    expectTraits([nfd('León Felipe')], 'es', {});
-  });
-
-  it('compares whole words in lower case', () => {
-    expectTraits(['La Abuela'], 'es', { gender: 'female', age: 'elder' });
-    expectTraits(['EL NIÑO'], 'es', { gender: 'male', age: 'child' });
-    expectTraits(['ABUELA'], 'es', { gender: 'female', age: 'elder' });
-    // "al" and "del" are articles too.
-    expectTraits(['al anciano'], 'es', { gender: 'male', age: 'elder' });
-    // No stemming and no partial words.
-    expectTraits(['los lobos'], 'es', {});
-    expectTraits(['la abuelastra'], 'es', {});
-    // An unaccented "raton" is another word.
-    expectTraits(['el raton'], 'es', {});
-  });
-
-  it('does not read English descriptions in a Spanish story', () => {
-    expectTraits(['the old man'], 'es', {});
-    expectTraits(['Grandma'], 'es', {});
-    expectTraits(['Rabbit'], 'es', {});
+  it('reads a title-cased description like a lower-case one', () => {
+    expectTraits(['The Little Girl'], { gender: 'female', age: 'child' });
+    expectTraits(['The Bear'], { species: 'animal', size: 'large' });
   });
 });
 
 describe('inferTraits over several names', () => {
   it('reads nothing from no names', () => {
-    expectTraits([], 'en', {});
-    expectTraits([], 'es', {});
+    expectTraits([], {});
   });
 
   it('takes each trait from the first name that gives it', () => {
-    expectTraits(['Rose', 'the old woman'], 'en', { gender: 'female', age: 'elder' });
-    expectTraits(['the girl', 'the old man'], 'en', { gender: 'female', age: 'elder' });
-    expectTraits(['the old man', 'the little girl'], 'en', { gender: 'male', age: 'elder' });
-    expectTraits(['Rabbit', 'the little rabbit', 'the big rabbit'], 'en', {
+    expectTraits(['Rose', 'the old woman'], { gender: 'female', age: 'elder' });
+    expectTraits(['the girl', 'the old man'], { gender: 'female', age: 'elder' });
+    expectTraits(['the old man', 'the little girl'], { gender: 'male', age: 'elder' });
+    expectTraits(['Rabbit', 'the little rabbit', 'the big rabbit'], {
       species: 'animal',
       size: 'small',
     });
-    expectTraits(['Remedios', 'doña Remedios', 'la abuela', 'el viejo'], 'es', {
-      gender: 'female',
-      age: 'elder',
-    });
-    expectTraits(['Dragón', 'el lobo'], 'es', { gender: 'male', species: 'creature' });
   });
 
-  it.each<[string[], Lang]>([
-    [['Jackson Lamb', 'Lamb'], 'en'],
-    [['Mr. Fox', 'Fox'], 'en'],
-    [['Michael Wolf', 'Wolf'], 'en'],
-    [['Dr. Lamb', 'Lamb'], 'en'],
-    [['Fox', 'Mr. Fox'], 'en'],
-    [['Fox Mulder', 'Fox', 'FOX'], 'en'],
-    [['Mr. Fox', '“Fox,”'], 'en'],
-    [['Teodoro León', 'León'], 'es'],
-    [['don León', 'León'], 'es'],
-    [['Pedro Cordero', 'Cordero'], 'es'],
-    [['Teodoro León'.normalize('NFD'), 'León'], 'es'],
-  ])('reads no species from a word of a longer name said alone: %j', (names, lang) => {
-    expectTraits(names, lang, {});
+  it.each<[string[]]>([
+    [['Jackson Lamb', 'Lamb']],
+    [['Mr. Fox', 'Fox']],
+    [['Michael Wolf', 'Wolf']],
+    [['Dr. Lamb', 'Lamb']],
+    [['Fox', 'Mr. Fox']],
+    [['Fox Mulder', 'Fox', 'FOX']],
+    [['Mr. Fox', '“Fox,”']],
+  ])('reads no species from a word of a longer name said alone: %j', (names) => {
+    expectTraits(names, {});
   });
 
   it('still reads a bare word beside a description or an unrelated name', () => {
-    expectTraits(['Fox'], 'en', { species: 'animal' });
-    expectTraits(['Rabbit', 'the little rabbit'], 'en', { species: 'animal', size: 'small' });
-    expectTraits(['Bear', 'the bear'], 'en', { species: 'animal', size: 'large' });
-    expectTraits(['the old fox', 'Fox'], 'en', { species: 'animal' });
+    expectTraits(['Fox'], { species: 'animal' });
+    expectTraits(['Rabbit', 'the little rabbit'], { species: 'animal', size: 'small' });
+    expectTraits(['Bear', 'the bear'], { species: 'animal', size: 'large' });
+    expectTraits(['the old fox', 'Fox'], { species: 'animal' });
     // "Bear" is read: the description is no name it could be part of.
-    expectTraits(['Bear', 'the bear’s friend'], 'en', { species: 'animal' });
-    expectTraits(['Rose', 'Grandma'], 'en', { gender: 'female', age: 'elder' });
-    expectTraits(['Grandma Rose', 'Grandma'], 'en', { gender: 'female', age: 'elder' });
-    expectTraits(['Fox', 'Reynard', 'Mr. Reynard'], 'en', { species: 'animal' });
-    expectTraits(['Lobo', 'el lobo feroz'], 'es', { gender: 'male', species: 'animal' });
-    expectTraits(['Abuela Rosa', 'Abuela'], 'es', { gender: 'female', age: 'elder' });
-    expectTraits(['León', 'el león'], 'es', { gender: 'male', species: 'animal' });
+    expectTraits(['Bear', 'the bear’s friend'], { species: 'animal' });
+    expectTraits(['Rose', 'Grandma'], { gender: 'female', age: 'elder' });
+    expectTraits(['Grandma Rose', 'Grandma'], { gender: 'female', age: 'elder' });
+    expectTraits(['Fox', 'Reynard', 'Mr. Reynard'], { species: 'animal' });
   });
 
   it('accepts a read-only list and leaves it alone', () => {
     const names = Object.freeze(['Bear', 'the bear']);
-    expect(inferTraits(names, 'en')).toStrictEqual({ species: 'animal', size: 'large' });
+    expect(inferTraits(names)).toStrictEqual({ species: 'animal', size: 'large' });
     expect(names).toEqual(['Bear', 'the bear']);
   });
 
   it('returns only valid traits', () => {
-    const traits = inferTraits(['the little old man', 'the dragon'], 'en');
+    const traits = inferTraits(['the little old man', 'the dragon']);
     expect(cleanTraits(traits)).toStrictEqual(traits);
     expect(hasTraits(traits)).toBe(true);
-    expect(hasTraits(inferTraits(['Mr. Fox'], 'en'))).toBe(false);
+    expect(hasTraits(inferTraits(['Mr. Fox']))).toBe(false);
   });
 });
 
@@ -884,68 +589,40 @@ describe('inferTraits on a very long name', () => {
     return performance.now() - start;
   };
 
-  it.each<[string, string, Lang, Traits]>([
-    ['punctuation inside one word', `a${'!'.repeat(50_000)}a`, 'en', {}],
-    ['punctuation inside a word of a description', `the bear${'!'.repeat(50_000)}s`, 'en', {}],
-    ['punctuation and full stops', `la ${'!.'.repeat(25_000)}a`, 'es', {}],
+  it.each<[string, string, Traits]>([
+    ['punctuation inside one word', `a${'!'.repeat(50_000)}a`, {}],
+    ['punctuation inside a word of a description', `the bear${'!'.repeat(50_000)}s`, {}],
+    ['punctuation and full stops', `the ${'!.'.repeat(25_000)}a`, {}],
     [
       'quotes around a description',
       `${'“'.repeat(25_000)}the old man${'”'.repeat(25_000)}`,
-      'en',
       { gender: 'male', age: 'elder' },
     ],
-    [
-      'quotes around a nickname',
-      `${'¡'.repeat(25_000)}El Nene${'!'.repeat(25_000)}`,
-      'es',
-      { gender: 'male' },
-    ],
-    ['many words', 'the old man '.repeat(4_000), 'en', { gender: 'male', age: 'elder' }],
-  ])('reads %s of 50,000 characters in well under half a second', (_, name, lang, expected) => {
+    ['many words', 'the old man '.repeat(4_000), { gender: 'male', age: 'elder' }],
+  ])('reads %s of 50,000 characters in well under half a second', (_, name, expected) => {
     expect(name.length).toBeGreaterThanOrEqual(48_000);
     let traits: Traits | undefined;
     const elapsed = timed(() => {
-      traits = inferTraits([name], lang);
+      traits = inferTraits([name]);
     });
     expect(traits).toStrictEqual(expected);
     expect(elapsed).toBeLessThan(500);
   });
 
   it('strips the same punctuation as before', () => {
-    expectTraits(['“the old man,”'], 'en', { gender: 'male', age: 'elder' });
-    expectTraits(['(the bear!)'], 'en', { species: 'animal', size: 'large' });
-    expectTraits(['the bear!?…'], 'en', { species: 'animal', size: 'large' });
-    expectTraits(['¡Dragón!'], 'es', { species: 'creature' });
-    expectTraits(['«la abuela»'], 'es', { gender: 'female', age: 'elder' });
+    expectTraits(['“the old man,”'], { gender: 'male', age: 'elder' });
+    expectTraits(['(the bear!)'], { species: 'animal', size: 'large' });
+    expectTraits(['the bear!?…'], { species: 'animal', size: 'large' });
     // Punctuation inside a word keeps it another word, and a full stop stays at its end.
-    expectTraits(['the be!ar'], 'en', {});
-    expectTraits(['Bear.'], 'en', {});
-    expectTraits(['A. Bear'], 'en', {});
-    expectTraits(['the bear.!'], 'en', {});
-    expectTraits(['!', '...', '’', '“”'], 'en', {});
+    expectTraits(['the be!ar'], {});
+    expectTraits(['Bear.'], {});
+    expectTraits(['A. Bear'], {});
+    expectTraits(['the bear.!'], {});
+    expectTraits(['!', '...', '’', '“”'], {});
   });
 });
 
 describe('inferTraits on the names the free analyser gives', () => {
-  it('reads the grandmother of the first-person Spanish fixture', () => {
-    const { text, labels } = loadFixture('es/abuela');
-    const result = analyzeHeuristic({
-      text,
-      lang: labels.lang,
-      units: splitUnits(text, labels.lang),
-      cast: baseCast(labels.lang),
-    });
-    const traits = Object.fromEntries(
-      result.newCharacters.map((c) => [c.name, inferTraits([c.name, ...c.aliases], labels.lang)]),
-    );
-    expect(traits).toStrictEqual({
-      'una voz': {},
-      'Doña Remedios': {},
-      Julián: {},
-      'mi abuela': { gender: 'female', age: 'elder' },
-    });
-  });
-
   it('reads the unnamed speakers of an English passage', () => {
     const text =
       '“Who is there?” asked the old man.\n\n' +
@@ -954,12 +631,11 @@ describe('inferTraits on the names the free analyser gives', () => {
       '“Thank you,” said the little girl.\n';
     const result = analyzeHeuristic({
       text,
-      lang: 'en',
-      units: splitUnits(text, 'en'),
-      cast: baseCast('en'),
+      units: splitUnits(text),
+      cast: baseCast(),
     });
     const traits = Object.fromEntries(
-      result.newCharacters.map((c) => [c.name, inferTraits([c.name, ...c.aliases], 'en')]),
+      result.newCharacters.map((c) => [c.name, inferTraits([c.name, ...c.aliases])]),
     );
     expect(traits).toStrictEqual({
       'the old man': { gender: 'male', age: 'elder' },

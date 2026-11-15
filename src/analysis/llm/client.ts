@@ -31,7 +31,7 @@ export interface LlmTransport {
   send(request: LlmRequest): Promise<LlmResponse>;
 }
 
-export type LlmErrorReason = 'auth' | 'model' | 'network' | 'api';
+type LlmErrorReason = 'auth' | 'model' | 'network' | 'api';
 
 /** A failure that ends the whole analysis (the part is marked failed). */
 export class LlmError extends Error {
@@ -52,7 +52,7 @@ const MESSAGES: Record<LlmErrorReason, string> = {
 };
 
 /** Maps SDK errors to the few cases the UI distinguishes. Never includes the key. */
-export function toLlmError(error: unknown): LlmError {
+function toLlmError(error: unknown): LlmError {
   if (error instanceof LlmError) return error;
   if (
     error instanceof Anthropic.AuthenticationError ||

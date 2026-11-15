@@ -5,9 +5,9 @@ import type { DeviceVoice } from '@/playback/engine';
 import type { StoryDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { getPart, setAnalysisStatus } from '@/storage/parts';
-import { defaultLocale, getStory } from '@/storage/stories';
+import { DEFAULT_LOCALE, getStory } from '@/storage/stories';
 import { newId, now } from '@/storage/ids';
-import { matchCast, normaliseName, type CastEntry } from './castMatch';
+import { castEntry, matchAnyName, matchCast, normaliseName } from './castMatch';
 import { analyzeHeuristic, HEURISTIC_VERSION } from './heuristic';
 import type { AliasAddition, LabelResult } from './labels';
 import { mergeLabels } from './merge';
@@ -17,7 +17,7 @@ import type { Effort, LlmResponse, LlmTransport } from './llm/client';
 import { analyzeLlm, LLM_VERSION, matchProposal } from './llm';
 import { narratorStyleOf } from './llm/prompt';
 
-export interface AnalyzeOptions {
+interface AnalyzeOptions {
   /** Device voices used to give new characters distinct voices. */
   voices: readonly DeviceVoice[];
   /** Analyse with Claude; without it the free heuristic is used. */
@@ -26,7 +26,7 @@ export interface AnalyzeOptions {
   onProgress?: (done: number, total: number) => void;
 }
 
-export interface AnalyzeReport {
+interface AnalyzeReport {
   kind: Analysis['analyzer']['kind'];
   /** Units the heuristic labelled because the model's answer for them was unusable. */
   fallbackUnits: number;
@@ -65,10 +65,9 @@ async function runAnalysis(
 
   await setAnalysisStatus(db, partId, 'running');
   try {
-    const units = splitUnits(part.text, story.lang, part.hints);
+    const units = splitUnits(part.text, part.hints);
     const heuristic = analyzeHeuristic({
       text: part.text,
-      lang: story.lang,
       units,
       cast: story.cast,
     });
@@ -82,7 +81,6 @@ async function runAnalysis(
       const signature = castSignature(story.cast);
       const result = await analyzeLlm({
         text: part.text,
-        lang: story.lang,
         units,
         cast: story.cast,
         heuristic,
@@ -108,13 +106,8 @@ async function runAnalysis(
       // The heuristic looks for no traits, so its characters take those their names give away
       // ("the old man") before a voice is picked. A run with Claude has done this already for the
       // characters the heuristic added, and a trait Claude left out was left out on purpose.
-      .map((c) => (llm ? c : fillTraits(c, inferTraits([c.name, ...c.aliases], story.lang))));
-    const voiced: Character[] = assignVoices(
-      added,
-      latest.cast,
-      options.voices,
-      defaultLocale(story.lang),
-    );
+      .map((c) => (llm ? c : fillTraits(c, inferTraits([c.name, ...c.aliases]))));
+    const voiced: Character[] = assignVoices(added, latest.cast, options.voices, DEFAULT_LOCALE);
 
     // Manual speaker corrections survive a re-analysis of the same text.
     const previous = await getAnalysis(db, partId);
@@ -192,19 +185,11 @@ function forLatestCast(
   latest: readonly Character[],
 ): LabelResult {
   const ids = new Set(latest.map((c) => c.id));
-  const entries: CastEntry[] = latest.map((c) => ({
-    key: c.id,
-    name: c.name,
-    aliases: [...c.aliases],
-    gender: c.gender,
-    role: c.role,
-  }));
+  const entries = latest.map((c) => castEntry(c));
   const moved = new Map<string, string>();
   for (const c of before) {
     if (ids.has(c.id)) continue;
-    const into = [c.name, ...c.aliases]
-      .map((n) => matchCast(n, entries))
-      .find((e) => e !== undefined);
+    const into = matchAnyName([c.name, ...c.aliases], entries);
     if (into) moved.set(c.id, into.key);
   }
   const idOf = (id: string) => moved.get(id) ?? id;

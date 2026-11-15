@@ -11,17 +11,16 @@ const ATTRIBUTION = 0.7;
 describe.each([
   // path, attribution floor, names that must not become characters
   ['en/pride-ch1', 0.95, []],
-  ['es/marianela-ch1', 0.95, []],
-  // First person: the narrator is addressed by name ("Kit", "Inés") but is never a second voice.
+  // First person: the narrator is addressed by name ("Kit") but is never a second voice.
   ['en/lighthouse', 0.95, ['Kit']],
-  ['es/abuela', 0.95, ['Inés']],
+  // Single quotes: dialogue where dialogue goes, the teller's emphasis and named words elsewhere.
+  ['en/single-quotes', 0.95, []],
 ])('heuristic on %s', (path, floor, notCharacters) => {
   const { text, labels } = loadFixture(path);
-  const cast = baseCast(labels.lang);
+  const cast = baseCast();
   const result = analyzeHeuristic({
     text,
-    lang: labels.lang,
-    units: splitUnits(text, labels.lang),
+    units: splitUnits(text),
     cast,
   });
   const s = score(text, labels, result, cast);
@@ -50,8 +49,7 @@ describe.each([
   it('is deterministic', () => {
     const again = analyzeHeuristic({
       text,
-      lang: labels.lang,
-      units: splitUnits(text, labels.lang),
+      units: splitUnits(text),
       cast,
     });
     expect(again).toEqual(result);
@@ -61,5 +59,26 @@ describe.each([
     expect(result.spans[0]!.start).toBe(0);
     expect(result.spans.at(-1)!.end).toBe(text.length);
     result.spans.forEach((span, i) => i && expect(span.start).toBe(result.spans[i - 1]!.end));
+  });
+});
+
+describe('heuristic on en/single-quotes', () => {
+  it('gives single-quoted emphasis, named words and notes to the narration', () => {
+    const { text } = loadFixture('en/single-quotes');
+    const cast = baseCast();
+    const result = analyzeHeuristic({
+      text,
+      units: splitUnits(text),
+      cast,
+    });
+    for (const quoted of ['‘quiet’', '‘important’', '‘Back by noon.’', '‘noon’', '‘sign’']) {
+      const at = text.indexOf(quoted);
+      const span = result.spans.find((s) => s.start <= at && at < s.end)!;
+      expect([quoted, span.mode, span.speaker]).toEqual([
+        quoted,
+        'narration',
+        { kind: 'cast', id: 'narrator' },
+      ]);
+    }
   });
 });

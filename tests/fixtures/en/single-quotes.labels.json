@@ -1,0 +1,73 @@
+{
+  "lang": "en",
+  "source": "Original passage written for these tests (single quotes: a talking crow, emphasis, a thought and named words)",
+  "people": {
+    "Pip": [
+      "Pip",
+      "the crow",
+      "crow"
+    ],
+    "Mara": [
+      "Mara"
+    ],
+    "Tobin": [
+      "Tobin"
+    ]
+  },
+  "speech": [
+    {
+      "start": 130,
+      "end": 145,
+      "speaker": "Pip",
+      "text": "‘You are late,’"
+    },
+    {
+      "start": 157,
+      "end": 189,
+      "speaker": "Mara",
+      "text": "“I didn’t know crows kept time,”"
+    },
+    {
+      "start": 227,
+      "end": 243,
+      "speaker": "Pip",
+      "text": "‘This one does,’"
+    },
+    {
+      "start": 258,
+      "end": 283,
+      "speaker": "Pip",
+      "text": "‘and this one is hungry.’"
+    },
+    {
+      "start": 299,
+      "end": 317,
+      "speaker": "Mara",
+      "text": "‘Of course he is,’"
+    },
+    {
+      "start": 424,
+      "end": 453,
+      "speaker": "Tobin",
+      "text": "“Is that bird talking again?”"
+    },
+    {
+      "start": 505,
+      "end": 522,
+      "speaker": "Mara",
+      "text": "“He never stops,”"
+    },
+    {
+      "start": 566,
+      "end": 582,
+      "speaker": "Mara",
+      "text": "‘Just a little,’"
+    },
+    {
+      "start": 683,
+      "end": 710,
+      "speaker": "Pip",
+      "text": "‘Fine bread. Poor company.’"
+    }
+  ]
+}

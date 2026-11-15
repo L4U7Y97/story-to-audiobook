@@ -3,40 +3,40 @@ import { bestVoiceFor, resolveVoice } from '@/cast/resolveVoice';
 import type { DeviceVoice } from '@/playback/engine';
 
 const desktop: DeviceVoice[] = [
-  { name: 'Microsoft Helena - Spanish (Spain)', lang: 'es-ES' },
-  { name: 'Google español de Estados Unidos', lang: 'es-US', network: true },
-  { name: 'Microsoft Sabina - Spanish (Mexico)', lang: 'es-MX', isDefault: true },
-  { name: 'Microsoft Zira - English (United States)', lang: 'en-US' },
+  { name: 'Microsoft Hazel - English (Great Britain)', lang: 'en-GB' },
+  { name: 'Google US English', lang: 'en-US', network: true },
+  { name: 'Microsoft Catherine - English (Australia)', lang: 'en-AU', isDefault: true },
+  { name: 'Microsoft Hedda - German (Germany)', lang: 'de-DE' },
 ];
-const voice = { voiceName: 'es-es-x-eee-local', lang: 'es-ES', pitch: 0.85, rate: 1.1 };
+const voice = { voiceName: 'en-gb-x-gba-local', lang: 'en-GB', pitch: 0.85, rate: 1.1 };
 
 describe('resolveVoice', () => {
   it('uses the chosen voice when the device has it', () => {
     expect(
-      resolveVoice({ ...voice, voiceName: 'Microsoft Zira - English (United States)' }, desktop),
+      resolveVoice({ ...voice, voiceName: 'Microsoft Hedda - German (Germany)' }, desktop),
     ).toEqual({
-      voiceName: 'Microsoft Zira - English (United States)',
-      lang: 'es-ES',
+      voiceName: 'Microsoft Hedda - German (Germany)',
+      lang: 'en-GB',
       substituted: false,
     });
   });
 
   it('substitutes a missing voice with the best one for the same locale', () => {
-    // An Android voice name on a desktop browser: same locale (es-ES) beats the default es-MX.
+    // An Android voice name on a desktop browser: same locale (en-GB) beats the default en-AU.
     expect(resolveVoice(voice, desktop)).toEqual({
-      voiceName: 'Microsoft Helena - Spanish (Spain)',
-      lang: 'es-ES',
+      voiceName: 'Microsoft Hazel - English (Great Britain)',
+      lang: 'en-GB',
       substituted: true,
     });
   });
 
   it('falls back to the same language, preferring the default and offline voices', () => {
-    expect(resolveVoice({ ...voice, lang: 'es-AR' }, desktop).voiceName).toBe(
-      'Microsoft Sabina - Spanish (Mexico)',
+    expect(resolveVoice({ ...voice, lang: 'en-NZ' }, desktop).voiceName).toBe(
+      'Microsoft Catherine - English (Australia)',
     );
     const noDefault = desktop.map((v) => ({ ...v, isDefault: false }));
-    expect(resolveVoice({ ...voice, lang: 'es_AR' }, noDefault).voiceName).toBe(
-      'Microsoft Helena - Spanish (Spain)',
+    expect(resolveVoice({ ...voice, lang: 'en_NZ' }, noDefault).voiceName).toBe(
+      'Microsoft Hazel - English (Great Britain)',
     );
   });
 
@@ -49,7 +49,7 @@ describe('resolveVoice', () => {
 
   it('does not report a substitution for "device default" voices or an unknown voice list', () => {
     expect(resolveVoice({ ...voice, voiceName: undefined }, desktop).substituted).toBe(false);
-    expect(resolveVoice(voice, [])).toEqual({ lang: 'es-ES', substituted: false });
+    expect(resolveVoice(voice, [])).toEqual({ lang: 'en-GB', substituted: false });
   });
 
   describe('with a missing voice whose name tells its gender', () => {
@@ -101,14 +101,14 @@ describe('resolveVoice', () => {
 
 describe('bestVoiceFor', () => {
   it('prefers the same locale, then the system default, then offline voices', () => {
-    expect(bestVoiceFor('es-ES', desktop)?.name).toBe('Microsoft Helena - Spanish (Spain)');
-    expect(bestVoiceFor('es-AR', desktop)?.name).toBe('Microsoft Sabina - Spanish (Mexico)');
-    expect(bestVoiceFor('es_US', desktop)?.name).toBe('Google español de Estados Unidos');
+    expect(bestVoiceFor('en-GB', desktop)?.name).toBe('Microsoft Hazel - English (Great Britain)');
+    expect(bestVoiceFor('en-NZ', desktop)?.name).toBe('Microsoft Catherine - English (Australia)');
+    expect(bestVoiceFor('en_US', desktop)?.name).toBe('Google US English');
     const offlineFirst: DeviceVoice[] = [
-      { name: 'cloud', lang: 'es-CL', network: true },
-      { name: 'local', lang: 'es-CO' },
+      { name: 'cloud', lang: 'en-IE', network: true },
+      { name: 'local', lang: 'en-CA' },
     ];
-    expect(bestVoiceFor('es-ES', offlineFirst)?.name).toBe('local');
+    expect(bestVoiceFor('en-GB', offlineFirst)?.name).toBe('local');
   });
 
   it('keeps the device order among equally good voices', () => {
@@ -121,6 +121,6 @@ describe('bestVoiceFor', () => {
 
   it('finds nothing without a voice of the language', () => {
     expect(bestVoiceFor('fr-FR', desktop)).toBeUndefined();
-    expect(bestVoiceFor('es-ES', [])).toBeUndefined();
+    expect(bestVoiceFor('en-GB', [])).toBeUndefined();
   });
 });

@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { Analysis, Character, Lang, Mode } from '@/format/types';
+import type { Analysis, Character, Mode } from '@/format/types';
 import { analyzePart } from '@/analysis/analyzer';
 import { analyzeHeuristic } from '@/analysis/heuristic';
 import type { SpeakerRef } from '@/analysis/labels';
@@ -101,8 +101,8 @@ function character(id: string, name: string, extra: Partial<Character> = {}): Ch
   };
 }
 
-function castWithNarrator(changes: Partial<Character>, lang: Lang = 'en'): Character[] {
-  return baseCast(lang).map((c) => (c.role === 'narrator' ? { ...c, ...changes } : c));
+function castWithNarrator(changes: Partial<Character>): Character[] {
+  return baseCast().map((c) => (c.role === 'narrator' ? { ...c, ...changes } : c));
 }
 
 /** Runs analyzeLlm without storage; `lines` are each span's trimmed text, speaker name and mode. */
@@ -110,17 +110,15 @@ async function analyze(
   text: string,
   cast: readonly Character[],
   respond: (call: FakeCall) => object,
-  options: { lang?: Lang; limits?: ChunkLimits } = {},
+  options: { limits?: ChunkLimits } = {},
 ) {
-  const lang = options.lang ?? 'en';
-  const units = splitUnits(text, lang);
+  const units = splitUnits(text);
   const transport = fakeTransport(respond);
   const result = await analyzeLlm({
     text,
-    lang,
     units,
     cast,
-    heuristic: analyzeHeuristic({ text, lang, units, cast }),
+    heuristic: analyzeHeuristic({ text, units, cast }),
     ...llm(transport),
     limits: options.limits,
   });
@@ -150,7 +148,7 @@ describe('LLM analysis', () => {
 
     const { story, analysis, lines } = await stored(part.id);
     expect(report).toMatchObject({ kind: 'llm', fallbackUnits: 0 });
-    expect(analysis.analyzer).toEqual({ kind: 'llm', model: 'claude-haiku-5-5', version: 3 });
+    expect(analysis.analyzer).toEqual({ kind: 'llm', model: 'claude-haiku-5-5', version: 4 });
     expect(lines).toEqual([
       ['“Hi,”', 'Anne', 'llm'],
       [' said Anne. ', 'Narrator', 'llm'],
@@ -260,8 +258,8 @@ describe('LLM analysis', () => {
   });
 
   it('rejects a split with a whitespace-only span instead of storing it', async () => {
-    const units = splitUnits('Anne smiled. Hello there, Tom.', 'en');
-    const cast = baseCast('en');
+    const units = splitUnits('Anne smiled. Hello there, Tom.');
+    const cast = baseCast();
     const transport = fakeTransport(() => ({
       units: [
         {
@@ -278,12 +276,10 @@ describe('LLM analysis', () => {
     }));
     const result = await analyzeLlm({
       text: 'Anne smiled. Hello there, Tom.',
-      lang: 'en',
       units,
       cast,
       heuristic: analyzeHeuristic({
         text: 'Anne smiled. Hello there, Tom.',
-        lang: 'en',
         units,
         cast,
       }),
@@ -350,14 +346,13 @@ describe('LLM analysis', () => {
       if (transport.calls.length === 2 && fail) throw new LlmError('network', 'offline');
       return labelAll(units, 'U');
     });
-    const units = splitUnits(text, 'en');
-    const cast = baseCast('en');
+    const units = splitUnits(text);
+    const cast = baseCast();
     const input = {
       text,
-      lang: 'en' as const,
       units,
       cast,
-      heuristic: analyzeHeuristic({ text, lang: 'en', units, cast }),
+      heuristic: analyzeHeuristic({ text, units, cast }),
       ...llm(transport),
       limits: { maxUnits: 4, maxTokens: 10_000 }, // two chunks of two paragraphs
       cache: new Map(),
@@ -559,14 +554,14 @@ describe('narratorStyleOf', () => {
 });
 
 describe('names for the narrator', () => {
-  const holmes = [...baseCast('en'), character('holmes', 'Holmes')];
+  const holmes = [...baseCast(), character('holmes', 'Holmes')];
   const names = ({ units }: FakeCall) =>
     labelAll(units, 'c1', {
       aliasAdditions: [
         { characterId: 'N', alias: 'Watson' },
         { characterId: 'N', alias: 'the narrator' },
         { characterId: 'N', alias: 'Holmes' },
-        { characterId: 'N', alias: 'el doctor' },
+        { characterId: 'N', alias: 'the doctor' },
         { characterId: 'U', alias: 'Lestrade' },
       ],
     });
@@ -606,12 +601,9 @@ describe('names for the narrator', () => {
   });
 
   /** The names a narrator with `changes` keeps when the model gives it `alias`. */
-  async function kept(changes: Partial<Character>, alias: string, lang: Lang = 'en') {
-    const { result } = await analyze(
-      lang === 'es' ? '—Hola —dije.' : '“Hi,” I said.',
-      castWithNarrator(changes, lang),
-      ({ units }) => labelAll(units, 'N', { aliasAdditions: [{ characterId: 'N', alias }] }),
-      { lang },
+  async function kept(changes: Partial<Character>, alias: string) {
+    const { result } = await analyze('“Hi,” I said.', castWithNarrator(changes), ({ units }) =>
+      labelAll(units, 'N', { aliasAdditions: [{ characterId: 'N', alias }] }),
     );
     return result.labels.aliasAdditions.map((a) => a.alias);
   }
@@ -620,23 +612,24 @@ describe('names for the narrator', () => {
     expect(await kept({ aliases: ['Nick Dunne'] }, 'Amy Dunne')).toEqual([]);
     expect(await kept({ aliases: ['Nick Dunne'] }, 'Amy Elliott Dunne')).toEqual([]);
     expect(await kept({ aliases: ['Watson', 'John Watson'] }, 'James Watson')).toEqual([]);
-    expect(await kept({ name: 'Inés de Suárez' }, 'Pedro de Valdivia', 'es')).toEqual([]);
+    expect(await kept({ name: 'Maxim de Winter' }, 'Charles de Courcy')).toEqual([]);
     // Other forms of the same name still fit.
     expect(await kept({ aliases: ['Watson', 'John Watson'] }, 'John Hamish Watson')).toEqual([
       'John Hamish Watson',
     ]);
-    expect(await kept({ name: 'Inés de Suárez' }, 'Inés Suárez', 'es')).toEqual(['Inés Suárez']);
+    expect(await kept({ name: 'Maxim de Winter' }, 'Mr. de Winter')).toEqual(['Mr. de Winter']);
   });
 
   it('takes a name after a title written in lower case, but not the title alone', async () => {
-    expect(await kept({}, 'doña Inés', 'es')).toEqual(['doña Inés']);
-    expect(await kept({}, 'doña', 'es')).toEqual([]);
+    expect(await kept({}, 'mr. Darcy')).toEqual(['mr. Darcy']);
+    expect(await kept({}, 'mr.')).toEqual([]);
+    // Nor a title before a lower-case word, which names nobody.
+    expect(await kept({}, 'lady of the house')).toEqual([]);
   });
 
   it('takes a titled name whose next word is a particle in lower case', async () => {
     expect(await kept({}, 'Mrs. de Winter')).toEqual(['Mrs. de Winter']);
     expect(await kept({ aliases: ['de Winter'] }, 'Mrs. de Winter')).toEqual(['Mrs. de Winter']);
-    expect(await kept({}, 'Señora de Pérez', 'es')).toEqual(['Señora de Pérez']);
   });
 
   it('takes a first name that is also a joining word, such as "Della" or "Van"', async () => {
@@ -665,9 +658,6 @@ describe('names for the narrator', () => {
     expect(await kept({ name: 'Jane Eyre', aliases: ['Janet'] }, 'Miss Janet')).toEqual([
       'Miss Janet',
     ]);
-    expect(await kept({ name: 'Clara Montes', aliases: ['Clara'] }, 'Miss Clara', 'es')).toEqual([
-      'Miss Clara',
-    ]);
     // Not the surname of its full name, nor any name of a man.
     expect(await kept({ name: 'John Smith', aliases: ['Smith'] }, 'Miss Smith')).toEqual([]);
     expect(
@@ -678,21 +668,17 @@ describe('names for the narrator', () => {
   it('refuses "Miss" before a name it goes by alone, his surname and her first name alike', async () => {
     // "Miss Smith" may be the daughter of a narrator called "Smith", and nothing tells "Smith"
     // from "Clara", so "Miss Clara" is refused too (see isFamilyTitleOf).
-    expect(await kept({ aliases: ['Smith'] }, 'Miss Smith', 'es')).toEqual([]);
-    expect(await kept({ aliases: ['Clara'] }, 'Miss Clara', 'es')).toEqual([]);
+    expect(await kept({ aliases: ['Smith'] }, 'Miss Smith')).toEqual([]);
+    expect(await kept({ aliases: ['Clara'] }, 'Miss Clara')).toEqual([]);
   });
 
   it('reads a new character with ref N as a name for the narrator', async () => {
-    const { result, lines } = await analyze(
-      '—Hola —dije.',
-      baseCast('es'),
-      ({ units }) =>
-        labelAll(units, 'N', {
-          newCharacters: [{ ref: 'N', name: 'Lucía', aliases: [], description: 'tells the story' }],
-        }),
-      { lang: 'es' },
+    const { result, lines } = await analyze('“Hi,” I said.', baseCast(), ({ units }) =>
+      labelAll(units, 'N', {
+        newCharacters: [{ ref: 'N', name: 'Lucy', aliases: [], description: 'tells the story' }],
+      }),
     );
-    expect(result.labels.aliasAdditions).toEqual([{ characterId: 'narrator', alias: 'Lucía' }]);
+    expect(result.labels.aliasAdditions).toEqual([{ characterId: 'narrator', alias: 'Lucy' }]);
     expect(result.labels.newCharacters).toEqual([]);
     expect(lines.map(([, name]) => name)).toEqual(['Narrator', 'Narrator']);
   });
@@ -732,9 +718,9 @@ describe('characters the model proposes', () => {
   });
 
   it('give the member they map to the names it did not have', async () => {
-    const cast = [...baseCast('es'), character('golfin', 'Teodoro Golfín')];
+    const cast = [...baseCast(), character('seward', 'John Seward')];
     const { result, transport } = await analyze(
-      '—Vamos —dijo Golfín.\n\n—Sí.',
+      '“Come,” said Seward.\n\n“Yes.”',
       cast,
       ({ units }) =>
         units.length === 2
@@ -742,28 +728,25 @@ describe('characters the model proposes', () => {
               newCharacters: [
                 {
                   ref: 'new1',
-                  name: 'Golfín',
-                  aliases: ['el doctor'],
+                  name: 'Seward',
+                  aliases: ['the doctor'],
                   gender: 'male',
                   description: '',
                 },
               ],
             })
           : labelAll(units, 'c1'),
-      { lang: 'es', limits: { maxUnits: 2, maxTokens: 10_000 } },
+      { limits: { maxUnits: 2, maxTokens: 10_000 } },
     );
     expect(transport.calls[1]!.request.user).toContain(
-      'c1: Teodoro Golfín (male; also called el doctor)',
+      'c1: John Seward (male; also called the doctor)',
     );
-    expect(result.labels.aliasAdditions).toEqual([{ characterId: 'golfin', alias: 'el doctor' }]);
+    expect(result.labels.aliasAdditions).toEqual([{ characterId: 'seward', alias: 'the doctor' }]);
     expect(result.labels.newCharacters).toEqual([]);
   });
 
   it('are new when only a description they share fits a member', async () => {
-    const cast = [
-      ...baseCast('en'),
-      character('mrs-bennet', 'Mrs. Bennet', { aliases: ['his lady'] }),
-    ];
+    const cast = [...baseCast(), character('mrs-bennet', 'Mrs. Bennet', { aliases: ['his lady'] })];
     const { lines, result } = await analyze('“Indeed,” said Lady Lucas.', cast, ({ units }) =>
       labelAll(units, 'new1', {
         newCharacters: [
@@ -776,7 +759,7 @@ describe('characters the model proposes', () => {
   });
 
   it('are the one member their proper-name alias fits', async () => {
-    const cast = [...baseCast('en'), character('elizabeth', 'Elizabeth')];
+    const cast = [...baseCast(), character('elizabeth', 'Elizabeth')];
     const { lines, result } = await analyze('“Yes,” said Lizzy.', cast, ({ units }) =>
       labelAll(units, 'new1', {
         newCharacters: [{ ref: 'new1', name: 'Lizzy', aliases: ['Elizabeth'], description: '' }],
@@ -790,7 +773,7 @@ describe('characters the model proposes', () => {
   it.each([[[]], [['Jane']]])(
     'are new when only a word of their own full name fits a member (its aliases: %j)',
     async (aliases: string[]) => {
-      const cast = [...baseCast('en'), character('jane', 'Jane Bennet', { aliases })];
+      const cast = [...baseCast(), character('jane', 'Jane Bennet', { aliases })];
       const { lines, result } = await analyze(
         '“How do you do?” said Jane Fairfax.',
         cast,
@@ -820,7 +803,7 @@ describe('characters the model proposes', () => {
   ])(
     'are the member a word of their own name names when its full name agrees (%s, %s)',
     async (name, alias, member) => {
-      const cast = [...baseCast('en'), character('member', member, { aliases: [alias] })];
+      const cast = [...baseCast(), character('member', member, { aliases: [alias] })];
       const { lines, result } = await analyze(`“Come at once,” said ${name}.`, cast, ({ units }) =>
         labelAll(units, 'new1', {
           newCharacters: [{ ref: 'new1', name, aliases: [alias], description: '' }],
@@ -889,10 +872,10 @@ describe('characters the model proposes', () => {
   });
 
   it.each([
-    ['Mrs. Joe', [...baseCast('en'), character('joe', 'Joe')]],
+    ['Mrs. Joe', [...baseCast(), character('joe', 'Joe')]],
     [
       'Miss Bingley',
-      [...baseCast('en'), character('bingley', 'Bingley', { aliases: ['Mr. Bingley'] })],
+      [...baseCast(), character('bingley', 'Bingley', { aliases: ['Mr. Bingley'] })],
     ],
   ])(
     'are new when named %s, a woman’s title before the name of a member',
@@ -910,12 +893,12 @@ describe('characters the model proposes', () => {
 
   it.each([
     ['Mrs. Watson', 'Watson', castWithNarrator({ aliases: ['Watson'] })],
-    ['Mrs. Watson', 'Watson', [...baseCast('en'), character('w', 'Watson', { gender: 'male' })]],
-    ['Mrs. Joe', 'Joe', [...baseCast('en'), character('joe', 'Joe')]],
+    ['Mrs. Watson', 'Watson', [...baseCast(), character('w', 'Watson', { gender: 'male' })]],
+    ['Mrs. Joe', 'Joe', [...baseCast(), character('joe', 'Joe')]],
     [
       'Miss Bingley',
       'Bingley',
-      [...baseCast('en'), character('bingley', 'Bingley', { aliases: ['Mr. Bingley'] })],
+      [...baseCast(), character('bingley', 'Bingley', { aliases: ['Mr. Bingley'] })],
     ],
   ])(
     'are new when only the family name of %s, %s, names a member',
@@ -955,7 +938,7 @@ describe('characters the model proposes', () => {
   });
 
   it('are the member who goes by their family name when she is a woman', async () => {
-    const cast = [...baseCast('en'), character('hudson', 'Hudson', { gender: 'female' })];
+    const cast = [...baseCast(), character('hudson', 'Hudson', { gender: 'female' })];
     const { lines, result } = await analyze('“Come in,” said Mrs. Hudson.', cast, ({ units }) =>
       labelAll(units, 'new1', {
         newCharacters: [{ ref: 'new1', name: 'Mrs. Hudson', aliases: ['Hudson'], description: '' }],
@@ -967,7 +950,7 @@ describe('characters the model proposes', () => {
 
   it('never give a man who goes by a family name a woman’s title before it', async () => {
     const cast = [
-      ...baseCast('en'),
+      ...baseCast(),
       character('bingley', 'Bingley', { aliases: ['Mr. Bingley'], gender: 'male' }),
     ];
     // Mapped to him by name, and named by an alias addition.
@@ -984,29 +967,21 @@ describe('characters the model proposes', () => {
   });
 
   it.each([
-    ['Miss Elizabeth', 'Elizabeth Bennet', 'Elizabeth', 'en'],
-    ['Miss Scarlett', 'Scarlett O’Hara', 'Scarlett', 'en'],
-    ['Miss Eliza', 'Elizabeth Bennet', 'Eliza', 'en'],
-    ['Miss Florence', 'Florence Smith', 'Florence', 'es'],
+    ['Miss Elizabeth', 'Elizabeth Bennet', 'Elizabeth'],
+    ['Miss Scarlett', 'Scarlett O’Hara', 'Scarlett'],
+    ['Miss Eliza', 'Elizabeth Bennet', 'Eliza'],
   ] as const)(
     'are the member when named %s, a title before a name of %s that is not a family name',
-    async (name, member, alias, lang) => {
+    async (name, member, alias) => {
       // The member's full name starts with the name, or leaves it out.
-      const cast = [...baseCast(lang), character('m', member, { aliases: [alias] })];
-      const [text, quote] =
-        lang === 'es'
-          ? [`—Pase —dijo ${name}.`, '—Pase']
-          : [`“Come in,” said ${name}.`, '“Come in,”'];
-      const { lines, result } = await analyze(
-        text,
-        cast,
-        ({ units }) =>
-          labelAll(units, 'new1', {
-            newCharacters: [
-              { ref: 'new1', name, aliases: [alias], gender: 'female', description: '' },
-            ],
-          }),
-        { lang },
+      const cast = [...baseCast(), character('m', member, { aliases: [alias] })];
+      const [text, quote] = [`“Come in,” said ${name}.`, '“Come in,”'];
+      const { lines, result } = await analyze(text, cast, ({ units }) =>
+        labelAll(units, 'new1', {
+          newCharacters: [
+            { ref: 'new1', name, aliases: [alias], gender: 'female', description: '' },
+          ],
+        }),
       );
       expect(lines[0]).toEqual([quote, member, 'speech']);
       expect(result.labels.newCharacters).toEqual([]);
@@ -1015,10 +990,7 @@ describe('characters the model proposes', () => {
   );
 
   it('give a member "Miss" before a name its full name shows is not a family name', async () => {
-    const cast = [
-      ...baseCast('en'),
-      character('eb', 'Elizabeth Bennet', { aliases: ['Elizabeth'] }),
-    ];
+    const cast = [...baseCast(), character('eb', 'Elizabeth Bennet', { aliases: ['Elizabeth'] })];
     // Named by an alias addition, and by a proposal mapped to her by name.
     for (const reply of [
       { aliasAdditions: [{ characterId: 'c1', alias: 'Miss Elizabeth' }] },
@@ -1115,7 +1087,7 @@ describe('characters the model proposes', () => {
       // Marple" is "Jane Marple" but "Miss Bingley" is not "Charles Bingley". Only a list of first
       // names would tell them apart, so each is new, the milder mistake (see isFamilyTitleOf). A
       // married woman's title may also go before her husband's first name ("Mrs. Joe").
-      const cast = [...baseCast('en'), character('m', alias, { aliases })];
+      const cast = [...baseCast(), character('m', alias, { aliases })];
       const { lines, result } = await analyze(`“Come in,” said ${name}.`, cast, ({ units }) =>
         labelAll(units, 'new1', {
           newCharacters: [
@@ -1130,8 +1102,8 @@ describe('characters the model proposes', () => {
   );
 
   it('never make "I" or "the narrator" a name of anyone', async () => {
-    const cast = [...baseCast('en'), character('amy', 'Amy', { gender: 'female' })];
-    const placeholders = ['I', 'yo', 'the narrator'];
+    const cast = [...baseCast(), character('amy', 'Amy', { gender: 'female' })];
+    const placeholders = ['I', 'the narrator'];
     const mapped = await analyze(
       '“Hello.”\n\n“Hi.”',
       cast,
@@ -1145,7 +1117,7 @@ describe('characters the model proposes', () => {
     expect(mapped.result.labels.aliasAdditions).toEqual([]);
     expect(mapped.transport.calls[1]!.request.user).toContain('\nc1: Amy (female)\n');
 
-    const created = await analyze('“Hello.”', baseCast('en'), ({ units }) =>
+    const created = await analyze('“Hello.”', baseCast(), ({ units }) =>
       labelAll(units, 'new1', {
         newCharacters: [
           { ref: 'new1', name: 'Amy', aliases: [...placeholders, 'Amy Dunne'], description: '' },
@@ -1157,7 +1129,7 @@ describe('characters the model proposes', () => {
 
   it('are not a member only because both were called "I"', async () => {
     // A cast stored before such names were refused.
-    const cast = [...baseCast('en'), character('amy', 'Amy', { aliases: ['I'] })];
+    const cast = [...baseCast(), character('amy', 'Amy', { aliases: ['I'] })];
     const { lines, transport } = await analyze('“Hello.”', cast, ({ units }) =>
       labelAll(units, 'new1', {
         newCharacters: [{ ref: 'new1', name: 'Nick', aliases: ['I'], description: '' }],
@@ -1231,7 +1203,7 @@ describe('traits of new characters', () => {
   it('grow when a later answer describes a character of this run again', async () => {
     const { result } = await analyze(
       '“Hi,” said Tom.\n\n“Bye,” said Tom.',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         labelAll(units, 'new1', {
           newCharacters: [
@@ -1260,7 +1232,7 @@ describe('traits of new characters', () => {
   it('keep what the first answer said when a later one disagrees', async () => {
     const { result } = await analyze(
       '“Hi,” said Tom.\n\n“Bye,” said Tom.',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         labelAll(units, 'new1', {
           newCharacters: [
@@ -1322,7 +1294,7 @@ describe('traits of new characters', () => {
     // Units: 0 “Hi,” · 1 said the little girl. · 2 “Who goes there?” · 3 asked the old man.
     const { result, lines } = await analyze(
       '“Hi,” said the little girl.\n\n“Who goes there?” asked the old man.',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         units[0] === '“Who goes there?”'
           ? { stopReason: 'refusal', text: '' }
@@ -1345,26 +1317,10 @@ describe('traits of new characters', () => {
     ]);
   });
 
-  it('are guessed in the story’s language: a Spanish description in a Spanish story', async () => {
-    const { result, lines } = await analyze(
-      '—¿Quién anda ahí? —preguntó la abuela.',
-      baseCast('es'),
-      () => ({ stopReason: 'refusal', text: '' }),
-      { lang: 'es' },
-    );
-    expect(result.fallbackUnits).toBeGreaterThan(0);
-    expect(lines.filter(([, , mode]) => mode === 'speech')).toEqual([
-      ['—¿Quién anda ahí?', 'la abuela', 'speech'],
-    ]);
-    expect(result.labels.newCharacters).toStrictEqual([
-      { ref: 'x1', name: 'la abuela', aliases: [], gender: 'female', age: 'elder' },
-    ]);
-  });
-
   it('are not guessed from the surname of a titled character said alone', async () => {
     const { result } = await analyze(
       '“Good morning,” said Mr. Fox.\n\n“Is it?” said Anne.\n\n“It is,” said Fox.',
-      baseCast('en'),
+      baseCast(),
       () => ({ stopReason: 'refusal', text: '' }),
     );
     // "Fox" is the surname of "Mr. Fox", not the name of an animal: no species.
@@ -1434,7 +1390,7 @@ describe('codes and context', () => {
   it('gives each proposal its own fresh code, whatever refs the model picks', async () => {
     const { lines, result } = await analyze(
       '“Hi,” said Anne.\n\n“Up the hill,” said Jack. “Wait,” said Jill.',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         units.length === 2
           ? labelAll(units, 'new1', {
@@ -1465,7 +1421,7 @@ describe('codes and context', () => {
 
   it('keeps the meaning of a code the request showed when a proposal reuses it', async () => {
     const cast = [
-      ...baseCast('en'),
+      ...baseCast(),
       character('elizabeth', 'Elizabeth'),
       character('bennet', 'Mr. Bennet'),
     ];
@@ -1509,7 +1465,7 @@ describe('codes and context', () => {
   it('never makes U a character, so its narration still goes to the teller', async () => {
     const { lines, result } = await analyze(
       'The wind howled.\n\n“Who is there?” called a voice.\n\n“Nobody,” came a second voice.',
-      baseCast('en'),
+      baseCast(),
       ({ units }) => ({
         units: units.map((u, id) => ({
           id,
@@ -1549,7 +1505,7 @@ describe('codes and context', () => {
   it('shows an alias added to a new character once', async () => {
     const { transport, result } = await analyze(
       '“Hi.”\n\n“Hello.”\n\n“Bye.”',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         units[0] === '“Hi.”'
           ? labelAll(units, 'new1', {
@@ -1567,7 +1523,7 @@ describe('codes and context', () => {
   it('includes refused and fallback units in the context', async () => {
     const { transport } = await analyze(
       '“Come in.”\n\n“Why not?”\n\n“Because.”',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         units[0] === '“Why not?”' ? { stopReason: 'refusal', text: '' } : labelAll(units, 'U'),
       { limits: { maxUnits: 1, maxTokens: 10_000 } },
@@ -1576,7 +1532,7 @@ describe('codes and context', () => {
   });
 
   it('gives the context one line per span of a split unit', async () => {
-    const cast = [...baseCast('en'), character('anne', 'Anne')];
+    const cast = [...baseCast(), character('anne', 'Anne')];
     const { transport } = await analyze(
       'Anne turned to him. I am not going back, she said.\n\n“Fine.”',
       cast,
@@ -1627,7 +1583,7 @@ describe('units left to the heuristic', () => {
     });
 
   it('take the teller the model chose nearby for narration and “I” lines', async () => {
-    const { lines, result } = await analyze(text, baseCast('en'), reply('new1'));
+    const { lines, result } = await analyze(text, baseCast(), reply('new1'));
     expect(result.fallbackUnits).toBe(3);
     expect(lines).toEqual([
       ['AMY', 'Amy', 'narration'],
@@ -1653,7 +1609,7 @@ describe('units left to the heuristic', () => {
         '“It was a long road,” I said, “and a hard one.',
         '“But we made it home.”',
       ].join('\n\n'),
-      baseCast('en'),
+      baseCast(),
       reply('new1'),
     );
     expect(lines.filter(([, , mode]) => mode !== 'narration')).toEqual([
@@ -1667,7 +1623,7 @@ describe('units left to the heuristic', () => {
   });
 
   it('stay with the narrator when the model gave it the narration', async () => {
-    const { lines } = await analyze(text, baseCast('en'), reply('N'));
+    const { lines } = await analyze(text, baseCast(), reply('N'));
     expect(lines.slice(2, 5)).toEqual([
       ['I knew at once.', 'Narrator', 'narration'],
       ['“Hi,”', 'Narrator', 'speech'],
@@ -1678,7 +1634,7 @@ describe('units left to the heuristic', () => {
   it('reuse a name the model gave the narrator', async () => {
     const { lines, result } = await analyze(
       '“Come in, Watson,” said Holmes.\n\n“Thank you,” said Watson.',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         units[0] === '“Thank you,”'
           ? { stopReason: 'refusal', text: '' }
@@ -1695,10 +1651,38 @@ describe('units left to the heuristic', () => {
     expect(result.labels.newCharacters.map((c) => c.name)).toEqual(['Holmes']);
   });
 
+  it('reuse the model’s character that another name of the heuristic’s character fits', async () => {
+    // The heuristic's "Mr. Darcy" is also "Darcy", which only names the model's "Fitzwilliam
+    // Darcy".
+    const { lines, result } = await analyze(
+      '“Good evening,” said Mr. Darcy.\n\n“Is it?” said Elizabeth.\n\n“It is,” said Darcy.',
+      baseCast(),
+      ({ units }) =>
+        units[0] === '“Good evening,”'
+          ? labelAll(units, 'new1', {
+              newCharacters: [
+                { ref: 'new1', name: 'Fitzwilliam Darcy', aliases: [], description: '' },
+              ],
+            })
+          : { stopReason: 'refusal', text: '' },
+      { limits: { maxUnits: 2, maxTokens: 10_000 } },
+    );
+    expect(result.fallbackUnits).toBe(4);
+    expect(lines.filter(([, , mode]) => mode === 'speech')).toEqual([
+      ['“Good evening,”', 'Fitzwilliam Darcy', 'speech'],
+      ['“Is it?”', 'Elizabeth', 'speech'],
+      ['“It is,”', 'Fitzwilliam Darcy', 'speech'],
+    ]);
+    expect(result.labels.newCharacters.map((c) => c.name)).toEqual([
+      'Fitzwilliam Darcy',
+      'Elizabeth',
+    ]);
+  });
+
   it('give narration the model left to U to the last teller, else to N', async () => {
     const { lines } = await analyze(
       'AMY\n\nI met Nick at a party.\n\nIt rained.',
-      baseCast('en'),
+      baseCast(),
       () => ({
         units: [
           { id: 0, spans: [{ speaker: 'U', mode: 'narration' }] },
@@ -1731,7 +1715,7 @@ describe('units left to the heuristic', () => {
     it('take the teller the model names after it', async () => {
       const { lines, result } = await analyze(
         'AMY\n\nI knew at once.\n\nI met Nick at a party.\n\nIt rained.',
-        baseCast('en'),
+        baseCast(),
         refusing('AMY'),
         { limits: { maxUnits: 2, maxTokens: 10_000 } },
       );
@@ -1742,7 +1726,7 @@ describe('units left to the heuristic', () => {
     it('take the teller the model named before it', async () => {
       const { lines, result } = await analyze(
         'I met Nick at a party.\n\nIt rained.\n\nI woke early.\n\n“Hi,” I said.',
-        baseCast('en'),
+        baseCast(),
         refusing('“Hi,”'),
         { limits: { maxUnits: 3, maxTokens: 10_000 } },
       );
@@ -1759,7 +1743,7 @@ describe('units left to the heuristic', () => {
     // The heading is N's only because the model had named no teller yet.
     const skipped = await analyze(
       'AMY ELLIOTT\n\nI met Nick at a party.\n\nI knew at once.',
-      baseCast('en'),
+      baseCast(),
       () => ({
         units: [
           { id: 0, spans: [{ speaker: 'U', mode: 'narration' }] },
@@ -1774,7 +1758,7 @@ describe('units left to the heuristic', () => {
     // One chunk per paragraph: the first is refused, and the heading after it is left to U.
     const refused = await analyze(
       'I met Nick at a party.\n\nAMY ELLIOTT\n\nI knew at once.',
-      baseCast('en'),
+      baseCast(),
       ({ units }) =>
         units[0] === 'I met Nick at a party.'
           ? { stopReason: 'refusal', text: '' }
@@ -1797,7 +1781,7 @@ describe('units left to the heuristic', () => {
 
   describe('around a letter or diary', () => {
     const cast = [
-      ...baseCast('en'),
+      ...baseCast(),
       character('nick', 'Nick Dunne'),
       character('amy', 'Amy Elliott'),
       character('lestrade', 'Lestrade'),
@@ -2114,13 +2098,12 @@ describe('units left to the heuristic', () => {
 
   /** Runs analyzeLlm alone on a long part, timed. */
   async function timed(text: string, respond: (call: FakeCall) => object) {
-    const cast = baseCast('en');
-    const units = splitUnits(text, 'en');
-    const heuristic = analyzeHeuristic({ text, lang: 'en', units, cast });
+    const cast = baseCast();
+    const units = splitUnits(text);
+    const heuristic = analyzeHeuristic({ text, units, cast });
     const started = performance.now();
     const result = await analyzeLlm({
       text,
-      lang: 'en',
       units,
       cast,
       heuristic,
@@ -2167,7 +2150,7 @@ describe('chunkUnits', () => {
   const text = Array.from({ length: 10 }, (_, i) => `“Speech ${i},” said A. Narration ${i}.`).join(
     '\n\n',
   );
-  const units = splitUnits(text, 'en');
+  const units = splitUnits(text);
 
   it('keeps every unit once, in order, and ends chunks at paragraph breaks', () => {
     const chunks = chunkUnits(text, units, { maxUnits: 7, maxTokens: 10_000 });
@@ -2181,7 +2164,7 @@ describe('chunkUnits', () => {
   it('splits a paragraph that is larger than a chunk', () => {
     const big = 'a. '.repeat(300).trim();
     const paragraph = `“${big},” said A. “${big}.”`;
-    const bigUnits = splitUnits(paragraph, 'en');
+    const bigUnits = splitUnits(paragraph);
     const chunks = chunkUnits(paragraph, bigUnits, {
       maxUnits: 300,
       maxTokens: estimateTokens(big) + 10,
@@ -2194,37 +2177,35 @@ describe('chunkUnits', () => {
 describe('buildUserPrompt', () => {
   it('lists the cast, context and trimmed units as JSON strings', () => {
     const prompt = buildUserPrompt({
-      lang: 'es',
       cast: [
-        { code: 'N', name: 'Narrador', role: 'narrator', aliases: [] },
+        { code: 'N', name: 'Narrator', role: 'narrator', aliases: [] },
         { code: 'U', name: '?', role: 'unknown', aliases: [] },
-        { code: 'c1', name: 'Pablo', role: 'character', aliases: ['el ciego'], gender: 'male' },
+        { code: 'c1', name: 'Pew', role: 'character', aliases: ['the blind man'], gender: 'male' },
       ],
-      context: [{ code: 'c1', mode: 'speech', text: '—Hola.\n\n' }],
-      units: ['—¿Quién es?\n\n', ' dijo "él".'],
+      context: [{ code: 'c1', mode: 'speech', text: '“Hello.”\n\n' }],
+      units: ['“Who is it?”\n\n', ' said "he".'],
     });
     expect(prompt).toBe(
       [
-        'Story language: Spanish',
+        'Story language: English',
         '',
         'Cast:',
         'N: the narrator',
         'U: unknown speaker',
-        'c1: Pablo (male; also called el ciego)',
+        'c1: Pew (male; also called the blind man)',
         '',
         'Context (already labelled):',
-        '[c1, speech] —Hola.',
+        '[c1, speech] “Hello.”',
         '',
         'Units to label:',
-        '0: "—¿Quién es?"',
-        '1: "dijo \\"él\\"."',
+        '0: "“Who is it?”"',
+        '1: "said \\"he\\"."',
       ].join('\n'),
     );
   });
 
   it("shows the narrator's names and style, but not its default name", () => {
     const prompt = buildUserPrompt({
-      lang: 'en',
       cast: [
         {
           code: 'N',
@@ -2243,13 +2224,12 @@ describe('buildUserPrompt', () => {
 
 describe('analyzeLlm without storage', () => {
   it('uses the base cast codes N and U', async () => {
-    const units = splitUnits(TEXT, 'en');
-    const cast = baseCast('en');
-    const heuristic = analyzeHeuristic({ text: TEXT, lang: 'en', units, cast });
+    const units = splitUnits(TEXT);
+    const cast = baseCast();
+    const heuristic = analyzeHeuristic({ text: TEXT, units, cast });
     const transport = fakeTransport(({ units: u }) => labelAll(u, 'U'));
     const result = await analyzeLlm({
       text: TEXT,
-      lang: 'en',
       units,
       cast,
       heuristic,

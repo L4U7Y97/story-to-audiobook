@@ -2,17 +2,17 @@ import { describe, expect, it } from 'vitest';
 import type { Segment } from '@/format/types';
 import { isSpeakable, segmentText, validateAnalysis, validateSegments } from '@/format/validate';
 
-const cast = new Set(['narrator', 'ana']);
+const cast = new Set(['narrator', 'ann']);
 
 function seg(start: number, end: number, speakerId = 'narrator'): Segment {
   return { start, end, speakerId, mode: 'narration', source: 'heuristic' };
 }
 
 describe('validateSegments', () => {
-  const text = '“Hola,” dijo Ana.';
+  const text = '“Wait,” said Ann.';
 
   it('accepts segments that tile the text', () => {
-    const result = validateSegments(text, [seg(0, 7, 'ana'), seg(7, text.length)], cast);
+    const result = validateSegments(text, [seg(0, 7, 'ann'), seg(7, text.length)], cast);
     expect(result).toEqual({ ok: true });
   });
 
@@ -45,9 +45,9 @@ describe('validateSegments', () => {
   });
 
   it('measures offsets in UTF-16 code units (emoji and accents)', () => {
-    const t = 'Él 😀 rió.';
-    expect(t.length).toBe(10);
-    expect(validateSegments(t, [seg(0, 5), seg(5, 10)], cast)).toEqual({ ok: true });
+    const t = 'Zoë 😀 met Renée.';
+    expect(t.length).toBe(17);
+    expect(validateSegments(t, [seg(0, 6), seg(6, 17)], cast)).toEqual({ ok: true });
   });
 });
 
@@ -74,8 +74,8 @@ describe('segmentText', () => {
 
 describe('isSpeakable', () => {
   it.each([
-    ['Hola', true],
-    ['¿Sí?', true],
+    ['Hello', true],
+    ['“Zoë?”', true],
     ['42', true],
     ['—', false],
     [' \n ', false],

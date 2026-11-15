@@ -129,10 +129,9 @@ const texts = (engine: { spoken: Array<{ text: string }> }) => engine.spoken.map
 
 describe('utterances', () => {
   it('cleans text for speech without touching what is stored', () => {
-    expect(cleanForSpeech('--No puedo--murmuró--. _Villafangosa_\nseñor.')).toBe(
-      'No puedo, murmuró, . Villafangosa señor.',
+    expect(cleanForSpeech('I cannot--he murmured--. _Netherfield_\nPark.')).toBe(
+      'I cannot, he murmured, . Netherfield Park.',
     );
-    expect(cleanForSpeech('—Hola ')).toBe('Hola');
   });
 
   it('chunks long text at sentence boundaries', () => {
@@ -340,7 +339,7 @@ describe('Player with the native engine', () => {
 
   it('substitutes voices missing on the device before sending them', async () => {
     const narrator = new FakeNarrator([
-      { name: 'es-es-x-eee-local', lang: 'es-ES', network: false, quality: 400 },
+      { name: 'en-gb-x-gba-local', lang: 'en-GB', network: false, quality: 400 },
     ]);
     const engine = new NativeSpeechEngine(narrator);
     await engine.listVoices();
@@ -349,16 +348,16 @@ describe('Player with the native engine', () => {
       [
         {
           id: 'u',
-          text: 'Hola',
-          voice: { voiceName: 'Microsoft Laura', lang: 'es-ES', pitch: 0.9, rate: 1.1 },
+          text: 'Hello',
+          voice: { voiceName: 'Microsoft Hazel', lang: 'en-GB', pitch: 0.9, rate: 1.1 },
         },
       ],
       () => {},
     );
     await flush();
     expect(play.mock.calls[0]![0].queue[0]).toMatchObject({
-      voiceName: 'es-es-x-eee-local',
-      lang: 'es-ES',
+      voiceName: 'en-gb-x-gba-local',
+      lang: 'en-GB',
       pitch: 0.9,
       rate: 1.1,
     });

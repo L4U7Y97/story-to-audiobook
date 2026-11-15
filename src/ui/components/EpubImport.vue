@@ -10,7 +10,7 @@ const props = defineProps<{ storyId: string; position: number; bookId?: string }
 const emit = defineEmits<{ imported: [parts: Part[]] }>();
 
 /** Sections that are almost never part of the story itself. */
-const BOILERPLATE = /licen[cs]e|copyright|contents|índice|table of contents|project gutenberg/iu;
+const BOILERPLATE = /licen[cs]e|copyright|contents|table of contents|project gutenberg/iu;
 
 // Shallow: chapters must stay plain objects so IndexedDB can store them (no reactive proxies).
 const book = shallowRef<EpubBook>();

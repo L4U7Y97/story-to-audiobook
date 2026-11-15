@@ -3,7 +3,7 @@ import { judgeStory } from '../../helpers/heldout';
 import { STORIES } from '../../helpers/heldoutStories';
 
 // Error budgets measured when narrator support was added; they may only go down.
-const MAX_ERRORS = { third: 7, first: 18 };
+const MAX_ERRORS = { third: 2, first: 12 };
 
 describe('heuristic on the multi-part regression stories', () => {
   const results = STORIES.map((story) => ({ story, ...judgeStory(story) }));

@@ -10,7 +10,7 @@ import { paragraphStarts } from '@/playback/utterances';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { newId } from '@/storage/ids';
-import { defaultLocale } from '@/storage/stories';
+import { DEFAULT_LOCALE } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
 import { groupParts } from '@/storage/books';
 import { getStory } from '@/storage/stories';
@@ -295,9 +295,9 @@ async function createSpeaker(name: string, how: { mode?: Mode; scope: PickScope 
   const owner = findTypedNameOwner(s.cast, name, s.narratorId);
   if (owner) return choose(owner.id, how);
   // What the name gives away ("the old man") goes in first: the voice is picked from it.
-  const traits = inferTraits([name], s.lang);
+  const traits = inferTraits([name]);
   const base = { id: newId(), role: 'character' as const, name, aliases: [], ...traits };
-  const voice = assignVoice(base, s.cast, await getEngine().listVoices(), defaultLocale(s.lang));
+  const voice = assignVoice(base, s.cast, await getEngine().listVoices(), DEFAULT_LOCALE);
   await choose(base.id, how, [{ ...base, voice }]);
 }
 

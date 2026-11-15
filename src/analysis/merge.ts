@@ -2,7 +2,7 @@ import { cleanTraits } from '@/cast/traits';
 import type { Character, Segment } from '@/format/types';
 import type { LabelResult, SpanLabel } from './labels';
 
-export interface MergeResult {
+interface MergeResult {
   segments: Segment[];
   /** The story cast with new characters (without voices yet) and alias additions applied. */
   cast: Array<Character | Omit<Character, 'voice'>>;

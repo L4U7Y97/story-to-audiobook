@@ -1,6 +1,5 @@
 import type { Analysis, Character, Story, Traits, VoiceSettings } from '@/format/types';
 import { validateAnalysis } from '@/format/validate';
-import { NARRATOR_NAME } from '@/analysis/castMatch';
 import {
   matchVoicesToTraits,
   mergeCharacters,
@@ -11,7 +10,7 @@ import {
 import type { DeviceVoice } from '@/playback/engine';
 import type { StoryDb } from './db';
 import { now } from './ids';
-import { defaultLocale } from './stories';
+import { DEFAULT_LOCALE } from './stories';
 
 /**
  * Merges one character into another across the whole story in a single transaction: the cast and
@@ -30,7 +29,7 @@ export async function mergeCharactersInStory(
       (a): a is Analysis => a !== undefined,
     );
 
-    const result = mergeCharacters(story.cast, analyses, fromId, intoId, NARRATOR_NAME[story.lang]);
+    const result = mergeCharacters(story.cast, analyses, fromId, intoId);
     if (!result.ok) throw new Error(result.reason);
     const { cast, analyses: updated } = result.value;
 
@@ -61,8 +60,9 @@ export async function setTraitsInStory(
 ): Promise<{ repicked: boolean }> {
   let repicked = false;
   await changeCast(db, storyId, (story) => {
-    const locale = defaultLocale(story.lang);
-    const value = valueOf(setTraits(story.cast, characterId, changes, deviceVoices, locale));
+    const value = valueOf(
+      setTraits(story.cast, characterId, changes, deviceVoices, DEFAULT_LOCALE),
+    );
     repicked = value.repicked;
     return value.cast;
   });
@@ -77,7 +77,7 @@ export async function repickVoiceInStory(
   deviceVoices: readonly DeviceVoice[],
 ): Promise<void> {
   await changeCast(db, storyId, (story) =>
-    valueOf(repickMember(story.cast, characterId, deviceVoices, defaultLocale(story.lang))),
+    valueOf(repickMember(story.cast, characterId, deviceVoices, DEFAULT_LOCALE)),
   );
 }
 
@@ -92,7 +92,7 @@ export async function matchVoicesInStory(
   deviceVoices: readonly DeviceVoice[],
 ): Promise<void> {
   await changeCast(db, storyId, (story) =>
-    matchVoicesToTraits(story.cast, deviceVoices, defaultLocale(story.lang), story.lang),
+    matchVoicesToTraits(story.cast, deviceVoices, DEFAULT_LOCALE),
   );
 }
 

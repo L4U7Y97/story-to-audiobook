@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
-import type { Character, Gender, Lang } from '@/format/types';
+import type { Character, Gender } from '@/format/types';
 import { analyzeHeuristic } from '@/analysis/heuristic';
 import { mergeLabels } from '@/analysis/merge';
 import { splitUnits } from '@/analysis/units';
@@ -20,17 +20,14 @@ function chapterOf(path: string, words: number): string {
   return text;
 }
 
-describe.each([
-  ['en/pride-ch1', 'en'],
-  ['es/marianela-ch1', 'es'],
-] as Array<[string, Lang]>)('heuristic speed on %s', (path, lang) => {
+describe.each(['en/pride-ch1'])('heuristic speed on %s', (path) => {
   it(`analyses a 5,000-word chapter in under ${CEILING_MS} ms`, () => {
     const text = chapterOf(path, 5000);
-    const cast = baseCast(lang);
+    const cast = baseCast();
     let n = 0;
     const run = () => {
-      const units = splitUnits(text, lang);
-      const labels = analyzeHeuristic({ text, lang, units, cast });
+      const units = splitUnits(text);
+      const labels = analyzeHeuristic({ text, units, cast });
       return mergeLabels(text, labels, cast, 'p', () => `id${++n}`);
     };
     run(); // warm-up (JIT)
@@ -79,7 +76,7 @@ describe('heuristic speed on a pasted chapter', () => {
   ];
   const voice = { lang: 'en-GB', pitch: 1, rate: 1 };
   const cast: Character[] = [
-    ...baseCast('en'),
+    ...baseCast(),
     ...people.map(([name, gender]) => ({
       id: name,
       role: 'character' as const,
@@ -94,11 +91,11 @@ describe('heuristic speed on a pasted chapter', () => {
   // long the paragraph is.
   it(`analyses one 5,000-word paragraph of "he said" dialogue in under ${CEILING_MS} ms`, () => {
     const text = pastedChapter(5000);
-    expect(new Set(splitUnits(text, 'en').map((u) => u.paragraph)).size).toBe(2);
+    expect(new Set(splitUnits(text).map((u) => u.paragraph)).size).toBe(2);
     let n = 0;
     const run = () => {
-      const units = splitUnits(text, 'en');
-      const labels = analyzeHeuristic({ text, lang: 'en', units, cast });
+      const units = splitUnits(text);
+      const labels = analyzeHeuristic({ text, units, cast });
       return mergeLabels(text, labels, cast, 'p', () => `id${++n}`);
     };
     run(); // warm-up (JIT)
@@ -113,11 +110,11 @@ describe('heuristic speed on a pasted chapter', () => {
   // square of the paragraph (reading it again from the start for each tag) takes seconds.
   it(`analyses one 20,000-word paragraph of short "he said" lines in under ${CEILING_MS} ms`, () => {
     const text = pastedChapter(20000, SHORT_DIALOGUE);
-    expect(new Set(splitUnits(text, 'en').map((u) => u.paragraph)).size).toBe(2);
+    expect(new Set(splitUnits(text).map((u) => u.paragraph)).size).toBe(2);
     let n = 0;
     const run = () => {
-      const units = splitUnits(text, 'en');
-      const labels = analyzeHeuristic({ text, lang: 'en', units, cast });
+      const units = splitUnits(text);
+      const labels = analyzeHeuristic({ text, units, cast });
       return mergeLabels(text, labels, cast, 'p', () => `id${++n}`);
     };
     run(); // warm-up (JIT)

@@ -1,4 +1,4 @@
-import type { Analysis, Character, Lang, Segment, Traits } from '@/format/types';
+import type { Analysis, Character, Segment, Traits } from '@/format/types';
 import { isDefaultName, NARRATOR_NAME, normaliseName } from '@/analysis/castMatch';
 import { tellerOf } from '@/analysis/reassign';
 import { clashesWithNarrator, repickVoice, spokenVoiceName } from '@/cast/assignVoices';
@@ -13,15 +13,14 @@ export type CastOpResult<T> = { ok: true; value: T } | { ok: false; reason: stri
  * takes the ones it lacks from `from` (the unknown speaker never has any); its voice stays as it
  * is. The narrator and the unknown speaker are never removed (the analysers need them): merging
  * them moves their lines as user corrections, so a re-analysis keeps the move. The narrator also
- * hands the names it was given to `into` and goes back to `defaultNarratorName`
- * (NARRATOR_NAME[story.lang]); the unknown speaker keeps its names.
+ * hands the names it was given to `into` and goes back to its default name (NARRATOR_NAME); the
+ * unknown speaker keeps its names.
  */
 export function mergeCharacters(
   cast: readonly Character[],
   analyses: readonly Analysis[],
   fromId: string,
   intoId: string,
-  defaultNarratorName: string = NARRATOR_NAME.en,
 ): CastOpResult<{ cast: Character[]; analyses: Analysis[] }> {
   if (fromId === intoId) return { ok: false, reason: 'cannot merge a character into itself' };
   const from = cast.find((c) => c.id === fromId);
@@ -40,8 +39,7 @@ export function mergeCharacters(
   // The unknown speaker has no traits to give or to take.
   const traitless = into.role === 'unknown' || from.role === 'unknown';
   const merged = traitless ? renamed : fillTraits(renamed, from);
-  const remaining =
-    from.role === 'narrator' ? { ...from, name: defaultNarratorName, aliases: [] } : from;
+  const remaining = from.role === 'narrator' ? { ...from, name: NARRATOR_NAME, aliases: [] } : from;
   const updatedCast = cast
     .filter((c) => keepFrom || c.id !== fromId)
     .map((c) => (c.id === intoId ? merged : c.id === fromId ? remaining : c));
@@ -110,8 +108,8 @@ export function findNameOwner(
 
 /**
  * Who a name the user types for someone (a rename, a new character) refers to: findNameOwner, or
- * the narrator for its default name ("Narrator", "Narrador"), whatever it is called now. The
- * unknown speaker's default name stays free ("Desconocido" can be a character's name).
+ * the narrator for its default name ("Narrator"), whatever it is called now. The unknown
+ * speaker's default name stays free ("Unknown speaker" can be a character's name).
  */
 export function findTypedNameOwner(
   cast: readonly Character[],
@@ -266,13 +264,12 @@ export function matchVoicesToTraits(
   cast: readonly Character[],
   deviceVoices: readonly DeviceVoice[],
   locale: string,
-  lang: Lang,
 ): Character[] {
   // The voices that stay: each pick avoids them, and the picks made before it.
   const seen = cast.filter((c) => c.role !== 'character' || c.voice.manual);
   return cast.map((c) => {
     if (c.role !== 'character') return c;
-    const filled = fillTraits(c, inferTraits([c.name, ...c.aliases], lang));
+    const filled = fillTraits(c, inferTraits([c.name, ...c.aliases]));
     if (filled.voice.manual) return filled;
     const matched = { ...filled, voice: repickVoice(filled, seen, deviceVoices, locale) };
     seen.push(matched);
@@ -316,7 +313,7 @@ export function partsToldBy(
   return analyses.filter((a) => a && tellerOf(a.segments, narratorId) === id).length;
 }
 
-/** Folds case, accents and curly apostrophes, so "jose" finds "José" and "o'b" finds "O’Brien". */
+/** Folds case, accents and curly apostrophes, so "renee" finds "Renée" and "o'b" finds "O’Brien". */
 function searchKey(text: string): string {
   return text
     .normalize('NFD')

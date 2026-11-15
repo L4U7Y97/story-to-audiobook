@@ -24,7 +24,7 @@ describe('mergeLabels', () => {
       newCharacters: [{ ref: 'new:1', name: 'Anne', aliases: ['Anne', 'Annie'], gender: 'female' }],
       aliasAdditions: [],
     };
-    const merged = mergeLabels('“Hi” ok.', result, baseCast('en'), 'p1', ids);
+    const merged = mergeLabels('“Hi” ok.', result, baseCast(), 'p1', ids);
     expect(merged.newCharacterIds).toEqual(['id1']);
     expect(merged.cast.at(-1)).toEqual({
       id: 'id1',
@@ -55,7 +55,7 @@ describe('mergeLabels', () => {
       ],
       aliasAdditions: [],
     };
-    const created = mergeLabels('“Hi” ok.', result, baseCast('en'), 'p1', ids).cast.at(-1)!;
+    const created = mergeLabels('“Hi” ok.', result, baseCast(), 'p1', ids).cast.at(-1)!;
     expect(created).toStrictEqual({
       id: 'id1',
       role: 'character',
@@ -112,7 +112,7 @@ describe('mergeLabels', () => {
       ],
       aliasAdditions: [],
     };
-    const merged = mergeLabels('“Hi” “Yo” “R”', result, baseCast('en'), 'p1', ids);
+    const merged = mergeLabels('“Hi” “Yo” “R”', result, baseCast(), 'p1', ids);
     const [anne, tom, rex] = merged.cast.slice(-3);
     const plain = ['id', 'role', 'name', 'aliases', 'firstSeenPartId'];
     expect(Object.keys(anne!)).toEqual(plain);
@@ -142,7 +142,7 @@ describe('mergeLabels', () => {
       newCharacters: [],
       aliasAdditions: [],
     };
-    const merged = mergeLabels(text, result, baseCast('en'), 'p1', ids);
+    const merged = mergeLabels(text, result, baseCast(), 'p1', ids);
     expect(merged.segments.map((s) => [s.start, s.end])).toEqual([
       [0, 11],
       [11, 17],
@@ -159,7 +159,7 @@ describe('mergeLabels', () => {
       newCharacters: [],
       aliasAdditions: [],
     };
-    expect(mergeLabels('abcdefghi', result, baseCast('en'), 'p1', ids).segments).toHaveLength(3);
+    expect(mergeLabels('abcdefghi', result, baseCast(), 'p1', ids).segments).toHaveLength(3);
   });
 
   it('never stores the internal teller flag', () => {
@@ -168,32 +168,32 @@ describe('mergeLabels', () => {
       newCharacters: [],
       aliasAdditions: [],
     };
-    const { segments } = mergeLabels('Then “Hi”', result, baseCast('en'), 'p1', ids);
+    const { segments } = mergeLabels('Then “Hi”', result, baseCast(), 'p1', ids);
     expect(segments).toHaveLength(2);
     expect(segments.filter((s) => 'teller' in s)).toEqual([]);
   });
 
   it('adds new aliases to existing characters once', () => {
     const cast = [
-      ...baseCast('es'),
+      ...baseCast(),
       {
         id: 'g',
         role: 'character' as const,
-        name: 'Teodoro Golfín',
-        aliases: ['el doctor'],
-        voice: { lang: 'es-ES', pitch: 1, rate: 1 },
+        name: 'John Seward',
+        aliases: ['the doctor'],
+        voice: { lang: 'en-US', pitch: 1, rate: 1 },
       },
     ];
     const result: LabelResult = {
       spans: [span(0, 1)],
       newCharacters: [],
       aliasAdditions: [
-        { characterId: 'g', alias: 'Golfín' },
-        { characterId: 'g', alias: 'Golfín' },
-        { characterId: 'g', alias: 'el doctor' },
+        { characterId: 'g', alias: 'Seward' },
+        { characterId: 'g', alias: 'Seward' },
+        { characterId: 'g', alias: 'the doctor' },
       ],
     };
     const merged = mergeLabels('a', result, cast, 'p1', ids);
-    expect(merged.cast.find((c) => c.id === 'g')!.aliases).toEqual(['el doctor', 'Golfín']);
+    expect(merged.cast.find((c) => c.id === 'g')!.aliases).toEqual(['the doctor', 'Seward']);
   });
 });

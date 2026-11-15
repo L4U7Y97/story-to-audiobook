@@ -9,7 +9,7 @@ import { readTxtFile } from '@/ingest/txt';
  * byte for byte, to the expected canonical text. For .txt that is the fixture itself; for .epub it
  * is `<fixture>.epub.txt` (HTML rendering joins hard-wrapped lines, so the two differ).
  */
-const FIXTURES = ['en/pride-ch1', 'es/marianela-ch1'];
+const FIXTURES = ['en/pride-ch1'];
 
 const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 

@@ -1,9 +1,9 @@
 import { readFileSync } from 'node:fs';
-import type { Character, Lang } from '@/format/types';
+import type { Character } from '@/format/types';
 import type { LabelResult } from '@/analysis/labels';
+import { DEFAULT_LOCALE } from '@/storage/stories';
 
 export interface FixtureLabels {
-  lang: Lang;
   people: Record<string, string[]>;
   speech: Array<{ start: number; end: number; speaker: string; text: string }>;
 }
@@ -15,8 +15,8 @@ export function loadFixture(path: string): { text: string; labels: FixtureLabels
   };
 }
 
-export function baseCast(lang: Lang): Character[] {
-  const voice = { lang: lang === 'es' ? 'es-ES' : 'en-US', pitch: 1, rate: 1 };
+export function baseCast(): Character[] {
+  const voice = { lang: DEFAULT_LOCALE, pitch: 1, rate: 1 };
   return [
     { id: 'narrator', role: 'narrator', name: 'Narrator', aliases: [], voice },
     { id: 'unknown', role: 'unknown', name: 'Unknown', aliases: [], voice },

@@ -8,7 +8,7 @@ Confirmed with the user on 2026-10-14 via an interview-me session.
 - **Analysis:** If an API key is set, an LLM gets each part plus the story's existing cast. If not, free heuristics run in the app. Output is only character ranges into the original text, checked to match it exactly. **The story text never changes.**
 - **Cast memory:** Each story keeps its characters, aliases and voice settings. New parts reuse the cast, duplicates can be merged, and voices can be changed at any time.
 - **Playback:** Free device TTS, with characters told apart by voice, pitch and speed. Tone tags are stored in the format for a later upgrade but not voiced in the MVP.
-- **Languages:** English and Spanish. The heuristics handle both "quoted" dialogue and —dash— dialogue.
+- **Languages:** English only (since 2026-11-13, see [english-only.md](english-only.md)).
 - **Success:** Upload chapter 1 today and chapter 2 next week, hear the same voices for the same people, and listen with the phone in a pocket.
 - **Out of scope (MVP):** iOS, PDF and .docx, paid or neural TTS, actually voicing tone, sync or cloud storage, and sharing.
 

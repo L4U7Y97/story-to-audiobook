@@ -10,7 +10,7 @@ const CONTAINER = `<?xml version='1.0' encoding='utf-8'?>
 
 const OPF = `<?xml version="1.0" encoding="utf-8"?>
 <package xmlns="http://www.idpf.org/2007/opf" version="3.0" unique-identifier="id">
-  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>Una historia</dc:title></metadata>
+  <metadata xmlns:dc="http://purl.org/dc/elements/1.1/"><dc:title>A Story</dc:title></metadata>
   <manifest>
     <item id="nav" href="nav.xhtml" media-type="application/xhtml+xml" properties="nav"/>
     <item id="c1" href="Text/chapter%201.xhtml" media-type="application/xhtml+xml"/>
@@ -31,16 +31,16 @@ const xhtml = (body: string) => `<?xml version="1.0" encoding="utf-8"?>
 <body>${body}</body></html>`;
 
 const CH1 = xhtml(`
-  <h1>Capítulo
-      uno</h1>
-  <p>—Hola   —dijo
-     Ana—. ¿Vienes?</p>
-  <p><em>Debo irme</em>, pensó. A&#160;las&nbsp;nueve &amp; media.<br/>Otra línea.</p>
+  <h1>Chapter
+      one</h1>
+  <p>“Hello,”   said
+     Zoë—softly. “Coming?”</p>
+  <p><em>I must go</em>, she thought. At&#160;half&nbsp;past nine &amp; no later.<br/>Next line.</p>
   <script>alert('no')</script>
-  <div><p>Anidado <i>muy <b>bien</b></i>.</p></div>
+  <div><p>Nested <i>very <b>well</b></i>.</p></div>
   <img src="x.png" alt="ignored"/>`).replace('&nbsp;', '&#160;');
 
-const CH2 = xhtml(`<section><h2>Dos</h2><p>Fin.</p></section>`);
+const CH2 = xhtml(`<section><h2>Two</h2><p>The end.</p></section>`);
 
 async function makeEpub(files: Record<string, string>): Promise<Uint8Array> {
   const zip = new JSZip();
@@ -61,27 +61,27 @@ const BOOK = {
 describe('parseEpub', () => {
   it('reads linear spine documents in order and skips empty ones', async () => {
     const book = await parseEpub(await makeEpub(BOOK));
-    expect(book.title).toBe('Una historia');
+    expect(book.title).toBe('A Story');
     expect(book.chapters.map((c) => [c.href, c.title])).toEqual([
-      ['OEBPS/Text/chapter 1.xhtml', 'Capítulo uno'],
-      ['OEBPS/Text/ch2.xhtml', 'Dos'],
+      ['OEBPS/Text/chapter 1.xhtml', 'Chapter one'],
+      ['OEBPS/Text/ch2.xhtml', 'Two'],
     ]);
   });
 
   it('extracts canonical text: blocks → blank lines, br → newline, collapsed source whitespace', async () => {
     const [ch1] = (await parseEpub(await makeEpub(BOOK))).chapters;
     expect(ch1!.text).toBe(
-      'Capítulo uno\n\n' +
-        '—Hola —dijo Ana—. ¿Vienes?\n\n' +
-        'Debo irme, pensó. A las nueve & media.\nOtra línea.\n\n' +
-        'Anidado muy bien.',
+      'Chapter one\n\n' +
+        '“Hello,” said Zoë—softly. “Coming?”\n\n' +
+        'I must go, she thought. At half past nine & no later.\nNext line.\n\n' +
+        'Nested very well.',
     );
   });
 
   it('records italics as emphasis hints on the right ranges', async () => {
     const [ch1] = (await parseEpub(await makeEpub(BOOK))).chapters;
     const spans = ch1!.hints.map((h) => ch1!.text.slice(h.start, h.end));
-    expect(spans).toEqual(['Debo irme', 'muy bien']);
+    expect(spans).toEqual(['I must go', 'very well']);
     expect(ch1!.hints.every((h) => h.kind === 'emphasis')).toBe(true);
   });
 
@@ -91,10 +91,10 @@ describe('parseEpub', () => {
       await makeEpub({
         ...BOOK,
         'OEBPS/content.opf': opf,
-        'OEBPS/Text/chapter 1.xhtml': '<p>Uno<br>dos',
+        'OEBPS/Text/chapter 1.xhtml': '<p>One<br>two',
       }),
     );
-    expect(book.chapters[0]!.text).toBe('Uno\ndos');
+    expect(book.chapters[0]!.text).toBe('One\ntwo');
   });
 
   it('explains what is wrong with broken files', async () => {
@@ -114,8 +114,8 @@ describe('combineChapters', () => {
     const combined = combineChapters(chapters);
     expect(combined.text).toBe(`${chapters[0]!.text}\n\n${chapters[1]!.text}`);
     expect(combined.hints.map((h) => combined.text.slice(h.start, h.end))).toEqual([
-      'Debo irme',
-      'muy bien',
+      'I must go',
+      'very well',
     ]);
   });
 });

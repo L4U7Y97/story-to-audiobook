@@ -26,10 +26,10 @@ const pasted = (text: string, title = 'Part') => ({
 
 describe('stories', () => {
   it('creates a story with a narrator and an unknown speaker', async () => {
-    const story = await createStory(db, { title: 'Marianela', lang: 'es' });
+    const story = await createStory(db, { title: 'Pride and Prejudice', lang: 'en' });
     expect(story.cast.map((c) => c.role)).toEqual(['narrator', 'unknown']);
     expect(story.narratorId).toBe(story.cast[0]!.id);
-    expect(story.cast[0]!.voice.lang).toBe('es-ES');
+    expect(story.cast[0]!.voice.lang).toBe('en-US');
     expect(await getStory(db, story.id)).toEqual(story);
   });
 

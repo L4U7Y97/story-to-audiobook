@@ -154,7 +154,7 @@ function wordCount(text: string): number {
     <template v-if="story">
       <h1>{{ story.title }}</h1>
       <p class="muted">
-        {{ story.lang === 'es' ? 'Español' : 'English' }} · {{ characterCount }}
+        {{ characterCount }}
         {{ characterCount === 1 ? 'character' : 'characters' }}
       </p>
       <div v-if="parts?.length" class="story-actions">

@@ -1,5 +1,6 @@
 /** Who a clause's subject is in the cast: resolving it may add characters or guess genders. */
 
+import type { Gender } from '@/format/types';
 import {
   authorialTeller,
   hedgeEnd,
@@ -50,8 +51,19 @@ const POSSESSIVES = new Set([...POSSESSIVE_DETERMINERS, 'everyone’s', "everyon
 const COUNT_WORD = /^(?:two|three|four|five|six|both|several|many|few|some|other)$/u;
 
 /**
+ * Who a "he" or "she" subject at token `at` is. By default the most recent person of that gender
+ * (see mostRecent); a tag leaves it to its paragraph (see tagIn).
+ */
+export type HeOrShe = (gender: Gender, at: number) => Who | undefined;
+
+/** A "he" or "she" read as the most recent person of that gender. */
+function mostRecent(r: Reading): HeOrShe {
+  return (gender) => someone(r.turns.byGender(gender, new Set()));
+}
+
+/**
  * The subject at the start of the sentence beginning at `start` (see openingSubject).
- * `knownOnly`: a name must already be in the cast.
+ * `knownOnly`: a name must already be in the cast. `he`: how a "he" or "she" there is read.
  */
 export function sentenceSubject(
   r: Reading,
@@ -59,16 +71,36 @@ export function sentenceSubject(
   start: number,
   mentions: Mention[],
   knownOnly = false,
+  he: HeOrShe = mostRecent(r),
 ): Who | undefined {
-  const subject = openingSubject(ts, start, mentions);
-  if (!subject) return undefined;
+  const opening = openingSubjectAt(ts, start, mentions);
+  if (!opening) return undefined;
+  const { subject, end } = opening;
   if (subject.kind === 'pronoun') {
     if (subject.gender === 'narrator') return { key: r.cast.narratorKey, teller: true };
-    return someone(r.turns.byGender(subject.gender, new Set()));
+    return he(subject.gender, end);
   }
   const m = subject.mention;
   if (knownOnly && m.kind === 'name' && !r.cast.match(m.name)) return undefined;
   return someone(r.cast.resolve(m));
+}
+
+/**
+ * "When Tom saw Anne, he smiled and said": the last person of `gender` named in the sentence at
+ * `start` before token `before`, whom a "he" or "she" after an opening with no subject of its
+ * own stands for.
+ */
+function namedEarlier(
+  r: Reading,
+  mentions: Mention[],
+  start: number,
+  before: number,
+  gender: Gender,
+): string | undefined {
+  return r.cast
+    .keys(mentions.filter((m) => m.first >= start && m.last < before && !m.possessive))
+    .filter((k) => r.cast.entry(k).gender === gender)
+    .at(-1);
 }
 
 /**
@@ -79,7 +111,9 @@ export function sentenceSubject(
  * at his daughter, Jane, and said", "I turned to Uncle Abel, who was mending the net, and
  * said"). The teller's "I" is nobody's after "I suppose" or "I daresay" (see authorialTeller: "I
  * daresay Mrs. Bennet turned, then said"), or when someone the teller watched may have spoken
- * after an aside ("I noticed that Anne looked away, and after a moment, said").
+ * after an aside ("I noticed that Anne looked away, and after a moment, said"). `he` reads a "he"
+ * or "she" subject (see HeOrShe), unless an opening with no subject of its own names someone of
+ * that gender ("When Tom saw Anne, he smiled and said").
  */
 export function coordinatedSubject(
   r: Reading,
@@ -87,12 +121,13 @@ export function coordinatedSubject(
   v: number,
   start: number,
   mentions: Mention[],
+  he: HeOrShe = mostRecent(r),
 ): Who | undefined {
   const join = joinAt(ts, v, start);
   if (join === -1) return undefined;
   const clause = clauseBeforeJoin(ts, join, start);
   const own =
-    clause > start ? ownClauseSubject(r, ts, clause, start, join, v, mentions) : undefined;
+    clause > start ? ownClauseSubject(r, ts, clause, start, join, v, mentions, he) : undefined;
   if (own) return own;
   // A subject "and" brings in before an aside between commas, when the clause the join takes
   // has no subject of its own ("Tom went out, and the old man, after a while, sat down and
@@ -116,11 +151,11 @@ export function coordinatedSubject(
           ) ||
           /\p{Ll}ly$/u.test(lead));
       if (before.subject.kind === 'pronoun' || !phraseAside || !!verbAt(ts, start)) {
-        return sentenceSubject(r, ts, b, mentions);
+        return sentenceSubject(r, ts, b, mentions, false, he);
       }
     }
   }
-  const who = sentenceSubject(r, ts, start, mentions);
+  const who = sentenceSubject(r, ts, start, mentions, false, he);
   // An English sentence that opens with no subject of its own has it after the opening, in a
   // part that a comma opens with a name or "I" and its verb ("When the music stopped, Mr. Darcy
   // crossed the room, bowed, then said").
@@ -162,14 +197,12 @@ export function coordinatedSubject(
         beforeWord.toLowerCase() in SPEAKER_NOUNS ||
         UPPER.test(beforeWord);
       if (verbOnly && !afterPerson && (!after || !!after.punctBefore)) {
-        return sentenceSubject(r, ts, p, mentions);
+        return sentenceSubject(r, ts, p, mentions, false, he);
       }
       if (subject.kind === 'pronoun' && subject.gender !== 'narrator') {
         if (verbAfterSubject(ts, end, join, false) === -1) continue;
-        const earlier = r.cast
-          .keys(mentions.filter((m) => m.first >= start && m.last < p && !m.possessive))
-          .filter((k) => r.cast.entry(k).gender === subject.gender);
-        return someone(earlier[earlier.length - 1] ?? r.turns.byGender(subject.gender, new Set()));
+        const named = namedEarlier(r, mentions, start, p, subject.gender);
+        return named === undefined ? he(subject.gender, end) : someone(named);
       }
       const named =
         subject.kind === 'mention'
@@ -244,6 +277,7 @@ function ownClauseSubject(
   join: number,
   v: number,
   mentions: Mention[],
+  he: HeOrShe,
 ): Who | undefined {
   let from = clause;
   let opening = openingSubjectAt(ts, from, mentions);
@@ -306,6 +340,17 @@ function ownClauseSubject(
   }
   if (!opening) return undefined;
   const { subject, end } = opening;
+  // After an opening with no subject of its own, a "he" or "she" is the last person of that
+  // gender the opening names, as in coordinatedSubject ("When Anne saw Tom, she smiled and said").
+  const who = (): Who | undefined => {
+    const named =
+      subject.kind === 'pronoun' &&
+      subject.gender !== 'narrator' &&
+      !openingSubject(ts, start, mentions)
+        ? namedEarlier(r, mentions, start, from, subject.gender)
+        : undefined;
+    return named === undefined ? sentenceSubject(r, ts, from, mentions, false, he) : someone(named);
+  };
   // "so" + subject + a modal after an act is its purpose, no clause of its own ("Tom held the
   // door, so Anne could get through, and said"); after a state it is what follows ("Tom was
   // gone, so Anne could at last ask her question, and said").
@@ -456,7 +501,7 @@ function ownClauseSubject(
     !!ts[join]!.punctBefore &&
     ts[v]!.punctBefore === ','
   ) {
-    return sentenceSubject(r, ts, from, mentions);
+    return who();
   }
   // "and Arthur without a word gathers up his notes and says": a name or pronoun right after the
   // "and" that opens a stretch with no comma before the join, so a phrase before its verb may end
@@ -532,7 +577,7 @@ function ownClauseSubject(
   if (!named && !joined && enclosed && !opensWithoutSubject(ts, start, clause, mentions)) {
     return undefined;
   }
-  return sentenceSubject(r, ts, from, mentions);
+  return who();
 }
 
 /** "Tom, who …, exclaimed:" → Tom; else the nearest name, then descriptor, before the verb. */

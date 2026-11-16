@@ -30,10 +30,19 @@ interface Tag {
   tone?: ToneLabel;
   speaker?: string;
   /**
-   * A he/she subject ("she said", or "she turned and said" with no "she" found yet), resolved
-   * once the whole paragraph has been read.
+   * A he/she subject ("she said", "she turned and said"), resolved once the whole paragraph has
+   * been read.
    */
   pending?: Gender;
+  /**
+   * For a he/she that opens the clause the verb goes with ("Anne saw Tom. She smiled and said"):
+   * the people the tag's narration names before it, latest first. They come before the people
+   * named earlier in the paragraph, and the ones named after it never do ("She smiled at Mary
+   * and said").
+   */
+  namedHere?: string[];
+  /** The tag is in the narration right before its line, not right after it. */
+  before?: boolean;
   /** The subject is the teller's "I" ("I said", "I … and said"), not a name. */
   teller: boolean;
   /** "asked me": said to the teller, so not by them. */
@@ -56,16 +65,23 @@ export function tagNear(
   tokens: Map<Unit, Token[]>,
   isVoiced: (u: Unit) => boolean,
 ): Tag | undefined {
+  const before = units[n - 1];
   return nearTag(
     r,
     units,
     n,
     tokens,
     isVoiced,
-    (ts, v) => tagIn(r, ts, v),
+    (ts, v) => {
+      const tag = tagIn(r, ts, v);
+      return tag && before && ts === tokens.get(before) ? { ...tag, before: true } : tag;
+    },
     (tag) => !!tag && (!!tag.speaker || !!tag.pending),
   );
 }
+
+/** What tagIn reads a he/she subject as: nobody yet, for the paragraph to resolve (see pending). */
+const LATER: Who = { key: '', teller: false };
 
 function tagIn(r: Reading, ts: Token[], verbIndex: number): Tag | undefined {
   if (verbIndex === -1) return undefined;
@@ -84,6 +100,7 @@ function tagIn(r: Reading, ts: Token[], verbIndex: number): Tag | undefined {
 
   let speaker: string | undefined;
   let pending: Gender | undefined;
+  let namedHere: string[] | undefined;
   // Whether the teller's "I" names the speaker, not a name ("said Nick" for a narrator Nick).
   let teller = false;
   if (subject?.kind === 'mention') speaker = r.cast.resolve(subject.mention, true);
@@ -95,11 +112,26 @@ function tagIn(r: Reading, ts: Token[], verbIndex: number): Tag | undefined {
   else if (indefiniteSubject(r, ts, verbIndex)) speaker = r.cast.unknownKey;
   else {
     const start = lastSentenceStart(ts.slice(0, verbIndex + 1));
-    const who = coordinatedSubject(r, ts, verbIndex, start, mentions);
-    speaker = who?.key;
-    teller = !!who?.teller;
-    // "she turned and said" with no "she" found yet is read like "she said".
-    if (!who) pending = pronounSubject(ts, verbIndex, mentions);
+    // A "he" or "she" that opens the clause the verb goes with is read like "she said", with the
+    // people named before it here first ("Anne saw Tom. She smiled and said", "Tom looked at
+    // Anne, and she smiled and said", "Hearing the gate, she ran out and said").
+    const he: { found?: { gender: Gender; at: number } } = {};
+    const who = coordinatedSubject(r, ts, verbIndex, start, mentions, (gender, at) => {
+      he.found = { gender, at };
+      return LATER;
+    });
+    if (he.found) {
+      const { gender, at } = he.found;
+      pending = gender;
+      // Anyone named before it, as an object too ("Tom looked at Anne, and she smiled and said").
+      const before = r.cast.mentions(ts).filter((m) => m.last < at && !m.possessive);
+      namedHere = [...new Set(r.cast.keys(before).reverse())];
+    } else {
+      speaker = who?.key;
+      teller = !!who?.teller;
+      // "she turned and said" with no "she" found yet is read like "she said".
+      if (!who) pending = pronounSubject(ts, verbIndex, mentions);
+    }
   }
   if (toTeller && speaker === r.cast.narratorKey) speaker = undefined;
 
@@ -125,9 +157,11 @@ function tagIn(r: Reading, ts: Token[], verbIndex: number): Tag | undefined {
     tone: verb.tone ?? adverb,
     ...(speaker ? { speaker } : {}),
     ...(pending ? { pending } : {}),
+    ...(namedHere ? { namedHere } : {}),
     teller: teller && speaker === r.cast.narratorKey,
     toTeller,
-    notTeller: notTeller(r, ts, verbIndex, mentions),
+    // A "he" or "she" is never the teller, wherever it stands.
+    notTeller: !!pending || notTeller(r, ts, verbIndex, mentions),
     thought,
     others,
     addressees,

@@ -5,14 +5,11 @@ import type { Book, Part } from '@/format/types';
 /** `books`: the story's books, when it has more than one (offers moving the part between them). */
 const props = defineProps<{
   part: Part;
-  first: boolean;
-  last: boolean;
   hasKey: boolean;
   books?: Book[];
 }>();
 const emit = defineEmits<{
   rename: [title: string];
-  move: [delta: number];
   moveToBook: [bookId: string];
   replace: [];
   /** No method: Claude when a key is set (after a cost estimate), otherwise the free method. */
@@ -53,19 +50,15 @@ function remove() {
 
 <template>
   <details ref="menu" class="actions" @toggle="confirmDelete = false">
-    <summary :aria-label="`Actions for ${part.title}`">⋯</summary>
+    <summary :aria-label="`Actions for ${part.title}; use arrow keys or hold and drag to reorder`">
+      ⋮⋮
+    </summary>
     <div class="menu" role="menu">
       <form v-if="renaming" class="rename" @submit.prevent="saveTitle">
         <input v-model="title" aria-label="Part title" />
         <button type="submit">Save</button>
       </form>
       <button v-else role="menuitem" @click="renaming = true">Rename</button>
-      <button role="menuitem" :disabled="first" @click="act(() => emit('move', -1))">
-        Move up
-      </button>
-      <button role="menuitem" :disabled="last" @click="act(() => emit('move', 1))">
-        Move down
-      </button>
       <template v-for="b in books ?? []" :key="b.id">
         <button
           v-if="b.id !== part.bookId"
@@ -98,7 +91,8 @@ function remove() {
 
 summary {
   list-style: none;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   min-width: 44px;
   min-height: 44px;
   display: flex;
@@ -106,6 +100,10 @@ summary {
   justify-content: center;
   font-size: 1.3rem;
   border-radius: var(--radius);
+}
+
+summary:active {
+  cursor: grabbing;
 }
 
 summary::-webkit-details-marker {

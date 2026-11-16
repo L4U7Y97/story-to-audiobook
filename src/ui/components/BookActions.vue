@@ -2,8 +2,8 @@
 import { ref } from 'vue';
 import type { Book } from '@/format/types';
 
-const props = defineProps<{ book: Book; first: boolean; last: boolean; partCount: number }>();
-const emit = defineEmits<{ rename: [title: string]; move: [delta: number]; remove: [] }>();
+const props = defineProps<{ book: Book; partCount: number }>();
+const emit = defineEmits<{ rename: [title: string]; remove: [] }>();
 
 const renaming = ref(false);
 const title = ref(props.book.title);
@@ -38,19 +38,15 @@ function remove() {
 
 <template>
   <details ref="menu" class="actions" @toggle="confirmDelete = false">
-    <summary :aria-label="`Actions for ${book.title}`">⋯</summary>
+    <summary :aria-label="`Actions for ${book.title}; use arrow keys or hold and drag to reorder`">
+      ⋮
+    </summary>
     <div class="menu" role="menu">
       <form v-if="renaming" class="rename" @submit.prevent="saveTitle">
         <input v-model="title" aria-label="Book title" />
         <button type="submit">Save</button>
       </form>
       <button v-else role="menuitem" @click="renaming = true">Rename</button>
-      <button role="menuitem" :disabled="first" @click="act(() => emit('move', -1))">
-        Move book up
-      </button>
-      <button role="menuitem" :disabled="last" @click="act(() => emit('move', 1))">
-        Move book down
-      </button>
       <button role="menuitem" :class="{ danger: confirmDelete }" @click="remove">
         {{
           confirmDelete
@@ -71,7 +67,8 @@ function remove() {
 
 summary {
   list-style: none;
-  cursor: pointer;
+  cursor: grab;
+  touch-action: none;
   min-width: 44px;
   min-height: 44px;
   display: flex;
@@ -79,6 +76,10 @@ summary {
   justify-content: center;
   font-size: 1.3rem;
   border-radius: var(--radius);
+}
+
+summary:active {
+  cursor: grabbing;
 }
 
 summary::-webkit-details-marker {

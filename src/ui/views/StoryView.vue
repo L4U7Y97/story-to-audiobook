@@ -34,14 +34,43 @@ const books = computed(() => story.value?.books ?? []);
 /** Parts under their books (one group with book undefined when the story has no books). */
 const groups = computed(() => groupParts(books.value, parts.value ?? []));
 const previewBookOrder = ref<string[]>();
+const previewPartOrder = ref<{ groupId: string; partIds: string[] }>();
 const draggedBookId = ref<string>();
-const bookDrag = ref<{ bookId: string; pointerId: number; originalOrder: string[] }>();
+const draggedPartId = ref<string>();
+const suppressActionClick = ref(false);
+type DragSession = {
+  kind: 'book' | 'part';
+  id: string;
+  groupId?: string;
+  pointerId: number;
+  startX: number;
+  startY: number;
+  originalOrder: string[];
+  dragging: boolean;
+  holdTimer: ReturnType<typeof setTimeout>;
+};
+const activeDrag = ref<DragSession>();
 const displayGroups = computed(() => {
-  if (!previewBookOrder.value) return groups.value;
-  const byBook = new Map(groups.value.map((group) => [group.book?.id, group]));
-  return previewBookOrder.value.flatMap((id) => {
-    const group = byBook.get(id);
-    return group ? [group] : [];
+  let ordered = groups.value;
+  if (previewBookOrder.value) {
+    const byBook = new Map(groups.value.map((group) => [group.book?.id, group]));
+    ordered = previewBookOrder.value.flatMap((id) => {
+      const group = byBook.get(id);
+      return group ? [group] : [];
+    });
+  }
+  const preview = previewPartOrder.value;
+  if (!preview) return ordered;
+  return ordered.map((group) => {
+    if ((group.book?.id ?? 'all') !== preview.groupId) return group;
+    const byPart = new Map(group.parts.map((part) => [part.id, part]));
+    return {
+      ...group,
+      parts: preview.partIds.flatMap((id) => {
+        const part = byPart.get(id);
+        return part ? [part] : [];
+      }),
+    };
   });
 });
 /** The book the add/replace form works on, if any. */
@@ -74,80 +103,188 @@ function toggleBook(bookId: string) {
   collapsedBooks.value = collapsed;
 }
 
-function startBookDrag(bookId: string, event: PointerEvent) {
+function startSortableDrag(
+  kind: DragSession['kind'],
+  id: string,
+  groupId: string | undefined,
+  event: PointerEvent,
+) {
+  if (activeDrag.value) return;
+  if (!(event.target instanceof Element) || !event.target.closest('summary')) return;
   if (event.button !== 0) return;
-  event.preventDefault();
-  bookDrag.value = {
-    bookId,
+  (event.target.closest('summary') as HTMLElement).setPointerCapture?.(event.pointerId);
+  const originalOrder =
+    kind === 'book'
+      ? books.value.map((book) => book.id)
+      : (groups.value
+          .find((group) => (group.book?.id ?? 'all') === groupId)
+          ?.parts.map((part) => part.id) ?? []);
+  if (!originalOrder.includes(id)) return;
+  const session: DragSession = {
+    kind,
+    id,
+    ...(groupId ? { groupId } : {}),
     pointerId: event.pointerId,
-    originalOrder: books.value.map((book) => book.id),
+    startX: event.clientX,
+    startY: event.clientY,
+    originalOrder,
+    dragging: false,
+    holdTimer: setTimeout(() => activateSortableDrag(session), 250),
   };
-  draggedBookId.value = bookId;
-  previewBookOrder.value = [...bookDrag.value.originalOrder];
+  activeDrag.value = session;
   window.addEventListener('pointermove', updateBookDrag);
   window.addEventListener('pointerup', finishBookDrag);
   window.addEventListener('pointercancel', cancelBookDrag);
 }
 
-function removeBookDragListeners() {
+function activateSortableDrag(session: DragSession) {
+  if (activeDrag.value !== session || session.dragging) return;
+  clearTimeout(session.holdTimer);
+  session.dragging = true;
+  if (session.kind === 'book') {
+    draggedBookId.value = session.id;
+    previewBookOrder.value = [...session.originalOrder];
+  } else {
+    draggedPartId.value = session.id;
+    previewPartOrder.value = { groupId: session.groupId!, partIds: [...session.originalOrder] };
+  }
+}
+
+function removeDragListeners() {
+  if (activeDrag.value) clearTimeout(activeDrag.value.holdTimer);
   window.removeEventListener('pointermove', updateBookDrag);
   window.removeEventListener('pointerup', finishBookDrag);
   window.removeEventListener('pointercancel', cancelBookDrag);
 }
 
 function updateBookDrag(event: PointerEvent) {
-  const active = bookDrag.value;
+  const active = activeDrag.value;
   if (!active || active.pointerId !== event.pointerId) return;
 
-  const target = document
-    .elementFromPoint(event.clientX, event.clientY)
-    ?.closest<HTMLElement>('[data-book-id]');
-  const targetId = target?.dataset.bookId;
-  const currentOrder = previewBookOrder.value;
-  if (!target || !targetId || targetId === active.bookId || !currentOrder) return;
-
-  const remaining = currentOrder.filter((id) => id !== active.bookId);
-  const targetIndex = remaining.indexOf(targetId);
-  if (targetIndex < 0) return;
-  const rect = target.getBoundingClientRect();
-  const insertAt = targetIndex + (event.clientY >= rect.top + rect.height / 2 ? 1 : 0);
-  remaining.splice(insertAt, 0, active.bookId);
-  if (remaining.some((id, index) => id !== currentOrder[index])) {
-    previewBookOrder.value = remaining;
+  if (!active.dragging) {
+    if (Math.hypot(event.clientX - active.startX, event.clientY - active.startY) < 6) return;
+    activateSortableDrag(active);
   }
+  event.preventDefault();
+
+  const element = document.elementFromPoint(event.clientX, event.clientY);
+  if (active.kind === 'book') {
+    const target = element?.closest<HTMLElement>('[data-book-id]');
+    const currentOrder = previewBookOrder.value;
+    if (!target || !currentOrder) return;
+    reorderPreview(
+      currentOrder,
+      active.id,
+      target.dataset.bookId,
+      target,
+      event.clientY,
+      (order) => {
+        previewBookOrder.value = order;
+      },
+    );
+    return;
+  }
+
+  const target = element?.closest<HTMLElement>('[data-part-id]');
+  const targetGroup = target?.closest<HTMLElement>('[data-part-group]');
+  const preview = previewPartOrder.value;
+  if (!target || targetGroup?.dataset.partGroup !== active.groupId || !preview) return;
+  reorderPreview(
+    preview.partIds,
+    active.id,
+    target.dataset.partId,
+    target,
+    event.clientY,
+    (partIds) => {
+      previewPartOrder.value = { ...preview, partIds };
+    },
+  );
 }
 
 async function finishBookDrag(event: PointerEvent) {
-  const active = bookDrag.value;
+  const active = activeDrag.value;
   if (!active || active.pointerId !== event.pointerId) return;
 
-  removeBookDragListeners();
-  const toIndex = previewBookOrder.value?.indexOf(active.bookId) ?? -1;
-  bookDrag.value = undefined;
+  removeDragListeners();
+  const order = active.kind === 'book' ? previewBookOrder.value : previewPartOrder.value?.partIds;
+  const toIndex = active.dragging ? (order?.indexOf(active.id) ?? -1) : -1;
+  if (active.dragging) {
+    suppressActionClick.value = true;
+    setTimeout(() => (suppressActionClick.value = false), 0);
+  }
   try {
-    if (toIndex >= 0 && toIndex !== active.originalOrder.indexOf(active.bookId)) {
-      await moveBook(db, props.id, active.bookId, toIndex);
+    if (toIndex >= 0 && toIndex !== active.originalOrder.indexOf(active.id)) {
+      if (active.kind === 'book') await moveBook(db, props.id, active.id, toIndex);
+      else await movePart(db, props.id, active.id, toIndex);
     }
   } finally {
+    activeDrag.value = undefined;
     previewBookOrder.value = undefined;
+    previewPartOrder.value = undefined;
     draggedBookId.value = undefined;
+    draggedPartId.value = undefined;
   }
 }
 
 function cancelBookDrag(event: PointerEvent) {
-  if (bookDrag.value?.pointerId !== event.pointerId) return;
-  removeBookDragListeners();
-  bookDrag.value = undefined;
+  if (activeDrag.value?.pointerId !== event.pointerId) return;
+  removeDragListeners();
+  activeDrag.value = undefined;
   previewBookOrder.value = undefined;
+  previewPartOrder.value = undefined;
   draggedBookId.value = undefined;
+  draggedPartId.value = undefined;
 }
 
-function cancelActiveBookDrag() {
-  removeBookDragListeners();
-  if (!bookDrag.value) return;
-  bookDrag.value = undefined;
+function reorderPreview(
+  order: string[],
+  activeId: string,
+  targetId: string | undefined,
+  target: HTMLElement,
+  clientY: number,
+  update: (order: string[]) => void,
+) {
+  if (!targetId || targetId === activeId) return;
+  const remaining = order.filter((id) => id !== activeId);
+  const targetIndex = remaining.indexOf(targetId);
+  if (targetIndex < 0) return;
+  const rect = target.getBoundingClientRect();
+  const insertAt = targetIndex + (clientY >= rect.top + rect.height / 2 ? 1 : 0);
+  remaining.splice(insertAt, 0, activeId);
+  if (remaining.some((id, index) => id !== order[index])) update(remaining);
+}
+
+function preventActionAfterDrag(event: MouseEvent) {
+  if (!suppressActionClick.value) return;
+  event.preventDefault();
+  event.stopPropagation();
+  suppressActionClick.value = false;
+}
+
+function moveBookByKeyboard(bookId: string, index: number, event: KeyboardEvent) {
+  if (!(event.target instanceof HTMLElement) || event.target.tagName !== 'SUMMARY') return;
+  const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+  if (!delta) return;
+  event.preventDefault();
+  void moveBook(db, props.id, bookId, index + delta);
+}
+
+function movePartByKeyboard(part: Part, siblings: Part[], event: KeyboardEvent) {
+  if (!(event.target instanceof HTMLElement) || event.target.tagName !== 'SUMMARY') return;
+  const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
+  if (!delta) return;
+  event.preventDefault();
+  void move(part, siblings, delta);
+}
+
+function cancelActiveDrag() {
+  removeDragListeners();
+  if (!activeDrag.value) return;
+  activeDrag.value = undefined;
   previewBookOrder.value = undefined;
+  previewPartOrder.value = undefined;
   draggedBookId.value = undefined;
+  draggedPartId.value = undefined;
 }
 
 async function removeBook(book: Book) {
@@ -166,7 +303,7 @@ const confirmEstimate = computed(() =>
 );
 
 onMounted(loadSettings);
-onUnmounted(cancelActiveBookDrag);
+onUnmounted(cancelActiveDrag);
 
 const exporting = ref(false);
 const exportError = ref('');
@@ -289,23 +426,13 @@ function wordCount(text: string): number {
             <BookActions
               class="book-menu"
               :book="group.book"
-              :first="g === 0"
-              :last="g === groups.length - 1"
               :part-count="group.parts.length"
+              @pointerdown.capture="startSortableDrag('book', group.book.id, undefined, $event)"
+              @click.capture="preventActionAfterDrag"
+              @keydown="moveBookByKeyboard(group.book.id, g, $event)"
               @rename="renameBook(db, story.id, group.book.id, $event)"
-              @move="moveBook(db, story.id, group.book.id, g + $event)"
               @remove="removeBook(group.book)"
             />
-            <button
-              type="button"
-              class="book-drag-handle"
-              :aria-label="`Drag ${group.book.title} to reorder`"
-              @pointerdown.stop.prevent="startBookDrag(group.book.id, $event)"
-              @keydown.up.prevent="moveBook(db, story.id, group.book.id, g - 1)"
-              @keydown.down.prevent="moveBook(db, story.id, group.book.id, g + 1)"
-            >
-              <span aria-hidden="true">⋮⋮</span>
-            </button>
             <button
               type="button"
               class="book-collapse"
@@ -333,8 +460,19 @@ function wordCount(text: string): number {
             :id="group.book ? `book-content-${group.book.id}` : undefined"
             class="book-content"
           >
-            <ol v-if="group.parts.length" class="parts">
-              <li v-for="(part, i) in group.parts" :key="part.id" class="card part">
+            <TransitionGroup
+              v-if="group.parts.length"
+              tag="ol"
+              name="part-sort"
+              class="parts"
+              :data-part-group="group.book?.id ?? 'all'"
+            >
+              <li
+                v-for="part in group.parts"
+                :key="part.id"
+                :data-part-id="part.id"
+                :class="['card', 'part', { 'part-dragging': draggedPartId === part.id }]"
+              >
                 <RouterLink
                   class="part-title"
                   :to="{ name: 'reader', params: { id: story.id, partId: part.id } }"
@@ -358,12 +496,14 @@ function wordCount(text: string): number {
                 <PartActions
                   class="part-menu"
                   :part="part"
-                  :first="i === 0"
-                  :last="i === group.parts.length - 1"
                   :books="books.length > 1 ? books : undefined"
                   :has-key="Boolean(settings?.apiKey)"
+                  @pointerdown.capture="
+                    startSortableDrag('part', part.id, group.book?.id ?? 'all', $event)
+                  "
+                  @click.capture="preventActionAfterDrag"
+                  @keydown="movePartByKeyboard(part, group.parts, $event)"
                   @rename="renamePart(db, part.id, $event)"
-                  @move="move(part, group.parts, $event)"
                   @move-to-book="movePartToBook(db, story.id, part.id, $event)"
                   @replace="startReplace(part)"
                   @reanalyse="analyse([part], $event)"
@@ -391,7 +531,7 @@ function wordCount(text: string): number {
                 </div>
                 <p v-else-if="notes[part.id]" class="note muted">{{ notes[part.id] }}</p>
               </li>
-            </ol>
+            </TransitionGroup>
             <p v-else-if="group.book" class="muted">No parts in this book yet.</p>
             <p v-else-if="parts" class="muted">
               No parts yet. Add the first chapter or a few pages.
@@ -667,29 +807,16 @@ function wordCount(text: string): number {
   z-index: 1;
 }
 
-.book-drag-handle {
-  min-height: 36px;
-  width: 36px;
-  padding: 6px;
-  flex: 0 0 36px;
-  cursor: grab;
-  touch-action: none;
-  color: var(--muted);
-}
-
-.book-drag-handle:active {
-  cursor: grabbing;
-}
-
-.book-drag-handle span {
-  display: block;
-  line-height: 1;
-}
-
-.book-sort-move {
+.book-sort-move,
+.part-sort-move {
   transition:
     transform 180ms ease,
     opacity 180ms ease;
+}
+
+.part-dragging {
+  opacity: 0.7;
+  z-index: 1;
 }
 
 .book-header {
@@ -752,6 +879,7 @@ function wordCount(text: string): number {
 
 @media (prefers-reduced-motion: reduce) {
   .book-sort-move,
+  .part-sort-move,
   .book-dragging {
     transition: none;
   }

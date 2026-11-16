@@ -21,9 +21,11 @@ import { modelLabel, useAnalysis, type Method } from '../composables/useAnalysis
 import AddPartForm from '../components/AddPartForm.vue';
 import PartActions from '../components/PartActions.vue';
 import BookActions from '../components/BookActions.vue';
+import { useRouter } from 'vue-router';
 
 const props = defineProps<{ id: string }>();
 const db = getAppDb();
+const router = useRouter();
 
 const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
 const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
@@ -103,6 +105,26 @@ function toggleBook(bookId: string) {
   collapsedBooks.value = collapsed;
 }
 
+function toggleBookFromHeader(bookId: string, event: MouseEvent) {
+  if (
+    event.target instanceof Element &&
+    event.target.closest('a, button, summary, details, input, select, textarea')
+  ) {
+    return;
+  }
+  toggleBook(bookId);
+}
+
+function openPart(part: Part, event: MouseEvent) {
+  if (
+    event.target instanceof Element &&
+    event.target.closest('a, button, summary, details, input, select, textarea')
+  ) {
+    return;
+  }
+  void router.push({ name: 'reader', params: { id: props.id, partId: part.id } });
+}
+
 function startSortableDrag(
   kind: DragSession['kind'],
   id: string,
@@ -110,9 +132,10 @@ function startSortableDrag(
   event: PointerEvent,
 ) {
   if (activeDrag.value) return;
-  if (!(event.target instanceof Element) || !event.target.closest('summary')) return;
+  if (!(event.target instanceof Element)) return;
+  const isDragTarget = event.target.closest('summary, .part-title, .book-header h2');
+  if (!isDragTarget && event.target.closest('button, a, details, input, select, textarea')) return;
   if (event.button !== 0) return;
-  (event.target.closest('summary') as HTMLElement).setPointerCapture?.(event.pointerId);
   const originalOrder =
     kind === 'book'
       ? books.value.map((book) => book.id)
@@ -381,7 +404,7 @@ function wordCount(text: string): number {
 </script>
 
 <template>
-  <main class="page">
+  <main class="page" @click.capture="preventActionAfterDrag">
     <RouterLink :to="{ name: 'library' }" class="back">← Library</RouterLink>
 
     <template v-if="story">
@@ -411,7 +434,13 @@ function wordCount(text: string): number {
           }"
           :aria-labelledby="group.book ? `book-${group.book.id}` : undefined"
         >
-          <header v-if="group.book" class="book-header">
+          <header
+            v-if="group.book"
+            class="book-header"
+            @pointerdown.capture="startSortableDrag('book', group.book.id, undefined, $event)"
+            @click="toggleBookFromHeader(group.book.id, $event)"
+            @keydown="moveBookByKeyboard(group.book.id, g, $event)"
+          >
             <h2 :id="`book-${group.book.id}`">{{ group.book.title }}</h2>
             <span class="muted">
               {{ group.parts.length }} {{ group.parts.length === 1 ? 'part' : 'parts' }}
@@ -427,9 +456,6 @@ function wordCount(text: string): number {
               class="book-menu"
               :book="group.book"
               :part-count="group.parts.length"
-              @pointerdown.capture="startSortableDrag('book', group.book.id, undefined, $event)"
-              @click.capture="preventActionAfterDrag"
-              @keydown="moveBookByKeyboard(group.book.id, g, $event)"
               @rename="renameBook(db, story.id, group.book.id, $event)"
               @remove="removeBook(group.book)"
             />
@@ -472,9 +498,15 @@ function wordCount(text: string): number {
                 :key="part.id"
                 :data-part-id="part.id"
                 :class="['card', 'part', { 'part-dragging': draggedPartId === part.id }]"
+                @pointerdown.capture="
+                  startSortableDrag('part', part.id, group.book?.id ?? 'all', $event)
+                "
+                @click="openPart(part, $event)"
+                @keydown="movePartByKeyboard(part, group.parts, $event)"
               >
                 <RouterLink
                   class="part-title"
+                  draggable="false"
                   :to="{ name: 'reader', params: { id: story.id, partId: part.id } }"
                   >{{ part.title }}</RouterLink
                 >
@@ -498,11 +530,6 @@ function wordCount(text: string): number {
                   :part="part"
                   :books="books.length > 1 ? books : undefined"
                   :has-key="Boolean(settings?.apiKey)"
-                  @pointerdown.capture="
-                    startSortableDrag('part', part.id, group.book?.id ?? 'all', $event)
-                  "
-                  @click.capture="preventActionAfterDrag"
-                  @keydown="movePartByKeyboard(part, group.parts, $event)"
                   @rename="renamePart(db, part.id, $event)"
                   @move-to-book="movePartToBook(db, story.id, part.id, $event)"
                   @replace="startReplace(part)"
@@ -672,6 +699,12 @@ function wordCount(text: string): number {
   grid-template-columns: 1fr auto auto;
   gap: 2px 12px;
   counter-increment: part;
+  cursor: grab;
+  touch-action: none;
+}
+
+.part:active {
+  cursor: grabbing;
 }
 
 .part-title {
@@ -825,6 +858,12 @@ function wordCount(text: string): number {
   gap: 12px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
+  cursor: grab;
+  touch-action: none;
+}
+
+.book-header:active {
+  cursor: grabbing;
 }
 
 .book-header h2 {

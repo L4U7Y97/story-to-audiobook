@@ -3,7 +3,7 @@
 // real player needs a speech engine.
 import { vi } from 'vitest';
 import { createApp, defineComponent, h, shallowRef, type App, type Component } from 'vue';
-import { createMemoryHistory, createRouter } from 'vue-router';
+import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import type { Character, Mode, Segment, Traits } from '@/format/types';
 import type { DeviceVoice } from '@/playback/engine';
 import type { PlayerSnapshot } from '@/playback/player';
@@ -130,7 +130,11 @@ const Blank = defineComponent({ render: () => h('div') });
 let app: App | undefined;
 
 /** Mounts `view` with `props`, with a router; returns the element it is mounted in. */
-export async function mountView(view: Component, props: Record<string, unknown>) {
+export async function mountView(
+  view: Component,
+  props: Record<string, unknown>,
+  onRouter?: (router: Router) => void,
+) {
   const router = createRouter({
     history: createMemoryHistory(),
     routes: [
@@ -141,6 +145,7 @@ export async function mountView(view: Component, props: Record<string, unknown>)
       { path: '/story/:id/cast', name: 'cast', component: Blank },
     ],
   });
+  onRouter?.(router);
   await router.push('/');
   await router.isReady();
   const host = document.createElement('div');

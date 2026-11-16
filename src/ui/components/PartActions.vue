@@ -51,7 +51,7 @@ function remove() {
 <template>
   <details ref="menu" class="actions" @toggle="confirmDelete = false">
     <summary :aria-label="`Actions for ${part.title}; use arrow keys or hold and drag to reorder`">
-      ⋮⋮
+      ⋮
     </summary>
     <div class="menu" role="menu">
       <form v-if="renaming" class="rename" @submit.prevent="saveTitle">

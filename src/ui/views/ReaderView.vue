@@ -301,59 +301,102 @@ async function createSpeaker(name: string, how: { mode?: Mode; scope: PickScope 
   await choose(base.id, how, [{ ...base, voice }]);
 }
 
-function selectPart(event: Event) {
-  const id = (event.target as HTMLSelectElement).value;
+/** Parts in the order the picker lists them. */
+const orderedParts = computed(() => {
+  const list = parts.value ?? [];
+  return story.value?.books?.length
+    ? groupParts(story.value.books, list).flatMap((g) => g.parts)
+    : list;
+});
+const partPosition = computed(() => orderedParts.value.findIndex((p) => p.id === partId.value));
+const previousPart = computed(() =>
+  partPosition.value > 0 ? orderedParts.value[partPosition.value - 1] : undefined,
+);
+const nextPart = computed(() =>
+  partPosition.value >= 0 ? orderedParts.value[partPosition.value + 1] : undefined,
+);
+
+function goToPart(id: string) {
   void player.jump({ partId: id, segmentIndex: 0 });
   void router.replace({ name: 'reader', params: { id: props.id, partId: id } });
+  window.scrollTo({ top: 0 });
+}
+
+function selectPart(event: Event) {
+  goToPart((event.target as HTMLSelectElement).value);
 }
 </script>
 
 <template>
   <main class="page reader">
-    <nav class="top">
-      <RouterLink :to="{ name: 'story', params: { id } }"
-        >← {{ story?.title ?? 'Story' }}</RouterLink
-      >
-      <span class="top-actions">
-        <button
-          v-if="paragraphs.length"
-          class="link"
-          :aria-pressed="editing"
-          @click="toggleEditing"
+    <header class="reader-head">
+      <nav class="top">
+        <RouterLink :to="{ name: 'story', params: { id } }"
+          >← {{ story?.title ?? 'Story' }}</RouterLink
         >
-          {{ editing ? 'Done' : 'Fix speakers' }}
-        </button>
-        <RouterLink :to="{ name: 'cast', params: { id } }">Cast</RouterLink>
-      </span>
-    </nav>
-    <p v-if="range" class="banner" role="status">
-      Tap the last line {{ range.name }} reads ·
-      <button type="button" class="link" @click="range = null">Cancel</button>
-    </p>
-    <p v-else-if="editing" class="hint">
+        <div v-if="parts?.length" class="part-nav">
+          <button
+            type="button"
+            class="part-step"
+            aria-label="Previous part"
+            :title="previousPart?.title"
+            :disabled="!previousPart"
+            @click="previousPart && goToPart(previousPart.id)"
+          >
+            ‹
+          </button>
+          <label class="part-picker">
+            <span class="sr-only">Part</span>
+            <select :value="partId" @change="selectPart">
+              <template v-if="story?.books?.length">
+                <optgroup
+                  v-for="group in groupParts(story.books, parts)"
+                  :key="group.book!.id"
+                  :label="group.book!.title"
+                >
+                  <option v-for="p in group.parts" :key="p.id" :value="p.id">{{ p.title }}</option>
+                </optgroup>
+              </template>
+              <template v-else>
+                <option v-for="p in parts" :key="p.id" :value="p.id">{{ p.title }}</option>
+              </template>
+            </select>
+          </label>
+          <button
+            type="button"
+            class="part-step"
+            aria-label="Next part"
+            :title="nextPart?.title"
+            :disabled="!nextPart"
+            @click="nextPart && goToPart(nextPart.id)"
+          >
+            ›
+          </button>
+        </div>
+        <span class="top-actions">
+          <button
+            v-if="paragraphs.length"
+            class="link"
+            :aria-pressed="editing"
+            @click="toggleEditing"
+          >
+            {{ editing ? 'Done' : 'Fix speakers' }}
+          </button>
+          <RouterLink :to="{ name: 'cast', params: { id } }">Cast</RouterLink>
+        </span>
+      </nav>
+      <p v-if="range" class="banner" role="status">
+        Tap the last line {{ range.name }} reads ·
+        <button type="button" class="link" @click="range = null">Cancel</button>
+      </p>
+    </header>
+
+    <p v-if="editing && !range" class="hint">
       Tap a line to choose who reads it. If a character tells this part, use “Told by”. For a letter
       or a tale, tap its first line, choose “From this line to one I tap next…” and who tells it,
       then tap its last line.
     </p>
     <p v-if="editError" class="error" role="alert">{{ editError }}</p>
-
-    <label v-if="parts?.length" class="part-picker">
-      <span class="sr-only">Part</span>
-      <select :value="partId" @change="selectPart">
-        <template v-if="story?.books?.length">
-          <optgroup
-            v-for="group in groupParts(story.books, parts)"
-            :key="group.book!.id"
-            :label="group.book!.title"
-          >
-            <option v-for="p in group.parts" :key="p.id" :value="p.id">{{ p.title }}</option>
-          </optgroup>
-        </template>
-        <template v-else>
-          <option v-for="p in parts" :key="p.id" :value="p.id">{{ p.title }}</option>
-        </template>
-      </select>
-    </label>
 
     <p v-if="part && !paragraphs.length" class="muted">
       This part has not been analysed yet. Analyse it from the story page to hear it.
@@ -420,11 +463,35 @@ function selectPart(event: Event) {
 </template>
 
 <style scoped>
+/* Nav, passage banner and part picker stay at the top while the text scrolls under them. */
+.reader-head {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  margin: calc(-1 * var(--gutter)) calc(-1 * var(--gutter)) 16px;
+  padding: var(--gutter) var(--gutter) 12px;
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
 .top {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 12px;
+  margin-bottom: 8px;
+}
+
+.part-nav {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.part-step {
+  flex: none;
+  width: 44px;
+  padding: 0;
+  font-size: 1.4rem;
 }
 
 .top-actions {
@@ -451,12 +518,9 @@ function selectPart(event: Event) {
   color: var(--danger);
 }
 
-/* Stays in view while the user scrolls to the passage's last line. */
+/* In the sticky header, so it stays in view while the user scrolls to the passage's last line. */
 .banner {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  margin: 0 0 12px;
+  margin: 0 0 8px;
   padding: 0 12px;
   border: 1px solid var(--accent);
   border-radius: var(--radius);
@@ -483,7 +547,8 @@ function selectPart(event: Event) {
 }
 
 .part-picker {
-  margin-bottom: 16px;
+  flex: 1;
+  min-width: 0;
 }
 
 .text {

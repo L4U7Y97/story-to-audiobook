@@ -776,3 +776,40 @@ describe('“Match voices to traits”', () => {
     expect(host.querySelector('[role="status"]')).toBeNull();
   });
 });
+
+describe('the merge list of a long cast', () => {
+  const names = ['Elizabeth', 'Jane', 'Lydia', 'Kitty', 'Mary', 'Darcy', 'Bingley'];
+  const story = () => storeStory(names.map((n): Chunk => [`“Hello,” said ${n}. `, n, 'speech']));
+  const filterOf = (card: HTMLElement) =>
+    card.querySelector<HTMLInputElement>('.editor .merge input[type="search"]');
+  const shown = (card: HTMLElement) =>
+    [...card.querySelectorAll<HTMLOptionElement>('.editor .merge select option')]
+      .filter((o) => o.value)
+      .map((o) => o.textContent?.trim());
+
+  it('filters by name and picks the only match', async () => {
+    const host = await openCast(await story());
+    const card = cardOf(host, 'Elizabeth');
+    typeInto(filterOf(card)!, 'y');
+    await until(() => shown(card).length === 5, 'the filtered list');
+    expect(shown(card)).toEqual(['Lydia', 'Kitty', 'Mary', 'Darcy', 'Bingley']);
+    typeInto(filterOf(card)!, 'dar');
+    await until(() => shown(card).length === 1, 'one match');
+    const select = card.querySelector<HTMLSelectElement>('.editor .merge select')!;
+    expect(select.selectedOptions[0]!.textContent?.trim()).toBe('Darcy');
+    // The chosen character stays listed when the filter no longer matches it.
+    typeInto(filterOf(card)!, 'zzz');
+    await until(
+      () =>
+        shown(card).length === 1 &&
+        select.options[0]!.textContent?.trim() === 'No character matches',
+      'no match',
+    );
+    expect(shown(card)).toEqual(['Darcy']);
+  });
+
+  it('is not offered on a short cast', async () => {
+    const host = await openCast(await storeStory(holmes));
+    expect(filterOf(cardOf(host, 'Holmes'))).toBeNull();
+  });
+});

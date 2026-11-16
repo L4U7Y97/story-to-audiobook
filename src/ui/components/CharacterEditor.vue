@@ -17,6 +17,30 @@ const confirming = ref(false);
 
 const others = computed(() => props.cast.filter((c) => c.id !== props.character.id));
 const target = computed(() => others.value.find((c) => c.id === mergeInto.value));
+/** Long casts get a filter so the target is found by typing instead of scrolling the list. */
+const filterable = computed(() => others.value.length > 6);
+const filter = ref('');
+const selectId = computed(() => `merge-into-${props.character.id}`);
+/** Characters whose name or other names contain the filter text. */
+const found = computed(() => {
+  const query = filter.value.trim().toLowerCase();
+  if (!query) return others.value;
+  return others.value.filter((c) =>
+    [c.name, ...c.aliases].some((n) => n.toLowerCase().includes(query)),
+  );
+});
+/** The list shown: the matches, keeping the chosen character so the select never goes blank. */
+const options = computed(() =>
+  target.value && !found.value.includes(target.value)
+    ? [target.value, ...found.value]
+    : found.value,
+);
+
+function onFilter() {
+  // A filter down to one character picks it, saving a trip through the list.
+  if (found.value.length === 1) mergeInto.value = found.value[0]!.id;
+  confirming.value = false;
+}
 const removable = computed(() => props.character.role === 'character');
 const narrator = computed(() => props.character.role === 'narrator');
 /** A merge moves the names the narrator was given (see mergeCharacters). */
@@ -67,7 +91,7 @@ function merge() {
     </form>
 
     <div class="merge">
-      <label>
+      <label :for="selectId">
         {{
           removable
             ? 'Same person as…'
@@ -75,11 +99,24 @@ function merge() {
               ? 'Give all these lines, in every part, to…'
               : 'Give all these lines to…'
         }}
-        <select v-model="mergeInto" @change="confirming = false">
-          <option value="">Choose a character</option>
-          <option v-for="c in others" :key="c.id" :value="c.id">{{ c.name }}</option>
-        </select>
       </label>
+      <div class="pick">
+        <input
+          v-if="filterable"
+          v-model="filter"
+          type="search"
+          autocomplete="off"
+          placeholder="Filter by name"
+          aria-label="Filter characters by name"
+          @input="onFilter"
+        />
+        <select :id="selectId" v-model="mergeInto" @change="confirming = false">
+          <option value="">
+            {{ found.length ? 'Choose a character' : 'No character matches' }}
+          </option>
+          <option v-for="c in options" :key="c.id" :value="c.id">{{ c.name }}</option>
+        </select>
+      </div>
       <p v-if="narrator && target?.role === 'character'" class="hint">
         If {{ target.name }} tells the whole story, open {{ target.name }}’s card and use “Same
         person as… {{ character.name }}” instead.
@@ -107,7 +144,8 @@ function merge() {
 }
 
 .fields,
-.merge {
+.merge,
+.pick {
   display: grid;
   gap: 8px;
 }

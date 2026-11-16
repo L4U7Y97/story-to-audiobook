@@ -156,6 +156,7 @@ describe('book sections', () => {
     const target = parts[2]!;
 
     expect(title.getAttribute('draggable')).toBe('false');
+    window.getSelection()!.selectAllChildren(book);
     vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
     vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({
       top: 200,
@@ -178,6 +179,10 @@ describe('book sections', () => {
     });
     Object.assign(pointerDown, { pointerId: 12 });
     title.dispatchEvent(pointerDown);
+    // A press on a row must not start selecting text across rows.
+    const selectStart = new Event('selectstart', { bubbles: true, cancelable: true });
+    parts[1]!.dispatchEvent(selectStart);
+    expect(selectStart.defaultPrevented).toBe(true);
     const pointerMove = new MouseEvent('pointermove', {
       bubbles: true,
       cancelable: true,
@@ -193,6 +198,8 @@ describe('book sections', () => {
       'Three',
       'One',
     ]);
+    expect(window.getSelection()!.isCollapsed).toBe(true);
+    expect(document.documentElement.classList.contains('sorting')).toBe(true);
 
     const pointerUp = new MouseEvent('pointerup', { bubbles: true, cancelable: true });
     Object.assign(pointerUp, { pointerId: 12 });
@@ -205,6 +212,13 @@ describe('book sections', () => {
     }, 'the part order dragged from its title link');
 
     expect(router!.currentRoute.value.path).toBe('/');
+    await until(
+      () => !document.documentElement.classList.contains('sorting') || undefined,
+      'text selection allowed again after the drag',
+    );
+    const afterDrag = new Event('selectstart', { bubbles: true, cancelable: true });
+    parts[1]!.dispatchEvent(afterDrag);
+    expect(afterDrag.defaultPrevented).toBe(false);
   });
 
   it('reorders books as a section is dragged and saves the new order when released', async () => {

@@ -60,12 +60,16 @@ export function useSortable(options: {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+    // A press on an item is a potential drag, so it must not start selecting text across rows.
+    document.addEventListener('selectstart', preventDefault, true);
   }
 
   function activate(current: Session) {
     if (session !== current || current.dragging) return;
     clearTimeout(current.holdTimer);
     current.dragging = true;
+    window.getSelection()?.removeAllRanges();
+    document.documentElement.classList.add('sorting');
     dragged.value = { group: current.group, id: current.id };
     preview.value = { group: current.group, ids: [...current.originalOrder] };
   }
@@ -122,6 +126,8 @@ export function useSortable(options: {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onCancel);
+    document.removeEventListener('selectstart', preventDefault, true);
+    if (session?.dragging) document.documentElement.classList.remove('sorting');
     session = undefined;
     dragged.value = undefined;
     preview.value = undefined;
@@ -143,6 +149,10 @@ export function useSortable(options: {
 
   onUnmounted(end);
   return { dragged, press, step, arrange };
+}
+
+function preventDefault(event: Event) {
+  event.preventDefault();
 }
 
 /** The item of `group` under a point, if any. */

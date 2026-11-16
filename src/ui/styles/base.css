@@ -61,6 +61,15 @@ body {
   color: var(--fg);
 }
 
+/* While a list item is dragged (useSortable): no text selection, and the grab cursor everywhere. */
+.sorting,
+.sorting * {
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  cursor: grabbing !important;
+}
+
 h1,
 h2,
 h3 {

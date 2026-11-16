@@ -193,15 +193,6 @@ function wordCount(text: string): number {
           >
             Listen</RouterLink
           >
-          <button
-            type="button"
-            class="book-collapse"
-            :aria-expanded="!collapsedBooks.has(group.book.id)"
-            :aria-controls="`book-content-${group.book.id}`"
-            @click="toggleBook(group.book.id)"
-          >
-            {{ collapsedBooks.has(group.book.id) ? 'Expand' : 'Collapse' }}
-          </button>
           <BookActions
             class="book-menu"
             :book="group.book"
@@ -212,6 +203,27 @@ function wordCount(text: string): number {
             @move="moveBook(db, story.id, group.book.id, g + $event)"
             @remove="removeBook(group.book)"
           />
+          <button
+            type="button"
+            class="book-collapse"
+            :aria-expanded="!collapsedBooks.has(group.book.id)"
+            :aria-label="`${collapsedBooks.has(group.book.id) ? 'Expand' : 'Collapse'} ${group.book.title}`"
+            :aria-controls="`book-content-${group.book.id}`"
+            @click="toggleBook(group.book.id)"
+          >
+            <svg
+              aria-hidden="true"
+              focusable="false"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+            >
+              <path :d="collapsedBooks.has(group.book.id) ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'" />
+            </svg>
+          </button>
         </header>
         <div
           v-show="!group.book || !collapsedBooks.has(group.book.id)"
@@ -558,8 +570,15 @@ function wordCount(text: string): number {
 
 .book-collapse {
   min-height: 36px;
-  padding: 0 8px;
-  white-space: nowrap;
+  width: 36px;
+  padding: 6px;
+  flex: 0 0 36px;
+}
+
+.book-collapse svg {
+  display: block;
+  width: 20px;
+  height: 20px;
 }
 
 .book .parts {

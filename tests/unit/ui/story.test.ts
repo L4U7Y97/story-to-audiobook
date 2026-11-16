@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { addBook } from '@/storage/books';
 import { getStory } from '@/storage/stories';
 import StoryView from '@/ui/views/StoryView.vue';
-import { button, db, mountView, storeStory, unmountView, until } from '../../helpers/ui';
+import { db, mountView, storeStory, unmountView, until } from '../../helpers/ui';
 
 vi.mock('@/ui/composables/usePlayer', () => import('../../helpers/ui').then((m) => m.playerStub()));
 
@@ -19,14 +19,23 @@ describe('book sections', () => {
     const content = host.querySelector<HTMLElement>('.book-content')!;
     const otherSection = host.querySelectorAll<HTMLElement>('.book')[1]!;
     const otherContent = otherSection.querySelector<HTMLElement>('.book-content')!;
-    const collapse = button(section, 'Collapse');
+    const collapse = section.querySelector<HTMLButtonElement>('.book-collapse');
 
+    expect(collapse?.getAttribute('aria-label')).toBe(`Collapse ${story.books![0]!.title}`);
+    expect(collapse?.querySelector('svg')).not.toBeNull();
+    expect(collapse?.textContent?.trim()).toBe('');
     expect(collapse?.getAttribute('aria-expanded')).toBe('true');
     expect(content.style.display).not.toBe('none');
 
     collapse!.click();
 
-    const expand = await until(() => button(section, 'Expand'), 'Expand');
+    const expand = await until(
+      () => section.querySelector<HTMLButtonElement>('.book-collapse[aria-expanded="false"]'),
+      'the collapsed book control',
+    );
+    expect(expand.getAttribute('aria-label')).toBe(`Expand ${story.books![0]!.title}`);
+    expect(expand.querySelector('svg')).not.toBeNull();
+    expect(expand.textContent?.trim()).toBe('');
     expect(expand.getAttribute('aria-expanded')).toBe('false');
     expect(content.style.display).toBe('none');
     expect(section.querySelector('h2')?.textContent).toBe(story.books![0]!.title);
@@ -35,7 +44,15 @@ describe('book sections', () => {
     expand.click();
 
     expect(
-      (await until(() => button(section, 'Collapse'), 'Collapse')).getAttribute('aria-expanded'),
+      (
+        await until(
+          () => section.querySelector<HTMLButtonElement>('.book-collapse[aria-expanded="true"]'),
+          'the expanded book control',
+        )
+      ).getAttribute('aria-label'),
+    ).toBe(`Collapse ${story.books![0]!.title}`);
+    expect(
+      section.querySelector<HTMLButtonElement>('.book-collapse')?.getAttribute('aria-expanded'),
     ).toBe('true');
     expect(content.style.display).not.toBe('none');
   });

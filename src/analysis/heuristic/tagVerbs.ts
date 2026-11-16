@@ -12,12 +12,14 @@ import {
 } from './clauses';
 import {
   AFTER_VERB_SKIP,
+  ASIDES,
   BARE_OBJECTS,
   BEFORE_VERB_SKIP,
   CONJUNCTIONS,
   DETERMINERS,
   FREQUENCY_ADVERBS,
   INDEFINITE_SUBJECTS,
+  NON_PARTICIPANT_PREPOSITIONS,
   NOUN_LEADS,
   QUESTION_JOINS,
   QUESTION_OPENERS,
@@ -27,6 +29,7 @@ import {
   SPEAKER_NOUNS,
   SUBJECT_PRONOUNS,
   TIME_AFTER_THAT,
+  VERB_ADVERBS,
 } from './lexicon';
 import { isPronoun, subjectIndexBefore, subjectOf, verbAt } from './mentions';
 import type { Lookup } from './reading';
@@ -41,6 +44,7 @@ import {
   lastSentenceStart,
   LOWER,
   LY_ADVERB,
+  phraseAt,
   wordAt,
   type Mention,
   type Token,
@@ -48,6 +52,14 @@ import {
 
 /** How far into a tag (in words) the speech verb may appear: "said his lady". */
 export const TAG_WINDOW = 6;
+
+/** Prepositions that may open a phrase before a sentence's subject: "At dawn somebody". */
+const OPENING_PREPOSITIONS = new Set([
+  ...NON_PARTICIPANT_PREPOSITIONS,
+  'after',
+  'before',
+  'during',
+]);
 
 /** Narration that leads into the line after it: "Tom said, “…”". */
 const INTRO_END = /[,:]\s*$/u;
@@ -227,7 +239,8 @@ function asks(r: Lookup, u: Unit, ts: Token[], v: number, end: number): boolean 
 
 /**
  * A speech verb that can tag a line: not one that reports what was said with an object of its
- * own ("She nodded and said goodbye.", "She said nothing.").
+ * own ("She nodded and said goodbye.", "She said nothing."), nor one in an aside about what
+ * someone says (see aboutSaying).
  */
 function tagVerb(r: Lookup, ts: Token[], i: number): boolean {
   const next = ts[i + 1];
@@ -238,7 +251,36 @@ function tagVerb(r: Lookup, ts: Token[], i: number): boolean {
     REPORTED_OBJECTS.has(object) &&
     !tagAdverb(ts, i) &&
     !(object === 'no' && ts[i + 2]?.text.toLowerCase() === 'one');
-  return !reports && isVerb(r, ts, i);
+  return !reports && !aboutSaying(r, ts, i) && isVerb(r, ts, i);
+}
+
+/**
+ * "Mrs. Bennet was nervous, as my aunt told me.", "Mrs. Bennet, as I said, was nervous", "or so I
+ * was told": the speech verb at `v` ends an aside about what someone says, which tags no line.
+ * The aside opens after a comma, a dash or a bracket with "as" or "or so" (see ASIDES) and its
+ * subject, a pronoun or a person, right after that, before the verb and maybe an auxiliary ("as
+ * I have said"; not "as well as a whispered"), and nothing comes after the verb but the person
+ * told and an adverb ("as she told me later"; not "as she told him the news").
+ */
+function aboutSaying(r: Lookup, ts: Token[], v: number): boolean {
+  const c = clauseStart(ts, v);
+  const phrase = ASIDES.find((words) => phraseAt(ts, c, words));
+  if (!phrase || !/^[,(—–-]+$/u.test(ts[c]!.punctBefore)) return false;
+  const s = c + phrase.length;
+  const subjectEnd = SUBJECT_PRONOUNS.has(wordAt(ts, s))
+    ? s
+    : r.cast.mentions(ts).find((m) => m.first === s && !m.possessive)?.last;
+  if (subjectEnd === undefined) return false;
+  for (let k = subjectEnd + 1; k < v; k++) {
+    const word = wordAt(ts, k);
+    const auxiliary = BEFORE_VERB_SKIP.has(word) || ['was', 'were', 'am'].includes(word);
+    if (!gluedAt(ts, k) || !(auxiliary || LY_ADVERB.test(word))) return false;
+  }
+  let e = v + 1;
+  if (gluedAt(ts, e) && ['me', 'us', 'him', 'her', 'them'].includes(wordAt(ts, e))) e++;
+  const adverb = ['later', 'once', 'before', 'afterwards', 'again'].includes(wordAt(ts, e));
+  if (gluedAt(ts, e) && (adverb || LY_ADVERB.test(ts[e]!.text))) e++;
+  return !gluedAt(ts, e);
 }
 
 export function isVerb(r: Lookup, ts: Token[], i: number): boolean {
@@ -341,19 +383,44 @@ export function indefiniteSubject(r: Lookup, ts: Token[], v: number): boolean {
   // Before the verb, also with "else" after it ("someone else said").
   const b = subjectIndexBefore(ts, v);
   if (b !== -1 && indefiniteAt(ts, b)) return true;
-  // Opening the clause it is coordinated with, after lead words ("Then someone"), with no other
-  // subject between ("Someone knocked, and Tom went to the door and said" is Tom's). Someone
-  // after such a verb is spoken to ("Tom turned and asked someone").
+  // Opening the clause it is coordinated with, after lead words ("Then someone") or another
+  // opening (see subjectPastOpening), with no other subject between ("Someone knocked, and Tom
+  // went to the door and said" is Tom's). Someone after such a verb is spoken to ("Tom turned
+  // and asked someone").
   const start = lastSentenceStart(ts.slice(0, v + 1));
   if (coordinated(ts, v, start)) {
-    let s = start;
-    while (s < v && SENTENCE_LEADS.has(wordAt(ts, s))) s++;
-    return indefinite(s) && !otherSubjectBetween(ts, start, v, r.cast.mentions(ts));
+    const mentions = r.cast.mentions(ts);
+    return (
+      indefinite(subjectPastOpening(ts, start, v, mentions)) &&
+      !otherSubjectBetween(ts, start, v, mentions)
+    );
   }
   // After it, past adverbs.
   let a = v + 1;
   while (gluedAt(ts, a) && AFTER_VERB_SKIP.has(wordAt(ts, a))) a++;
   return gluedAt(ts, a) && indefinite(a);
+}
+
+/**
+ * Where the subject of the sentence at `start` would be, before the verb at `v`: past lead words
+ * ("Then someone"), adverbs ("Suddenly someone", "Just then someone") and a phrase of up to three
+ * words a preposition opens, when "someone" or the like comes right after it ("At dawn somebody",
+ * "In the morning someone"). A name stops it.
+ */
+function subjectPastOpening(ts: Token[], start: number, v: number, mentions: Mention[]): number {
+  let s = start;
+  for (; s < v; s++) {
+    const word = wordAt(ts, s);
+    if (mentions.some((m) => m.first === s)) return s;
+    if (OPENING_PREPOSITIONS.has(word)) {
+      for (let k = s + 1; k <= s + 3 && k < v && gluedAt(ts, k) && LOWER.test(ts[k]!.text); k++) {
+        if (INDEFINITE_SUBJECTS.has(wordAt(ts, k))) return k;
+      }
+      return s;
+    }
+    if (!SENTENCE_LEADS.has(word) && !VERB_ADVERBS.has(word) && !LY_ADVERB.test(word)) return s;
+  }
+  return s;
 }
 
 /**

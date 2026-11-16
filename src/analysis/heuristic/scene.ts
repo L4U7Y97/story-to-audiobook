@@ -125,6 +125,11 @@ function opensClause(ts: Token[], m: Mention): boolean {
     const before = ts[k - 1]?.text ?? '';
     const pronoun = isPronoun(before);
     if (i === 0 || t.punctBefore || !ARRIVALS.has(t.text.toLowerCase())) return false;
+    // Coming back after a bare "Later" is no arrival after a plan (see sentenceTime), as in two
+    // paragraphs: "Then Anne rose to come over. Later she came back with a pot of tea." has her
+    // come over.
+    const time = sentenceTime(ts, k);
+    if (time.passes && !time.moves) return false;
     if (clear) return pronoun !== undefined || UPPER.test(before);
     const self = pronoun === 'male' || pronoun === 'female' || before === ts[m.last]!.text;
     return self && !becomes(ts, k);
@@ -175,6 +180,19 @@ function clearPlan(ts: Token[], m: Mention): boolean {
     end++;
   }
   return !ts[end] || !!ts[end]!.punctBefore;
+}
+
+/**
+ * Whether time passes in the sentence of token `e`, and whether it moves the narration to a new
+ * time there: any time shift does but a bare "Later" ("The next morning she knocked at my door.",
+ * "She knocked an hour later."; not "Later she came back with a pot of tea.").
+ */
+function sentenceTime(ts: Token[], e: number): { passes: boolean; moves: boolean } {
+  const start = lastSentenceStart(ts.slice(0, e + 1));
+  const end = sentenceEndAfter(ts, e);
+  const shifts = timeShifts(ts).filter((x) => x >= start && x < end);
+  const bare = (x: number) => wordAt(ts, x) === 'later' && timePhraseStart(ts, start - 1, x) === x;
+  return { passes: shifts.length > 0, moves: shifts.some((x) => !bare(x)) };
 }
 
 export class Scene {
@@ -308,17 +326,9 @@ export class Scene {
     };
     // A plan to come ends in an arrival at a time the narration moves to ("The next morning she
     // knocked at my door.", "She knocked an hour later."), not after a bare "Later" ("Then Anne rose
-    // to come over. / Later she came back with a pot of tea.").
-    const moved = (e: number) => {
-      const start = lastSentenceStart(ts.slice(0, e + 1));
-      const end = sentenceEndAfter(ts, e);
-      return timeShifts(ts).some(
-        (x) =>
-          x >= start &&
-          x < end &&
-          !(wordAt(ts, x) === 'later' && timePhraseStart(ts, start - 1, x) === x),
-      );
-    };
+    // to come over. / Later she came back with a pot of tea."; see sentenceTime, and opensClause
+    // for the two sentences in one paragraph).
+    const moved = (e: number) => sentenceTime(ts, e).moves;
     const triggers = [
       ...subjects.map((s) => ({ ...s, arrival: moved(s.e) && arrivesAt(s.e, s.named) })),
       ...later.map((s) => ({ ...s, arrival: moved(s.e) })),

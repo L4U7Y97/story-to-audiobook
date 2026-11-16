@@ -87,13 +87,14 @@ export class Attributor implements Reading {
       const tag = tags.get(u);
       if (tag?.speaker === undefined && tag?.pending) {
         // People named earlier in the paragraph come first: "“Hello,” said Tom, turning to
-        // Anne. “How are you?” she asked."
-        tag.speaker = this.turns.byGender(
-          tag.pending,
-          saidTo(u),
-          tag.verb,
-          namedBefore(at.get(u)!),
-        );
+        // Anne. “How are you?” she asked." For a "he" or "she" that opens the clause of the
+        // tag's verb, the people its own narration names before it come first, then the
+        // paragraph's before that narration ("Anne saw Tom. She smiled at Mary and said").
+        const n = at.get(u)!;
+        const named = tag.namedHere
+          ? [...new Set([...tag.namedHere, ...namedBefore(tag.before ? n - 1 : n)])]
+          : namedBefore(n);
+        tag.speaker = this.turns.byGender(tag.pending, saidTo(u), tag.verb, named);
       }
     }
     // Who cannot say a line whose tag names nobody: the people it is said to, the teller when the

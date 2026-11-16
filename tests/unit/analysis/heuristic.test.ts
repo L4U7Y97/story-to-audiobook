@@ -674,6 +674,20 @@ describe('analyzeHeuristic: first-person narrators', () => {
     ]) {
       expect(speakers(en(bridge), tomAnne).slice(-4)).toEqual(scene);
     }
+    // A name that is also an auxiliary ("Will did not come back") waits like any other.
+    const tomWill = castWith([
+      ['tom', 'Tom', 'male'],
+      ['will', 'Will', 'male'],
+    ]);
+    const will = en(
+      'I had asked Will to come. Will did not come back until the next morning.',
+    ).replace('asked Anne', 'asked Will');
+    expect(speakers(will, tomWill).slice(-4)).toEqual([
+      'Will [speech]',
+      'Narrator [speech]',
+      'Will [speech]',
+      'Narrator [speech]',
+    ]);
   });
 
   it('starts a scene once a plan to come ends in an arrival, past an adverb or an opening time', () => {
@@ -696,6 +710,29 @@ describe('analyzeHeuristic: first-person narrators', () => {
         'She arrived the next morning.',
     ]) {
       expect(speakers(en(bridge), tomAnne).slice(-4)).toEqual(scene);
+    }
+  });
+
+  it('starts no scene when someone who came over comes back after a bare "Later"', () => {
+    const net = (bridge: string) =>
+      'Tom was mending the net when I came in.\n\n“You’re late,” said Tom.\n\n' +
+      `“The tide was against me,” I said.\n\n“It always is.”\n\n${bridge}\n\n` +
+      '“Good evening,” said Anne.\n\n“Sit down, girl. Your brother has news.”\n\n“What news?”';
+    const tomAnne = castWith([
+      ['tom', 'Tom', 'male'],
+      ['anne', 'Anne', 'female'],
+    ]);
+    // A bare "Later" moves the narration to no new time, so coming back then is no arrival after
+    // a plan to come, in one paragraph or two: Anne joins the talk, and Tom goes on.
+    for (const bridge of [
+      'Then Anne rose to come over. Later she came back with a pot of tea.',
+      'Then Anne rose to come over.\n\nLater she came back with a pot of tea.',
+    ]) {
+      expect(speakers(net(bridge), tomAnne).slice(-3)).toEqual([
+        'Anne [speech]',
+        'Tom [speech]',
+        'Anne [speech]',
+      ]);
     }
   });
 
@@ -1407,8 +1444,34 @@ describe('analyzeHeuristic: third person is unchanged by first-person rules', ()
     }
   });
 
-  it('ignores what the narrator was told in an aside that tags a line', () => {
-    // "as she told me later" is the line's tag, but no line said to the narrator.
+  it('reads no tag in an aside about what someone says', () => {
+    // "as my aunt told me" is about Mrs. Bennet's nerves, not the line: "my aunt" says nothing,
+    // and Mrs. Bennet, whom the narration brought in, speaks first.
+    const scene = (aside: string) =>
+      `Mrs. Bennet sat by the window.\n\n${aside} “Come here, Davy.”\n\n` +
+      '“Yes, ma’am.”\n\n“Sit, Davy.”\n\n“Yes.”';
+    for (const aside of [
+      'Mrs. Bennet was nervous, as my aunt told me.',
+      'She was nervous, as my aunt told me.',
+      'She was nervous, or so I was told.',
+    ]) {
+      expect(speakers(scene(aside))).toEqual([
+        'Mrs. Bennet [speech]',
+        'Davy [speech]',
+        'Mrs. Bennet [speech]',
+        'Davy [speech]',
+      ]);
+      expect(newNames(scene(aside))).toEqual(['Mrs. Bennet', 'Davy']);
+    }
+    // "as well as" opens no aside: the speech verb before the line still tags it, tone and all.
+    const gifts =
+      '“Thank you,” said Tom.\n\nThe feast was the Magistrate’s gift, as well as a whispered, ' +
+      '“I hope our friendship continues.”';
+    expect(speakers(gifts).at(-1)).toMatch(/\[speech, whisper\]$/u);
+  });
+
+  it('ignores what the narrator was told in an aside next to a line', () => {
+    // "as she told me later" is an aside, no tag, so no line is said to the narrator.
     const told =
       'Mrs. Bennet sat by the window.\n\nShe was nervous, as she told me later. ' +
       '“Come here, Davy.”\n\n“Yes, ma’am.”\n\n“Sit, Davy.”\n\n“Yes.”';
@@ -1736,6 +1799,14 @@ describe('analyzeHeuristic: attribution', () => {
       '“It is only me.”';
     expect(speakers(gate, tomAnne)).toEqual(['Tom [speech]', 'Narrator [speech]']);
     expect(newNames(gate, tomAnne)).toEqual([]);
+    // A "she" there is the woman named before it in the paragraph, as in "She ran to the gate and
+    // said", even when nobody has said her name in a line yet.
+    const her =
+      '“Who is there?” called Tom.\n\n' +
+      'Anne was in the garden. Hearing the gate, she ran to her father, a tall man dressed in ' +
+      'black, and said, “It is only me.”';
+    expect(speakers(her, tomAnne)).toEqual(['Tom [speech]', 'Anne [speech]']);
+    expect(newNames(her, tomAnne)).toEqual([]);
   });
 
   it('takes the "he" or "she" after an opening clause for the one of that gender it names', () => {
@@ -1746,6 +1817,34 @@ describe('analyzeHeuristic: attribution', () => {
     ]);
     const saw = '“Hi,” said Mary.\n\nWhen Tom saw Anne, he smiled and said, “Hello.”';
     expect(speakers(saw, three).at(-1)).toBe('Tom [speech]');
+    // Mary, who spoke last, is a woman too, but the opening names Anne.
+    const she = '“Hi,” said Mary.\n\nWhen Anne saw Tom, she smiled and said, “Hello.”';
+    expect(speakers(she, three).at(-1)).toBe('Anne [speech]');
+  });
+
+  it('reads a "he" or "she" that opens the clause before "and said" like "she said"', () => {
+    const three = castWith([
+      ['tom', 'Tom', 'male'],
+      ['anne', 'Anne', 'female'],
+      ['mary', 'Mary', 'female'],
+    ]);
+    // Someone named earlier in the paragraph comes first, though Mary spoke last.
+    for (const line of [
+      'Anne saw Tom. She smiled and said, “Hello.”',
+      'Tom looked at Anne, and she smiled and said, “Hello.”',
+      'Anne saw Tom. She smiled at Mary and said, “Hello.”',
+    ]) {
+      expect(speakers(`“Hi,” said Mary.\n\n${line}`, three).at(-1)).toBe('Anne [speech]');
+    }
+    // Never the person the line is said to, and a reply skips the one it answers.
+    const hello = '“Hello,” said Anne.\n\n“Hi,” said Mary.\n\n';
+    expect(speakers(`${hello}She turned to Mary and said, “Sit down.”`, three).at(-1)).toBe(
+      'Anne [speech]',
+    );
+    const asked = '“Hi,” said Mary.\n\n“Where were you?” asked Anne.\n\n';
+    expect(speakers(`${asked}She shrugged and replied, “Out.”`, three).at(-1)).toBe(
+      'Mary [speech]',
+    );
   });
 
   it('takes the subject after a time phrase that opens the sentence', () => {
@@ -1763,6 +1862,16 @@ describe('analyzeHeuristic: attribution', () => {
     const dawn =
       'That night I lay awake. At dawn somebody knocked at the door and said:\n\n“Wake up.”';
     expect(speakers(dawn)).toEqual(['Unknown [speech]']);
+  });
+
+  it('reads "somebody" past an opening phrase as the subject of a colon intro', () => {
+    // Not Anne, the subject of the sentence before.
+    for (const intro of [
+      'Anne lay awake. At dawn somebody knocked at the door and said:',
+      'Anne lay awake. Suddenly somebody knocked at the door and said:',
+    ]) {
+      expect(speakers(`${intro}\n\n“Wake up.”`, tomAnne)).toEqual(['Unknown [speech]']);
+    }
   });
 
   it('takes the stretch before the join as a clause only when its subject has a verb', () => {
@@ -2736,6 +2845,22 @@ describe('analyzeHeuristic: attribution', () => {
       expect(speakers(`${fire}${intro}\n\n“The bus broke down.”`, four).at(-1)).toBe(
         'Mary [speech]',
       );
+    }
+  });
+
+  it('gives a colon intro’s reply to the one the line was said to, past the teller’s question', () => {
+    const four = castWith([
+      ['anne', 'Anne', 'female'],
+      ['mary', 'Mary', 'female'],
+      ['jane', 'Jane', 'female'],
+      ['tom', 'Tom', 'male'],
+    ]);
+    // Jane is named after Mary, but the line was said to Mary.
+    for (const tag of ['said Anne to Mary', 'Anne said to Mary']) {
+      const text =
+        `Anne, Mary and Jane sat by the fire.\n\n“You’re late again,” ${tag}. Jane went on ` +
+        'reading. What excuse would it be this time? Then she replied:\n\n“The bus broke down.”';
+      expect(speakers(text, four).at(-1)).toBe('Mary [speech]');
     }
   });
 

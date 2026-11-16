@@ -263,12 +263,16 @@ export function replyIntro(
                 ),
               )
               .filter((k) => k !== speaker && !replyTo.has(k) && r.cast.entry(k).gender === gender);
+      // The reply to a line said to someone is theirs, whoever was named after them ("“You’re
+      // late again,” said Anne to Mary. Jane went on reading. What excuse would it be this time?
+      // Then she replied:").
+      const callees = verb?.reply ? saidTo.filter(callee) : [];
       intro.speaker = someone(
         r.turns.byGender(
           gender,
           replyTo,
           skip ? undefined : verb,
-          answerer ? [answerer] : [...new Set(present.reverse())],
+          answerer ? [answerer] : [...new Set([...callees, ...present.reverse()])],
         ),
       );
       intro.notTeller = !intro.speaker;

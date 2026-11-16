@@ -141,6 +141,7 @@ export async function mountView(
       { path: '/', component: Blank },
       { path: '/library', name: 'library', component: Blank },
       { path: '/story/:id', name: 'story', component: Blank },
+      { path: '/story/:id/book/:bookId', name: 'book', component: Blank },
       { path: '/story/:id/read/:partId?', name: 'reader', component: Blank },
       { path: '/story/:id/cast', name: 'cast', component: Blank },
     ],

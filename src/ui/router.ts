@@ -13,6 +13,12 @@ export const router = createRouter({
       props: true,
     },
     {
+      path: '/story/:id/book/:bookId',
+      name: 'book',
+      component: () => import('./views/StoryView.vue'),
+      props: true,
+    },
+    {
       path: '/story/:id/read/:partId?',
       name: 'reader',
       component: () => import('./views/ReaderView.vue'),

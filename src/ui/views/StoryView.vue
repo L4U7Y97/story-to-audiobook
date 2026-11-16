@@ -21,11 +21,12 @@ import { modelLabel, useAnalysis, type Method } from '../composables/useAnalysis
 import AddPartForm from '../components/AddPartForm.vue';
 import PartActions from '../components/PartActions.vue';
 import BookActions from '../components/BookActions.vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 
-const props = defineProps<{ id: string }>();
+const props = defineProps<{ id: string; bookId?: string }>();
 const db = getAppDb();
 const router = useRouter();
+const route = useRoute();
 
 const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
 const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
@@ -33,6 +34,14 @@ const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props
 const adding = ref<string | null>(null);
 const replacing = ref<Part | undefined>();
 const books = computed(() => story.value?.books ?? []);
+const selectedBookId = computed(
+  () =>
+    props.bookId ??
+    (typeof route.params.bookId === 'string' ? route.params.bookId : undefined),
+);
+const selectedBook = computed(() =>
+  books.value.find((book) => book.id === selectedBookId.value),
+);
 /** Parts under their books (one group with book undefined when the story has no books). */
 const groups = computed(() => groupParts(books.value, parts.value ?? []));
 const previewBookOrder = ref<string[]>();
@@ -61,6 +70,9 @@ const displayGroups = computed(() => {
       return group ? [group] : [];
     });
   }
+  if (selectedBookId.value) {
+    ordered = ordered.filter((group) => group.book?.id === selectedBookId.value);
+  }
   const preview = previewPartOrder.value;
   if (!preview) return ordered;
   return ordered.map((group) => {
@@ -85,10 +97,8 @@ const formParts = computed(() =>
     ? (parts.value ?? []).filter((p) => p.bookId === formBook.value!.id)
     : (parts.value ?? []),
 );
-
 const addingBook = ref(false);
 const newBookTitle = ref('');
-const collapsedBooks = ref(new Set<string>());
 
 async function createBook() {
   const book = await addBook(db, props.id, newBookTitle.value);
@@ -96,23 +106,6 @@ async function createBook() {
   newBookTitle.value = '';
   replacing.value = undefined;
   adding.value = book.id;
-}
-
-function toggleBook(bookId: string) {
-  const collapsed = new Set(collapsedBooks.value);
-  if (collapsed.has(bookId)) collapsed.delete(bookId);
-  else collapsed.add(bookId);
-  collapsedBooks.value = collapsed;
-}
-
-function toggleBookFromHeader(bookId: string, event: MouseEvent) {
-  if (
-    event.target instanceof Element &&
-    event.target.closest('a, button, summary, details, input, select, textarea')
-  ) {
-    return;
-  }
-  toggleBook(bookId);
 }
 
 function openPart(part: Part, event: MouseEvent) {
@@ -405,15 +398,20 @@ function wordCount(text: string): number {
 
 <template>
   <main class="page" @click.capture="preventActionAfterDrag">
-    <RouterLink :to="{ name: 'library' }" class="back">← Library</RouterLink>
+    <RouterLink
+      :to="selectedBookId ? { name: 'story', params: { id: story?.id ?? id } } : { name: 'library' }"
+      class="back"
+      >{{ selectedBookId && story ? `← ${story.title}` : '← Library' }}</RouterLink
+    >
 
     <template v-if="story">
-      <h1>{{ story.title }}</h1>
-      <p class="muted">
+      <h1 v-if="selectedBook" :id="`book-${selectedBook.id}`">{{ selectedBook.title }}</h1>
+      <h1 v-else-if="!selectedBookId">{{ story.title }}</h1>
+      <p v-if="!selectedBookId" class="muted">
         {{ characterCount }}
         {{ characterCount === 1 ? 'character' : 'characters' }}
       </p>
-      <div v-if="parts?.length" class="story-actions">
+      <div v-if="!selectedBookId && parts?.length" class="story-actions">
         <RouterLink class="button primary" :to="{ name: 'reader', params: { id: story.id } }">
           {{ story.position ? 'Continue listening' : 'Read &amp; listen' }}
         </RouterLink>
@@ -422,7 +420,12 @@ function wordCount(text: string): number {
         >
       </div>
 
-      <TransitionGroup tag="div" name="book-sort" class="book-list">
+      <TransitionGroup
+        v-if="!selectedBookId || selectedBook"
+        tag="div"
+        name="book-sort"
+        class="book-list"
+      >
         <component
           :is="group.book ? 'section' : 'div'"
           v-for="(group, g) in displayGroups"
@@ -438,10 +441,15 @@ function wordCount(text: string): number {
             v-if="group.book"
             class="book-header"
             @pointerdown.capture="startSortableDrag('book', group.book.id, undefined, $event)"
-            @click="toggleBookFromHeader(group.book.id, $event)"
             @keydown="moveBookByKeyboard(group.book.id, g, $event)"
           >
-            <h2 :id="`book-${group.book.id}`">{{ group.book.title }}</h2>
+            <h2 v-if="!selectedBookId" :id="`book-${group.book.id}`">
+              <RouterLink
+                class="book-title"
+                :to="{ name: 'book', params: { id: story.id, bookId: group.book.id } }"
+                >{{ group.book.title }}</RouterLink
+              >
+            </h2>
             <span class="muted">
               {{ group.parts.length }} {{ group.parts.length === 1 ? 'part' : 'parts' }}
             </span>
@@ -459,30 +467,9 @@ function wordCount(text: string): number {
               @rename="renameBook(db, story.id, group.book.id, $event)"
               @remove="removeBook(group.book)"
             />
-            <button
-              type="button"
-              class="book-collapse"
-              :aria-expanded="!collapsedBooks.has(group.book.id)"
-              :aria-label="`${collapsedBooks.has(group.book.id) ? 'Expand' : 'Collapse'} ${group.book.title}`"
-              :aria-controls="`book-content-${group.book.id}`"
-              @click="toggleBook(group.book.id)"
-            >
-              <svg
-                aria-hidden="true"
-                focusable="false"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                stroke-width="2"
-                stroke-linecap="round"
-                stroke-linejoin="round"
-              >
-                <path :d="collapsedBooks.has(group.book.id) ? 'm6 9 6 6 6-6' : 'm6 15 6-6 6 6'" />
-              </svg>
-            </button>
           </header>
           <div
-            v-show="!group.book || !collapsedBooks.has(group.book.id)"
+            v-if="!group.book || selectedBookId === group.book.id"
             :id="group.book ? `book-content-${group.book.id}` : undefined"
             class="book-content"
           >
@@ -587,6 +574,7 @@ function wordCount(text: string): number {
           </div>
         </component>
       </TransitionGroup>
+      <p v-else-if="selectedBookId" class="muted" role="status">Book not found.</p>
 
       <section
         v-if="confirming.length && confirmEstimate"
@@ -619,7 +607,7 @@ function wordCount(text: string): number {
         </div>
       </section>
 
-      <template v-if="!books.length">
+      <template v-if="!selectedBookId && !books.length">
         <AddPartForm
           v-if="adding !== null || replacing"
           :key="replacing?.id ?? 'new'"
@@ -632,7 +620,7 @@ function wordCount(text: string): number {
         <button v-else class="primary add" @click="adding = ''">Add a part</button>
       </template>
 
-      <form v-if="addingBook" class="card add-book" @submit.prevent="createBook">
+      <form v-if="!selectedBookId && addingBook" class="card add-book" @submit.prevent="createBook">
         <h2>Add a book</h2>
         <p class="muted">
           <template v-if="!books.length && parts?.length">
@@ -654,14 +642,14 @@ function wordCount(text: string): number {
         </div>
       </form>
       <button
-        v-else
+        v-else-if="!selectedBookId"
         :class="['add', 'add-book-button', { primary: books.length > 0 }]"
         @click="addingBook = true"
       >
         Add a book
       </button>
 
-      <section v-if="parts?.length" class="backup" aria-labelledby="backup-heading">
+      <section v-if="!selectedBookId && parts?.length" class="backup" aria-labelledby="backup-heading">
         <h2 id="backup-heading">Backup</h2>
         <p class="muted">
           Stories live only on this device. Export one to a file to keep a copy or open it on
@@ -874,17 +862,9 @@ function wordCount(text: string): number {
   overflow-wrap: anywhere;
 }
 
-.book-collapse {
-  min-height: 36px;
-  width: 36px;
-  padding: 6px;
-  flex: 0 0 36px;
-}
-
-.book-collapse svg {
-  display: block;
-  width: 20px;
-  height: 20px;
+.book-title {
+  color: inherit;
+  text-decoration: none;
 }
 
 .book .parts {

@@ -13,25 +13,56 @@ vi.mock('@/ui/composables/usePlayer', () => import('../../helpers/ui').then((m) 
 afterEach(unmountView);
 
 describe('book sections', () => {
-  it('opens and closes a book when its heading is clicked', async () => {
+  it('opens a book page with only that book’s parts', async () => {
     const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
-    await addBook(db, stored.storyId, 'Book 2');
-    const host = await mountView(StoryView, { id: stored.storyId });
-    const heading = await until(
-      () => host.querySelector<HTMLElement>('.book-header h2'),
-      'the book heading',
+    const secondBook = await addBook(db, stored.storyId, 'Book 2');
+    await addPart(db, stored.storyId, {
+      title: 'Chapter in Book 2',
+      source: { kind: 'paste' },
+      text: 'The next book.',
+      bookId: secondBook.id,
+    });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: stored.storyId }, (instance) => {
+      router = instance;
+    });
+    const bookLink = await until(
+      () => [...host.querySelectorAll<HTMLAnchorElement>('.book-title')].find((link) =>
+        link.textContent?.includes('Book 2'),
+      ),
+      'the Book 2 link',
     );
-    const collapse = heading
-      .closest('.book-header')!
-      .querySelector<HTMLButtonElement>('.book-collapse')!;
 
-    expect(collapse.getAttribute('aria-expanded')).toBe('true');
-    heading.click();
-    await nextTick();
-    expect(collapse.getAttribute('aria-expanded')).toBe('false');
-    heading.click();
-    await nextTick();
-    expect(collapse.getAttribute('aria-expanded')).toBe('true');
+    expect(host.querySelector('.book-collapse')).toBeNull();
+    expect(host.querySelector('.part')).toBeNull();
+
+    bookLink.click();
+
+    await until(
+      () => (router?.currentRoute.value.name === 'book' ? router.currentRoute.value : undefined),
+      'the book route',
+    );
+    await until(
+      () => host.querySelector<HTMLElement>('.part-title')?.textContent === 'Chapter in Book 2',
+      'the selected book’s part',
+    );
+
+    expect(router!.currentRoute.value.params.bookId).toBe(secondBook.id);
+    expect(host.querySelector('h1')?.textContent).toBe('Book 2');
+    expect(host.textContent).not.toContain('Once upon a time.');
+    expect(host.querySelector('.back')?.textContent).toContain('Story');
+    expect(host.querySelector('.book-collapse')).toBeNull();
+
+    host.querySelector<HTMLAnchorElement>('.back')!.click();
+    await until(
+      () => (router?.currentRoute.value.name === 'story' ? router.currentRoute.value : undefined),
+      'the story overview route',
+    );
+    await until(
+      () => host.querySelectorAll('.book-title').length === 2,
+      'the books in the overview',
+    );
+    expect(host.querySelector('.part')).toBeNull();
   });
 
   it('opens the reader when a part row is clicked', async () => {
@@ -66,10 +97,15 @@ describe('book sections', () => {
       text: 'One more part.',
     });
     await addBook(db, stored.storyId, 'Book 2');
+    const story = (await getStory(db, stored.storyId))!;
     let router: Router | undefined;
-    const host = await mountView(StoryView, { id: stored.storyId }, (instance) => {
-      router = instance;
-    });
+    const host = await mountView(
+      StoryView,
+      { id: stored.storyId, bookId: story.books![0]!.id },
+      (instance) => {
+        router = instance;
+      },
+    );
     const book = await until(() => host.querySelector<HTMLElement>('.book'), 'the first book');
     const parts = await until(() => {
       const current = book.querySelectorAll<HTMLElement>('.part');
@@ -388,50 +424,4 @@ describe('book sections', () => {
     expect(actions!.closest('details')?.textContent).toContain('Rename');
   });
 
-  it('collapses a book’s parts and lets the user expand them again', async () => {
-    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
-    await addBook(db, stored.storyId, 'Book 2');
-    const story = (await getStory(db, stored.storyId))!;
-    const host = await mountView(StoryView, { id: stored.storyId });
-    const section = await until(() => host.querySelector<HTMLElement>('.book'), 'the book section');
-    const content = host.querySelector<HTMLElement>('.book-content')!;
-    const otherSection = host.querySelectorAll<HTMLElement>('.book')[1]!;
-    const otherContent = otherSection.querySelector<HTMLElement>('.book-content')!;
-    const collapse = section.querySelector<HTMLButtonElement>('.book-collapse');
-
-    expect(collapse?.getAttribute('aria-label')).toBe(`Collapse ${story.books![0]!.title}`);
-    expect(collapse?.querySelector('svg')).not.toBeNull();
-    expect(collapse?.textContent?.trim()).toBe('');
-    expect(collapse?.getAttribute('aria-expanded')).toBe('true');
-    expect(content.style.display).not.toBe('none');
-
-    collapse!.click();
-
-    const expand = await until(
-      () => section.querySelector<HTMLButtonElement>('.book-collapse[aria-expanded="false"]'),
-      'the collapsed book control',
-    );
-    expect(expand.getAttribute('aria-label')).toBe(`Expand ${story.books![0]!.title}`);
-    expect(expand.querySelector('svg')).not.toBeNull();
-    expect(expand.textContent?.trim()).toBe('');
-    expect(expand.getAttribute('aria-expanded')).toBe('false');
-    expect(content.style.display).toBe('none');
-    expect(section.querySelector('h2')?.textContent).toBe(story.books![0]!.title);
-    expect(otherContent.style.display).not.toBe('none');
-
-    expand.click();
-
-    expect(
-      (
-        await until(
-          () => section.querySelector<HTMLButtonElement>('.book-collapse[aria-expanded="true"]'),
-          'the expanded book control',
-        )
-      ).getAttribute('aria-label'),
-    ).toBe(`Collapse ${story.books![0]!.title}`);
-    expect(
-      section.querySelector<HTMLButtonElement>('.book-collapse')?.getAttribute('aria-expanded'),
-    ).toBe('true');
-    expect(content.style.display).not.toBe('none');
-  });
 });

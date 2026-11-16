@@ -9,6 +9,7 @@ import { inferTraits } from '@/cast/traits';
 import { paragraphStarts } from '@/playback/utterances';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
+import { mergeCharactersInStory } from '@/storage/cast';
 import { newId } from '@/storage/ids';
 import { DEFAULT_LOCALE } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
@@ -301,6 +302,21 @@ async function createSpeaker(name: string, how: { mode?: Mode; scope: PickScope 
   await choose(base.id, how, [{ ...base, voice }]);
 }
 
+/** The picked line's speaker is `intoId` under another name: they are merged in every part. */
+async function mergeSpeaker(intoId: string) {
+  const fromId = pickedSegment.value?.speakerId;
+  if (!fromId) return;
+  range.value = null;
+  try {
+    await mergeCharactersInStory(db, props.id, fromId, intoId);
+    editError.value = '';
+    picking.value = null;
+    player.castChanged();
+  } catch (e) {
+    editError.value = e instanceof Error ? e.message : String(e);
+  }
+}
+
 /** Parts in the order the picker lists them. */
 const orderedParts = computed(() => {
   const list = parts.value ?? [];
@@ -455,7 +471,9 @@ function selectPart(event: Event) {
       :initial-scope="picking.teller ? 'part' : 'line'"
       :default-mode="pickedMode"
       :title="picking.teller ? 'Who tells this part?' : undefined"
+      :mergeable="!picking.teller"
       @pick="choose($event.speakerId, $event)"
+      @merge="mergeSpeaker"
       @create="createSpeaker($event.name, $event)"
       @close="picking = null"
     />

@@ -3,10 +3,12 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Segment } from '@/format/types';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
+import { addPart } from '@/storage/parts';
 import { getStory } from '@/storage/stories';
 import ReaderView from '@/ui/views/ReaderView.vue';
 import {
   button,
+  castChanged,
   db,
   mountView,
   savedCorrection,
@@ -239,6 +241,106 @@ describe('the speaker picker’s search', () => {
     expect(host.querySelector('.sheet')).not.toBeNull();
     esc();
     await until(() => !host.querySelector('.sheet'), 'the picker to close');
+  });
+});
+
+describe('“Same person as…” in the speaker picker', () => {
+  const chunks: Chunk[] = [
+    ['“Where were you?”', 'Bob', 'speech'],
+    [' asked Bob.\n\n', 'N', 'narration'],
+    ['“Out,”', 'Robert', 'speech'],
+    [' said Robert.', 'N', 'narration'],
+  ];
+  const people = (sheet: HTMLElement) =>
+    [...sheet.querySelectorAll('.people button')].map((b) => b.textContent?.trim());
+  const sameAs = (sheet: HTMLElement, who: string) =>
+    button(sheet, `${who} is the same person as…`);
+
+  /** Adds a second part in which Bob reads a line. */
+  async function secondPart(story: StoredStory) {
+    const text = '“Again,” said Bob.';
+    const part = await addPart(db, story.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text,
+    });
+    await saveAnalysis(db, {
+      partId: part.id,
+      textHash: part.textHash,
+      analyzer: { kind: 'heuristic', version: 2 },
+      createdAt: new Date().toISOString(),
+      segments: [
+        { start: 0, end: 8, speakerId: story.ids.Bob!, mode: 'speech', source: 'heuristic' },
+        {
+          start: 8,
+          end: text.length,
+          speakerId: story.ids.N!,
+          mode: 'narration',
+          source: 'heuristic',
+        },
+      ],
+    });
+    return part.id;
+  }
+
+  it('merges the line’s speaker into someone else in every part, once confirmed', async () => {
+    const { story, host } = await fixSpeakers(chunks, [{ name: 'Bob', aliases: ['Bobby'] }]);
+    const two = await secondPart(story);
+    const sheet = await tap(host, 0);
+    sameAs(sheet, 'Bob')!.click();
+    await until(() => sheet.querySelector('h2')?.textContent?.includes('same person'), 'the step');
+    // Nobody is the same person as themselves or as the unknown speaker.
+    expect(people(sheet)).toEqual(['Narrator', 'Robert']);
+    const confirm = button(sheet, 'Confirm merge')!;
+    expect(confirm.disabled).toBe(true);
+    button(sheet, 'Robert')!.click();
+    const warning = await until(() => sheet.querySelector('.warning')?.textContent, 'the warning');
+    expect(warning).toContain('in every part');
+    // Picking someone saves nothing until confirmed.
+    expect((await getStory(db, story.storyId))!.cast.some((c) => c.id === story.ids.Bob)).toBe(
+      true,
+    );
+    confirm.click();
+
+    const cast = await until(async () => {
+      const c = (await getStory(db, story.storyId))!.cast;
+      return c.some((m) => m.id === story.ids.Bob) ? undefined : c;
+    }, 'Bob to leave the cast');
+    expect(cast.find((c) => c.id === story.ids.Robert)?.aliases).toEqual(['Bob', 'Bobby']);
+    for (const partId of [story.partId, two]) {
+      const segments = (await getAnalysis(db, partId))!.segments;
+      expect(segments.some((s) => s.speakerId === story.ids.Bob)).toBe(false);
+    }
+    expect((await getAnalysis(db, two))!.segments[0]!.speakerId).toBe(story.ids.Robert);
+    await until(() => !host.querySelector('.sheet'), 'the picker to close');
+    expect(castChanged).toHaveBeenCalled();
+  });
+
+  it('goes back to choosing who reads the line without merging', async () => {
+    const { story, host } = await fixSpeakers(chunks, []);
+    const sheet = await tap(host, 0);
+    sameAs(sheet, 'Bob')!.click();
+    await until(() => button(sheet, 'Back'), 'the merge step');
+    button(sheet, 'Robert')!.click();
+    button(sheet, 'Back')!.click();
+    await until(() => sheet.querySelector('h2')?.textContent === 'Who reads this?', 'the picker');
+    expect(people(sheet)).toContain('Bob');
+    expect((await getStory(db, story.storyId))!.cast.some((c) => c.id === story.ids.Bob)).toBe(
+      true,
+    );
+  });
+
+  it('is not offered for the narrator, the unknown speaker or “Who tells this part?”', async () => {
+    const { host } = await fixSpeakers([['“Hi,”', 'U', 'speech'], ...chunks], []);
+    expect(sameAs(await tap(host, 0), 'Unknown speaker')).toBeUndefined();
+    button(host.querySelector('.sheet')!, 'Cancel')!.click();
+    await until(() => !host.querySelector('.sheet'), 'the picker to close');
+    expect(sameAs(await tap(host, 2), 'Narrator')).toBeUndefined();
+    button(host.querySelector('.sheet')!, 'Cancel')!.click();
+    await until(() => !host.querySelector('.sheet'), 'the picker to close');
+    host.querySelector<HTMLButtonElement>('.told-by')!.click();
+    const teller = await until(() => host.querySelector<HTMLElement>('.sheet'), 'the picker');
+    expect(teller.querySelector('.same-person')).toBeNull();
   });
 });
 

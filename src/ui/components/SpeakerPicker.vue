@@ -20,12 +20,16 @@ const props = withDefaults(
     /** The mode preselected; none when how the line reads depends on who is picked. */
     defaultMode?: Mode;
     title?: string;
+    /** Whether the line's speaker may be merged into someone else from here. */
+    mergeable?: boolean;
   }>(),
-  { initialScope: 'line', defaultMode: undefined, title: 'Who reads this?' },
+  { initialScope: 'line', defaultMode: undefined, title: 'Who reads this?', mergeable: false },
 );
 const emit = defineEmits<{
   pick: [choice: { speakerId: string; mode?: Mode; scope: PickScope }];
   create: [choice: { name: string; mode?: Mode; scope: PickScope }];
+  /** The line's speaker is the same person as `intoId`, in every part (mergeCharactersInStory). */
+  merge: [intoId: string];
   close: [];
 }>();
 
@@ -40,12 +44,48 @@ const mode = ref<Mode | undefined>(props.defaultMode);
 const scope = ref<PickScope>(props.initialScope);
 const newName = ref('');
 const query = ref('');
-const shown = computed(() => filterCast(props.cast, query.value));
 const sheet = ref<HTMLElement>();
 
-const speaker = computed(
-  () => props.cast.find((c) => c.id === props.segment.speakerId)?.name ?? '',
+const current = computed(() => props.cast.find((c) => c.id === props.segment.speakerId));
+const speaker = computed(() => current.value?.name ?? '');
+
+/**
+ * "Same person as…": only a character is merged from here. The narrator's and the unknown
+ * speaker's lines run through every part, so handing them all over from one tapped line is left
+ * to the Cast page. Nobody is the same person as the unknown speaker, so it is no target either.
+ */
+const mergeTargets = computed(() =>
+  props.cast.filter((c) => c.id !== props.segment.speakerId && c.role !== 'unknown'),
 );
+const canMerge = computed(
+  () => props.mergeable && current.value?.role === 'character' && mergeTargets.value.length > 0,
+);
+/** 'merge' while choosing who the line's speaker is the same person as. */
+const step = ref<'pick' | 'merge'>('pick');
+const mergeInto = ref('');
+
+const shown = computed(() =>
+  filterCast(step.value === 'merge' ? mergeTargets.value : props.cast, query.value),
+);
+/** The chosen target while it is listed: a search that hides it drops the choice. */
+const target = computed(() => shown.value.find((c) => c.id === mergeInto.value));
+
+function startMerge() {
+  step.value = 'merge';
+  query.value = '';
+  mergeInto.value = '';
+  sheet.value?.focus();
+}
+
+function backToPick() {
+  step.value = 'pick';
+  query.value = '';
+  sheet.value?.focus();
+}
+
+function confirmMerge() {
+  if (target.value) emit('merge', target.value.id);
+}
 const scopes = computed((): Array<{ value: PickScope; label: string }> => [
   { value: 'line', label: 'Only this line' },
   {
@@ -69,6 +109,7 @@ function choice(): { mode?: Mode; scope: PickScope } {
  * stays with its speaker and reads in the chosen mode. Nothing changed, nothing is saved.
  */
 function dismiss() {
+  if (step.value === 'merge') return emit('close');
   const how = choice();
   if (how.mode && how.mode !== props.segment.mode) {
     emit('pick', { speakerId: props.segment.speakerId, ...how });
@@ -84,74 +125,121 @@ function create(name = newName.value.trim()) {
   <div class="backdrop" @click.self="dismiss()">
     <section
       ref="sheet"
-      class="sheet"
+      :class="['sheet', { merging: step === 'merge' }]"
       role="dialog"
       aria-modal="true"
       aria-labelledby="picker-title"
       tabindex="-1"
       @keydown.esc="dismiss()"
     >
-      <h2 id="picker-title">{{ title }}</h2>
-      <blockquote>{{ text.trim() }}</blockquote>
+      <template v-if="step === 'merge'">
+        <h2 id="picker-title">{{ speaker }} is the same person as…</h2>
+        <p class="note">
+          Choose who {{ speaker }} really is. Everything {{ speaker }} reads, in every part of the
+          story, goes to them.
+        </p>
 
-      <fieldset v-if="counts.part > 1" class="scopes">
-        <legend>Which lines?</legend>
-        <label v-for="s in scopes" :key="s.value">
-          <input v-model="scope" type="radio" name="scope" :value="s.value" />
-          {{ s.label }}
-        </label>
-      </fieldset>
+        <CastFilter v-model="query" label="Find someone" />
+        <p v-if="query.trim() && !shown.length" class="note" role="status">
+          Nobody else in the cast is called “{{ query.trim() }}”.
+        </p>
 
-      <div class="modes" role="radiogroup" aria-label="How it is read">
-        <button
-          v-for="m in MODES"
-          :key="m.value"
-          type="button"
-          role="radio"
-          :aria-checked="oneLine && mode === m.value"
-          :class="{ active: oneLine && mode === m.value }"
-          :disabled="!oneLine"
-          @click="mode = mode === m.value ? undefined : m.value"
-        >
-          {{ m.label }}
-        </button>
-      </div>
-      <p v-if="!oneLine" class="note">Each line keeps how it is read.</p>
-      <p v-else-if="!mode && !defaultMode" class="note">
-        Not chosen: the narrator, or someone who already narrates in this part, narrates it; anyone
-        else says it.
-      </p>
+        <ul class="people">
+          <li v-for="c in shown" :key="c.id">
+            <button
+              type="button"
+              :class="{ current: c.id === mergeInto }"
+              :aria-pressed="c.id === mergeInto"
+              :style="{ '--tint': speakerTint(colors, c.id) }"
+              @click="mergeInto = c.id"
+            >
+              <span class="swatch" aria-hidden="true" />{{ c.name }}
+            </button>
+          </li>
+        </ul>
 
-      <CastFilter v-model="query" label="Find someone" />
-      <p v-if="query.trim() && !shown.length" class="note" role="status">
-        Nobody in the cast is called “{{ query.trim() }}”.
-        <button type="button" class="add-typed" @click="create(query.trim())">
-          Add “{{ query.trim() }}”
-        </button>
-      </p>
+        <div class="merge-actions">
+          <p v-if="target" class="warning" role="alert">
+            “{{ speaker }}” will be removed from the cast, and all their lines, in every part, will
+            be read by “{{ target.name }}”. {{ speaker }}’s names become other names for
+            {{ target.name }}. This can’t be undone.
+          </p>
+          <div class="row">
+            <button type="button" @click="backToPick">Back</button>
+            <button type="button" class="danger" :disabled="!target" @click="confirmMerge">
+              Confirm merge
+            </button>
+          </div>
+        </div>
+      </template>
 
-      <ul class="people">
-        <li v-for="c in shown" :key="c.id">
+      <template v-else>
+        <h2 id="picker-title">{{ title }}</h2>
+        <blockquote>{{ text.trim() }}</blockquote>
+
+        <fieldset v-if="counts.part > 1" class="scopes">
+          <legend>Which lines?</legend>
+          <label v-for="s in scopes" :key="s.value">
+            <input v-model="scope" type="radio" name="scope" :value="s.value" />
+            {{ s.label }}
+          </label>
+        </fieldset>
+
+        <div class="modes" role="radiogroup" aria-label="How it is read">
           <button
+            v-for="m in MODES"
+            :key="m.value"
             type="button"
-            :class="{ current: c.id === segment.speakerId }"
-            :style="{ '--tint': speakerTint(colors, c.id) }"
-            @click="emit('pick', { speakerId: c.id, ...choice() })"
+            role="radio"
+            :aria-checked="oneLine && mode === m.value"
+            :class="{ active: oneLine && mode === m.value }"
+            :disabled="!oneLine"
+            @click="mode = mode === m.value ? undefined : m.value"
           >
-            <span class="swatch" aria-hidden="true" />{{ c.name }}
+            {{ m.label }}
           </button>
-        </li>
-      </ul>
+        </div>
+        <p v-if="!oneLine" class="note">Each line keeps how it is read.</p>
+        <p v-else-if="!mode && !defaultMode" class="note">
+          Not chosen: the narrator, or someone who already narrates in this part, narrates it;
+          anyone else says it.
+        </p>
 
-      <form class="new" @submit.prevent="create()">
-        <label>
-          New character
-          <input v-model="newName" autocomplete="off" placeholder="Name" />
-        </label>
-        <button type="submit" :disabled="!newName.trim()">Add</button>
-      </form>
+        <CastFilter v-model="query" label="Find someone" />
+        <p v-if="query.trim() && !shown.length" class="note" role="status">
+          Nobody in the cast is called “{{ query.trim() }}”.
+          <button type="button" class="add-typed" @click="create(query.trim())">
+            Add “{{ query.trim() }}”
+          </button>
+        </p>
 
-      <button type="button" class="cancel" @click="emit('close')">Cancel</button>
+        <ul class="people">
+          <li v-for="c in shown" :key="c.id">
+            <button
+              type="button"
+              :class="{ current: c.id === segment.speakerId }"
+              :style="{ '--tint': speakerTint(colors, c.id) }"
+              @click="emit('pick', { speakerId: c.id, ...choice() })"
+            >
+              <span class="swatch" aria-hidden="true" />{{ c.name }}
+            </button>
+          </li>
+        </ul>
+
+        <form class="new" @submit.prevent="create()">
+          <label>
+            New character
+            <input v-model="newName" autocomplete="off" placeholder="Name" />
+          </label>
+          <button type="submit" :disabled="!newName.trim()">Add</button>
+        </form>
+
+        <button v-if="canMerge" type="button" class="same-person" @click="startMerge">
+          {{ speaker }} is the same person as…
+        </button>
+
+        <button type="button" class="cancel" @click="emit('close')">Cancel</button>
+      </template>
     </section>
   </div>
 </template>
@@ -272,5 +360,51 @@ blockquote {
 
 .cancel {
   justify-self: end;
+}
+
+.same-person {
+  justify-self: start;
+}
+
+/*
+ * While merging, only the people list scrolls: the warning and Confirm stay in view below it
+ * (above a phone keyboard too), and nothing scrolls under them.
+ */
+.sheet.merging {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.sheet.merging > * {
+  flex: none;
+}
+
+.sheet.merging > .people {
+  flex: 0 1 auto;
+  min-height: 52px;
+  overflow-y: auto;
+}
+
+.merge-actions {
+  display: grid;
+  gap: 8px;
+}
+
+.merge-actions .row {
+  display: flex;
+  gap: 8px;
+  justify-content: space-between;
+}
+
+.warning {
+  margin: 0;
+  color: var(--warn);
+  font-size: 0.9rem;
+}
+
+.danger {
+  border-color: var(--danger);
+  color: var(--danger);
 }
 </style>

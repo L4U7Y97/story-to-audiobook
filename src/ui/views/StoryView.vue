@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref } from 'vue';
+import { computed, onMounted, ref } from 'vue';
 import type { AnalysisStatus, Book, Part } from '@/format/types';
 import { formatUsd } from '@/analysis/llm/cost';
 import { exportFileName, exportStory } from '@/storage/exportImport';
@@ -16,11 +16,13 @@ import {
   renameBook,
 } from '@/storage/books';
 import { useLiveQuery } from '../composables/useLiveQuery';
+import { useSortable } from '../composables/useSortable';
 import { existingPlayer } from '../composables/usePlayer';
 import { modelLabel, useAnalysis, type Method } from '../composables/useAnalysis';
 import AddPartForm from '../components/AddPartForm.vue';
 import PartActions from '../components/PartActions.vue';
 import BookActions from '../components/BookActions.vue';
+import SortableItem from '../components/SortableItem.vue';
 import { useRoute, useRouter } from 'vue-router';
 
 const props = defineProps<{ id: string; bookId?: string }>();
@@ -35,58 +37,33 @@ const adding = ref<string | null>(null);
 const replacing = ref<Part | undefined>();
 const books = computed(() => story.value?.books ?? []);
 const selectedBookId = computed(
-  () =>
-    props.bookId ??
-    (typeof route.params.bookId === 'string' ? route.params.bookId : undefined),
+  () => props.bookId ?? (typeof route.params.bookId === 'string' ? route.params.bookId : undefined),
 );
-const selectedBook = computed(() =>
-  books.value.find((book) => book.id === selectedBookId.value),
-);
+const selectedBook = computed(() => books.value.find((book) => book.id === selectedBookId.value));
 /** Parts under their books (one group with book undefined when the story has no books). */
 const groups = computed(() => groupParts(books.value, parts.value ?? []));
-const previewBookOrder = ref<string[]>();
-const previewPartOrder = ref<{ groupId: string; partIds: string[] }>();
-const draggedBookId = ref<string>();
-const draggedPartId = ref<string>();
-const suppressActionClick = ref(false);
-type DragSession = {
-  kind: 'book' | 'part';
-  id: string;
-  groupId?: string;
-  pointerId: number;
-  startX: number;
-  startY: number;
-  originalOrder: string[];
-  dragging: boolean;
-  holdTimer: ReturnType<typeof setTimeout>;
-};
-const activeDrag = ref<DragSession>();
-const displayGroups = computed(() => {
-  let ordered = groups.value;
-  if (previewBookOrder.value) {
-    const byBook = new Map(groups.value.map((group) => [group.book?.id, group]));
-    ordered = previewBookOrder.value.flatMap((id) => {
-      const group = byBook.get(id);
-      return group ? [group] : [];
-    });
-  }
-  if (selectedBookId.value) {
-    ordered = ordered.filter((group) => group.book?.id === selectedBookId.value);
-  }
-  const preview = previewPartOrder.value;
-  if (!preview) return ordered;
-  return ordered.map((group) => {
-    if ((group.book?.id ?? 'all') !== preview.groupId) return group;
-    const byPart = new Map(group.parts.map((part) => [part.id, part]));
-    return {
-      ...group,
-      parts: preview.partIds.flatMap((id) => {
-        const part = byPart.get(id);
-        return part ? [part] : [];
-      }),
-    };
-  });
+/** Group of the story's books, and of each book's parts ('all' when the story has no books). */
+const BOOKS = 'books';
+const partGroup = (bookId: string | undefined) => `parts:${bookId ?? 'all'}`;
+const bookSort = useSortable({
+  order: () => books.value.map((book) => book.id),
+  move: (_group, id, toIndex) => moveBook(db, props.id, id, toIndex),
 });
+const partSort = useSortable({
+  order: (group) =>
+    groups.value.find((item) => partGroup(item.book?.id) === group)?.parts.map((part) => part.id) ??
+    [],
+  move: (_group, id, toIndex) => movePart(db, props.id, id, toIndex),
+});
+const displayGroups = computed(() =>
+  bookSort
+    .arrange(BOOKS, groups.value, (group) => group.book?.id ?? 'all')
+    .filter((group) => !selectedBookId.value || group.book?.id === selectedBookId.value)
+    .map((group) => ({
+      ...group,
+      parts: partSort.arrange(partGroup(group.book?.id), group.parts, (part) => part.id),
+    })),
+);
 /** The book the add/replace form works on, if any. */
 const formBook = computed<Book | undefined>(() => {
   const id = replacing.value?.bookId ?? adding.value;
@@ -108,199 +85,12 @@ async function createBook() {
   adding.value = book.id;
 }
 
-function openPart(part: Part, event: MouseEvent) {
-  if (
-    event.target instanceof Element &&
-    event.target.closest('a, button, summary, details, input, select, textarea')
-  ) {
-    return;
-  }
+function openPart(part: Part) {
   void router.push({ name: 'reader', params: { id: props.id, partId: part.id } });
 }
 
-function startSortableDrag(
-  kind: DragSession['kind'],
-  id: string,
-  groupId: string | undefined,
-  event: PointerEvent,
-) {
-  if (activeDrag.value) return;
-  if (!(event.target instanceof Element)) return;
-  const isDragTarget = event.target.closest('summary, .part-title, .book-header h2');
-  if (!isDragTarget && event.target.closest('button, a, details, input, select, textarea')) return;
-  if (event.button !== 0) return;
-  const originalOrder =
-    kind === 'book'
-      ? books.value.map((book) => book.id)
-      : (groups.value
-          .find((group) => (group.book?.id ?? 'all') === groupId)
-          ?.parts.map((part) => part.id) ?? []);
-  if (!originalOrder.includes(id)) return;
-  const session: DragSession = {
-    kind,
-    id,
-    ...(groupId ? { groupId } : {}),
-    pointerId: event.pointerId,
-    startX: event.clientX,
-    startY: event.clientY,
-    originalOrder,
-    dragging: false,
-    holdTimer: setTimeout(() => activateSortableDrag(session), 250),
-  };
-  activeDrag.value = session;
-  window.addEventListener('pointermove', updateBookDrag);
-  window.addEventListener('pointerup', finishBookDrag);
-  window.addEventListener('pointercancel', cancelBookDrag);
-}
-
-function activateSortableDrag(session: DragSession) {
-  if (activeDrag.value !== session || session.dragging) return;
-  clearTimeout(session.holdTimer);
-  session.dragging = true;
-  if (session.kind === 'book') {
-    draggedBookId.value = session.id;
-    previewBookOrder.value = [...session.originalOrder];
-  } else {
-    draggedPartId.value = session.id;
-    previewPartOrder.value = { groupId: session.groupId!, partIds: [...session.originalOrder] };
-  }
-}
-
-function removeDragListeners() {
-  if (activeDrag.value) clearTimeout(activeDrag.value.holdTimer);
-  window.removeEventListener('pointermove', updateBookDrag);
-  window.removeEventListener('pointerup', finishBookDrag);
-  window.removeEventListener('pointercancel', cancelBookDrag);
-}
-
-function updateBookDrag(event: PointerEvent) {
-  const active = activeDrag.value;
-  if (!active || active.pointerId !== event.pointerId) return;
-
-  if (!active.dragging) {
-    if (Math.hypot(event.clientX - active.startX, event.clientY - active.startY) < 6) return;
-    activateSortableDrag(active);
-  }
-  event.preventDefault();
-
-  const element = document.elementFromPoint(event.clientX, event.clientY);
-  if (active.kind === 'book') {
-    const target = element?.closest<HTMLElement>('[data-book-id]');
-    const currentOrder = previewBookOrder.value;
-    if (!target || !currentOrder) return;
-    reorderPreview(
-      currentOrder,
-      active.id,
-      target.dataset.bookId,
-      target,
-      event.clientY,
-      (order) => {
-        previewBookOrder.value = order;
-      },
-    );
-    return;
-  }
-
-  const target = element?.closest<HTMLElement>('[data-part-id]');
-  const targetGroup = target?.closest<HTMLElement>('[data-part-group]');
-  const preview = previewPartOrder.value;
-  if (!target || targetGroup?.dataset.partGroup !== active.groupId || !preview) return;
-  reorderPreview(
-    preview.partIds,
-    active.id,
-    target.dataset.partId,
-    target,
-    event.clientY,
-    (partIds) => {
-      previewPartOrder.value = { ...preview, partIds };
-    },
-  );
-}
-
-async function finishBookDrag(event: PointerEvent) {
-  const active = activeDrag.value;
-  if (!active || active.pointerId !== event.pointerId) return;
-
-  removeDragListeners();
-  const order = active.kind === 'book' ? previewBookOrder.value : previewPartOrder.value?.partIds;
-  const toIndex = active.dragging ? (order?.indexOf(active.id) ?? -1) : -1;
-  if (active.dragging) {
-    suppressActionClick.value = true;
-    setTimeout(() => (suppressActionClick.value = false), 0);
-  }
-  try {
-    if (toIndex >= 0 && toIndex !== active.originalOrder.indexOf(active.id)) {
-      if (active.kind === 'book') await moveBook(db, props.id, active.id, toIndex);
-      else await movePart(db, props.id, active.id, toIndex);
-    }
-  } finally {
-    activeDrag.value = undefined;
-    previewBookOrder.value = undefined;
-    previewPartOrder.value = undefined;
-    draggedBookId.value = undefined;
-    draggedPartId.value = undefined;
-  }
-}
-
-function cancelBookDrag(event: PointerEvent) {
-  if (activeDrag.value?.pointerId !== event.pointerId) return;
-  removeDragListeners();
-  activeDrag.value = undefined;
-  previewBookOrder.value = undefined;
-  previewPartOrder.value = undefined;
-  draggedBookId.value = undefined;
-  draggedPartId.value = undefined;
-}
-
-function reorderPreview(
-  order: string[],
-  activeId: string,
-  targetId: string | undefined,
-  target: HTMLElement,
-  clientY: number,
-  update: (order: string[]) => void,
-) {
-  if (!targetId || targetId === activeId) return;
-  const remaining = order.filter((id) => id !== activeId);
-  const targetIndex = remaining.indexOf(targetId);
-  if (targetIndex < 0) return;
-  const rect = target.getBoundingClientRect();
-  const insertAt = targetIndex + (clientY >= rect.top + rect.height / 2 ? 1 : 0);
-  remaining.splice(insertAt, 0, activeId);
-  if (remaining.some((id, index) => id !== order[index])) update(remaining);
-}
-
-function preventActionAfterDrag(event: MouseEvent) {
-  if (!suppressActionClick.value) return;
-  event.preventDefault();
-  event.stopPropagation();
-  suppressActionClick.value = false;
-}
-
-function moveBookByKeyboard(bookId: string, index: number, event: KeyboardEvent) {
-  if (!(event.target instanceof HTMLElement) || event.target.tagName !== 'SUMMARY') return;
-  const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
-  if (!delta) return;
-  event.preventDefault();
-  void moveBook(db, props.id, bookId, index + delta);
-}
-
-function movePartByKeyboard(part: Part, siblings: Part[], event: KeyboardEvent) {
-  if (!(event.target instanceof HTMLElement) || event.target.tagName !== 'SUMMARY') return;
-  const delta = event.key === 'ArrowUp' ? -1 : event.key === 'ArrowDown' ? 1 : 0;
-  if (!delta) return;
-  event.preventDefault();
-  void move(part, siblings, delta);
-}
-
-function cancelActiveDrag() {
-  removeDragListeners();
-  if (!activeDrag.value) return;
-  activeDrag.value = undefined;
-  previewBookOrder.value = undefined;
-  previewPartOrder.value = undefined;
-  draggedBookId.value = undefined;
-  draggedPartId.value = undefined;
+function openBook(book: Book) {
+  void router.push({ name: 'book', params: { id: props.id, bookId: book.id } });
 }
 
 async function removeBook(book: Book) {
@@ -319,7 +109,6 @@ const confirmEstimate = computed(() =>
 );
 
 onMounted(loadSettings);
-onUnmounted(cancelActiveDrag);
 
 const exporting = ref(false);
 const exportError = ref('');
@@ -366,11 +155,6 @@ function startReplace(part: Part) {
   replacing.value = part;
 }
 
-async function move(part: Part, siblings: Part[], delta: number) {
-  const index = siblings.findIndex((p) => p.id === part.id);
-  if (index >= 0) await movePart(db, props.id, part.id, index + delta);
-}
-
 async function remove(part: Part) {
   // Stop playback if it is reading the part being deleted.
   const playing = existingPlayer(props.id);
@@ -397,9 +181,11 @@ function wordCount(text: string): number {
 </script>
 
 <template>
-  <main class="page" @click.capture="preventActionAfterDrag">
+  <main class="page">
     <RouterLink
-      :to="selectedBookId ? { name: 'story', params: { id: story?.id ?? id } } : { name: 'library' }"
+      :to="
+        selectedBookId ? { name: 'story', params: { id: story?.id ?? id } } : { name: 'library' }
+      "
       class="back"
       >{{ selectedBookId && story ? `← ${story.title}` : '← Library' }}</RouterLink
     >
@@ -423,29 +209,27 @@ function wordCount(text: string): number {
       <TransitionGroup
         v-if="!selectedBookId || selectedBook"
         tag="div"
-        name="book-sort"
+        name="sort"
         class="book-list"
       >
-        <component
-          :is="group.book ? 'section' : 'div'"
-          v-for="(group, g) in displayGroups"
+        <SortableItem
+          v-for="group in displayGroups"
+          :id="group.book?.id ?? 'all'"
           :key="group.book?.id ?? 'all'"
-          :data-book-id="group.book?.id"
-          :class="{
-            book: group.book,
-            'book-dragging': draggedBookId === group.book?.id,
-          }"
+          :tag="group.book ? 'section' : 'div'"
+          :sortable="bookSort"
+          :group="BOOKS"
+          handle
+          :disabled="!group.book || Boolean(selectedBookId)"
+          :class="{ book: group.book }"
           :aria-labelledby="group.book ? `book-${group.book.id}` : undefined"
+          @open="group.book && openBook(group.book)"
         >
-          <header
-            v-if="group.book"
-            class="book-header"
-            @pointerdown.capture="startSortableDrag('book', group.book.id, undefined, $event)"
-            @keydown="moveBookByKeyboard(group.book.id, g, $event)"
-          >
+          <header v-if="group.book" class="book-header" data-sortable-handle>
             <h2 v-if="!selectedBookId" :id="`book-${group.book.id}`">
               <RouterLink
                 class="book-title"
+                draggable="false"
                 :to="{ name: 'book', params: { id: story.id, bookId: group.book.id } }"
                 >{{ group.book.title }}</RouterLink
               >
@@ -464,6 +248,7 @@ function wordCount(text: string): number {
               class="book-menu"
               :book="group.book"
               :part-count="group.parts.length"
+              :reorderable="!selectedBookId"
               @rename="renameBook(db, story.id, group.book.id, $event)"
               @remove="removeBook(group.book)"
             />
@@ -473,23 +258,16 @@ function wordCount(text: string): number {
             :id="group.book ? `book-content-${group.book.id}` : undefined"
             class="book-content"
           >
-            <TransitionGroup
-              v-if="group.parts.length"
-              tag="ol"
-              name="part-sort"
-              class="parts"
-              :data-part-group="group.book?.id ?? 'all'"
-            >
-              <li
+            <TransitionGroup v-if="group.parts.length" tag="ol" name="sort" class="parts">
+              <SortableItem
                 v-for="part in group.parts"
+                :id="part.id"
                 :key="part.id"
-                :data-part-id="part.id"
-                :class="['card', 'part', { 'part-dragging': draggedPartId === part.id }]"
-                @pointerdown.capture="
-                  startSortableDrag('part', part.id, group.book?.id ?? 'all', $event)
-                "
-                @click="openPart(part, $event)"
-                @keydown="movePartByKeyboard(part, group.parts, $event)"
+                tag="li"
+                :sortable="partSort"
+                :group="partGroup(group.book?.id)"
+                class="card part"
+                @open="openPart(part)"
               >
                 <RouterLink
                   class="part-title"
@@ -544,7 +322,7 @@ function wordCount(text: string): number {
                   </span>
                 </div>
                 <p v-else-if="notes[part.id]" class="note muted">{{ notes[part.id] }}</p>
-              </li>
+              </SortableItem>
             </TransitionGroup>
             <p v-else-if="group.book" class="muted">No parts in this book yet.</p>
             <p v-else-if="parts" class="muted">
@@ -572,7 +350,7 @@ function wordCount(text: string): number {
               </button>
             </template>
           </div>
-        </component>
+        </SortableItem>
       </TransitionGroup>
       <p v-else-if="selectedBookId" class="muted" role="status">Book not found.</p>
 
@@ -649,7 +427,11 @@ function wordCount(text: string): number {
         Add a book
       </button>
 
-      <section v-if="!selectedBookId && parts?.length" class="backup" aria-labelledby="backup-heading">
+      <section
+        v-if="!selectedBookId && parts?.length"
+        class="backup"
+        aria-labelledby="backup-heading"
+      >
         <h2 id="backup-heading">Backup</h2>
         <p class="muted">
           Stories live only on this device. Export one to a file to keep a copy or open it on
@@ -687,12 +469,6 @@ function wordCount(text: string): number {
   grid-template-columns: 1fr auto auto;
   gap: 2px 12px;
   counter-increment: part;
-  cursor: grab;
-  touch-action: none;
-}
-
-.part:active {
-  cursor: grabbing;
 }
 
 .part-title {
@@ -823,21 +599,10 @@ function wordCount(text: string): number {
   gap: 8px;
 }
 
-.book-dragging {
-  opacity: 0.7;
-  z-index: 1;
-}
-
-.book-sort-move,
-.part-sort-move {
+.sort-move {
   transition:
     transform 180ms ease,
     opacity 180ms ease;
-}
-
-.part-dragging {
-  opacity: 0.7;
-  z-index: 1;
 }
 
 .book-header {
@@ -846,12 +611,6 @@ function wordCount(text: string): number {
   gap: 12px;
   border-bottom: 1px solid var(--border);
   padding-bottom: 4px;
-  cursor: grab;
-  touch-action: none;
-}
-
-.book-header:active {
-  cursor: grabbing;
 }
 
 .book-header h2 {
@@ -897,9 +656,7 @@ function wordCount(text: string): number {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .book-sort-move,
-  .part-sort-move,
-  .book-dragging {
+  .sort-move {
     transition: none;
   }
 }

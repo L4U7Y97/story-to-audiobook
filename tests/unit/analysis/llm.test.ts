@@ -148,7 +148,7 @@ describe('LLM analysis', () => {
 
     const { story, analysis, lines } = await stored(part.id);
     expect(report).toMatchObject({ kind: 'llm', fallbackUnits: 0 });
-    expect(analysis.analyzer).toEqual({ kind: 'llm', model: 'claude-haiku-5-5', version: 4 });
+    expect(analysis.analyzer).toEqual({ kind: 'llm', model: 'claude-haiku-5-5', version: 5 });
     expect(lines).toEqual([
       ['“Hi,”', 'Anne', 'llm'],
       [' said Anne. ', 'Narrator', 'llm'],
@@ -501,6 +501,10 @@ describe('the system prompt', () => {
       "In a first-person story the narrator's own dialogue and thoughts are also N",
     );
     expect(estimateTokens(SYSTEM_PROMPT) - 671).toBeLessThan(400);
+  });
+
+  it("leaves the teller's single-quoted words in the narration", () => {
+    expect(SYSTEM_PROMPT).toContain('single-quoted words mid-sentence that are not dialogue');
   });
 });
 

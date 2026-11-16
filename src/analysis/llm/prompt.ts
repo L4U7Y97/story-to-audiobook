@@ -36,7 +36,7 @@ interface PromptInput {
 export const SYSTEM_PROMPT = `You label stories for a multi-voice audiobook. Each cast member has their own voice, and the narration is read by whoever tells the story at that point, which can be N or a character. For every numbered unit of the story, say who voices it and how.
 
 Modes:
-- "narration": the teller's text, including dialogue tags such as "she said".
+- "narration": the teller's text, including dialogue tags such as "she said", and single-quoted words mid-sentence that are not dialogue, even as a unit of their own (a ‘short’ walk; he wondered ‘what now?’ and sighed; I thought ‘not again’ and ran).
 - "speech": words someone says aloud.
 - "thought": someone's unspoken thoughts (often in italics or after "thought").
 - "written": a letter, note, diary entry, sign or inscription that is read out. The speaker is its writer, or the current teller when the writer is unknown.

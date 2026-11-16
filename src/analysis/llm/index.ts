@@ -41,7 +41,7 @@ import {
 } from './schema';
 
 /** Bump when the prompt, the output schema or the conversion rules change. */
-export const LLM_VERSION = 4;
+export const LLM_VERSION = 5;
 
 const CONTEXT_LINES = 20;
 const MAX_OUTPUT_TOKENS = 16000;

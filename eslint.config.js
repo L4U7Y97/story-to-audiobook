@@ -5,7 +5,7 @@ import prettier from 'eslint-config-prettier';
 import globals from 'globals';
 
 export default tseslint.config(
-  { ignores: ['dist/**', 'android/**', 'coverage/**', 'node_modules/**'] },
+  { ignores: ['dist/**', 'android/**', 'coverage/**', 'node_modules/**', '.claude/**'] },
   js.configs.recommended,
   ...tseslint.configs.recommended,
   ...pluginVue.configs['flat/recommended'],

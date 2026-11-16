@@ -213,7 +213,7 @@ function qualifiedNickname(ts: Token[], m: Mention): boolean {
     while (gluedAt(ts, k) && !LOWER.test(ts[k]!.text)) k++;
     return ends(k);
   }
-  if (gluedAt(ts, k) && ts[k]!.text.toLowerCase() in DETERMINERS) k++;
+  if (gluedAt(ts, k) && DETERMINERS.has(ts[k]!.text.toLowerCase())) k++;
   for (let n = 0; n < 2 && gluedAt(ts, k); n++) if (ends(++k)) return true;
   return false;
 }

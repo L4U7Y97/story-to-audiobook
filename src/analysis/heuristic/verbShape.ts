@@ -81,7 +81,7 @@ export function verbAfterSubject(
     // "Anne cast in shadow,", "Anne wound up in her shawl,"; but "Anne ground to a halt,", "Anne
     // wound through the crowd,", "Anne knit in silence,", "Anne cast off,").
     const object = (j: number) =>
-      word(j) in DETERMINERS ||
+      DETERMINERS.has(word(j)) ||
       UPPER.test(ts[j]!.text) ||
       [
         'him',
@@ -128,7 +128,7 @@ export function verbAfterSubject(
         glued(j + 1) &&
         (SUBJECT_PRONOUNS.has(word(j + 1)) ||
           UPPER.test(ts[j + 1]!.text) ||
-          word(j + 1) in DETERMINERS);
+          DETERMINERS.has(word(j + 1)));
       const takes = (j: number) =>
         glued(j) && ((object(j) && !clauseAfter(j)) || SELF_WORDS.has(word(j)));
       const withSomeone =
@@ -226,7 +226,7 @@ function verbAfterPhrase(
     // "her" is a possessive after a preposition that opens the phrase right after the
     // subject ("and Anne for her gifts and says", "and Anne on her cheeks and says"), not after
     // one inside it ("and Anne with a smile for her nods and says").
-    (wordAt(ts, j) in DETERMINERS &&
+    (DETERMINERS.has(wordAt(ts, j)) &&
       (wordAt(ts, j) !== 'her' ||
         (j - 1 === k &&
           ['for', 'on', 'in', 'into', 'onto', 'from'].includes(wordAt(ts, j - 1))))) ||
@@ -275,7 +275,7 @@ function verbAfterPhrase(
     if (VERB_ADVERBS.has(wordAt(ts, n))) continue;
     if (
       open &&
-      wordAt(ts, n - 1) in DETERMINERS &&
+      DETERMINERS.has(wordAt(ts, n - 1)) &&
       /\p{Ll}ed$/u.test(wordAt(ts, n)) &&
       glued(n + 1) &&
       LOWER.test(ts[n + 1]!.text) &&
@@ -289,7 +289,7 @@ function verbAfterPhrase(
     const nounLike =
       NOUN_LIKE_PASTS.has(wordAt(ts, n)) &&
       !ts[join]!.punctBefore &&
-      !(wordAt(ts, n - 1) in DETERMINERS);
+      !DETERMINERS.has(wordAt(ts, n - 1));
     const shaped =
       AUXILIARIES.has(wordAt(ts, n)) ||
       finiteShape(wordAt(ts, n), false) ||
@@ -305,7 +305,7 @@ function verbAfterPhrase(
 /** An English word that opens a phrase before a verb: an article, a preposition, an -ing word. */
 function opensPhrase(w: string): boolean {
   return (
-    w in DETERMINERS ||
+    DETERMINERS.has(w) ||
     NON_PARTICIPANT_PREPOSITIONS.has(w) ||
     PHRASE_AFTER_PERSON.has(w) ||
     /\p{L}ing$/u.test(w)
@@ -334,6 +334,6 @@ export function endsObject(ts: Token[], k: number): boolean {
   if (COORDINATORS.has(word)) return true;
   return (
     !next.punctBefore &&
-    (word in DETERMINERS || NON_PARTICIPANT_PREPOSITIONS.has(word) || ADDRESSEE_MARKERS.has(word))
+    (DETERMINERS.has(word) || NON_PARTICIPANT_PREPOSITIONS.has(word) || ADDRESSEE_MARKERS.has(word))
   );
 }

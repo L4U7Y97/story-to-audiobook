@@ -18,8 +18,16 @@ const CONTINUES: VerbInfo = { continues: true };
 const bare = (tone?: ToneLabel): VerbInfo => ({ ...v(tone), bare: true });
 const each = (words: string[], info: VerbInfo) => Object.fromEntries(words.map((w) => [w, info]));
 
+/**
+ * A word table with no prototype, so `in` and indexing find only its own words. In a plain
+ * object, a word such as "constructor" or "toString" would find an inherited member.
+ */
+function table<T>(entries: Record<string, T>): Record<string, T> {
+  return Object.assign(Object.create(null) as Record<string, T>, entries);
+}
+
 /** Speech and thought verbs that introduce or tag dialogue, with the tone they imply. */
-export const VERBS: Record<string, VerbInfo> = {
+export const VERBS: Record<string, VerbInfo> = table({
   ...each(
     [
       'said',
@@ -170,10 +178,10 @@ export const VERBS: Record<string, VerbInfo> = {
   demand: bare('urgent'),
   think: { thought: true, bare: true },
   wonder: { thought: true, bare: true },
-};
+});
 
 /** Adverbs that colour the tone of a tagged line. */
-export const ADVERB_TONES: Record<string, ToneLabel> = {
+export const ADVERB_TONES: Record<string, ToneLabel> = table({
   angrily: 'angry',
   sadly: 'sad',
   softly: 'whisper',
@@ -187,9 +195,9 @@ export const ADVERB_TONES: Record<string, ToneLabel> = {
   wearily: 'tired',
   fearfully: 'fearful',
   happily: 'happy',
-};
+});
 
-export const TITLES: Record<string, Gender | undefined> = {
+export const TITLES: Record<string, Gender | undefined> = table({
   'Mr.': 'male',
   Mr: 'male',
   'Mrs.': 'female',
@@ -222,24 +230,24 @@ export const TITLES: Record<string, Gender | undefined> = {
   Mme: 'female',
   'Mlle.': 'female',
   Mlle: 'female',
-};
+});
 
-export const DETERMINERS: Record<string, Gender | undefined> = {
-  the: undefined,
-  his: undefined,
-  her: undefined,
-  their: undefined,
-  my: undefined,
-  a: undefined,
-  an: undefined,
-  our: undefined,
-  your: undefined,
-  this: undefined,
-  that: undefined,
-};
+export const DETERMINERS = new Set([
+  'the',
+  'his',
+  'her',
+  'their',
+  'my',
+  'a',
+  'an',
+  'our',
+  'your',
+  'this',
+  'that',
+]);
 
 /** Nouns that can name a speaker ("his wife"), with their gender when fixed. */
-export const SPEAKER_NOUNS: Record<string, Gender | undefined> = {
+export const SPEAKER_NOUNS: Record<string, Gender | undefined> = table({
   man: 'male',
   woman: 'female',
   lady: 'female',
@@ -318,7 +326,7 @@ export const SPEAKER_NOUNS: Record<string, Gender | undefined> = {
   cousin: undefined,
   grandson: 'male',
   granddaughter: 'female',
-};
+});
 
 /** Speaker nouns that say nothing about the speaker ("a voice"). */
 export const EPICENE = new Set(['voice']);
@@ -330,7 +338,7 @@ export const POSSESSIVE_DETERMINERS = new Set(['his', 'her', 'their', 'my', 'you
  * Subject pronouns; the first-person forms mean whoever tells the story. isPronoun also reads
  * "She" and "I’m" (curly apostrophe) as these.
  */
-export const PRONOUNS: Record<string, Gender | 'narrator'> = {
+export const PRONOUNS: Record<string, Gender | 'narrator'> = table({
   he: 'male',
   she: 'female',
   I: 'narrator',
@@ -338,7 +346,7 @@ export const PRONOUNS: Record<string, Gender | 'narrator'> = {
   "I'd": 'narrator',
   "I'll": 'narrator',
   "I've": 'narrator',
-};
+});
 
 /** Subject pronouns, lower-case. */
 export const SUBJECT_PRONOUNS = new Set(['i', 'you', 'he', 'she', 'we', 'they', 'it']);

@@ -294,7 +294,7 @@ function presentSubject(r: Lookup, ts: Token[], v: number): boolean {
       subjectOf(ts, v, mentions) !== null ||
       indefiniteSubject(r, ts, v) ||
       // "shouts one of the guards", "cries the old woman", but not "Whispers that the king…"
-      (after in DETERMINERS && after !== 'that' && after !== 'this') ||
+      (DETERMINERS.has(after) && after !== 'that' && after !== 'this') ||
       after === 'one'
     );
   }
@@ -309,7 +309,7 @@ function presentSubject(r: Lookup, ts: Token[], v: number): boolean {
   ) {
     return true;
   }
-  if (word in DETERMINERS) return false;
+  if (DETERMINERS.has(word)) return false;
   // After a fronted phrase, a person right after the form who ends the clause.
   const inverted = subjectOf(ts, v, mentions);
   const last = inverted?.kind === 'mention' ? inverted.mention.last : -1;
@@ -395,9 +395,9 @@ function presentForm(t: Token): boolean {
  * its subject ("The music resumes.", "the conductor continues").
  */
 function nounSubject(ts: Token[], d: number, end: number, v: number): boolean {
-  if (d < 0 || !(wordAt(ts, d) in DETERMINERS)) return false;
+  if (d < 0 || !DETERMINERS.has(wordAt(ts, d))) return false;
   for (let k = d + 1; k <= end; k++) {
-    if (!gluedAt(ts, k) || !LOWER.test(ts[k]!.text) || wordAt(ts, k) in DETERMINERS) return false;
+    if (!gluedAt(ts, k) || !LOWER.test(ts[k]!.text) || DETERMINERS.has(wordAt(ts, k))) return false;
   }
   if (verbAt(ts, v)?.continues) return false;
   const object = (k: number) => BARE_OBJECTS.has(wordAt(ts, k)) || wordAt(ts, k) === 'me';

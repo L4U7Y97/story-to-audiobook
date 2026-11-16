@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Character, Gender } from '@/format/types';
 import { splitUnits } from '@/analysis/units';
 import { analyzeHeuristic } from '@/analysis/heuristic';
-import { findMentions, tokenize } from '@/analysis/heuristic/mentions';
+import { findMentions, isPronoun, tokenize, verbAt } from '@/analysis/heuristic/mentions';
 import { matchCast, type CastEntry } from '@/analysis/castMatch';
 import type { LabelResult } from '@/analysis/labels';
 import { baseCast } from '../../helpers/fixtures';
@@ -298,6 +298,65 @@ describe('tokenize / findMentions: words that are not people', () => {
   it('names the person a descriptor introduces', () => {
     const [jane] = mentions('said her sister Jane');
     expect([jane?.name, jane?.gender]).toEqual(['Jane', 'female']);
+  });
+});
+
+describe('analyzeHeuristic: words that are also Object.prototype keys', () => {
+  // Every plain object inherits "constructor", "toString", "valueOf"… The word tables must never
+  // read those as entries: in a text they are words like any other.
+  const mentions = (text: string) =>
+    findMentions(tokenize(text), () => false).map((m) => [m.name, m.gender]);
+  /** Whether every tone and gender in the analysis of `text` is a label or missing. */
+  const plainLabels = (text: string, cast?: Character[]) => {
+    const { result } = analyse(text, cast);
+    return [
+      ...result.spans.map((s) => s.tone?.label),
+      ...result.newCharacters.map((c) => c.gender),
+    ].every((v) => v === undefined || typeof v === 'string');
+  };
+
+  it('finds no pronoun, speech verb, title, determiner or speaker noun in them', () => {
+    for (const word of ['constructor', 'Constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+      expect(isPronoun(word)).toBeUndefined();
+    }
+    expect(verbAt(tokenize('the constructor said'), 1)).toBeUndefined();
+    // The same as with an ordinary word in their place: "a strange voice", "said zorbit Smith",
+    // "the castle guard", "Lucy’s builder".
+    expect(mentions('A constructor voice said hello.')).toEqual([
+      ['a constructor voice', undefined],
+    ]);
+    expect(mentions('said toString Smith')).toEqual([['Smith', undefined]]);
+    expect(mentions('said the constructor guard')).toEqual([['the constructor guard', undefined]]);
+    expect(mentions('said Lucy’s constructor')).toEqual([['Lucy', undefined]]);
+  });
+
+  it('gives a character named Constructor or ToString their lines', () => {
+    for (const name of ['Constructor', 'ToString']) {
+      expect(speakers(`“Who?” asked ${name}.`)).toEqual([`${name} [speech]`]);
+      expect(speakers(`“Hello,” ${name} said.`)).toEqual([`${name} [speech]`]);
+      expect(speakers(`“Hello,” said ${name}.`, castWith([['c', name, 'male']]))).toEqual([
+        `${name} [speech]`,
+      ]);
+      expect(plainLabels(`“Who?” asked ${name}.`)).toBe(true);
+    }
+  });
+
+  it('reads them in a tag like any other word, with no tone or gender of their own', () => {
+    // Each line gets the speaker it gets with an ordinary word in place of the key: "Marlow’s
+    // voice", "a strange voice", "said zorbit", "a builder of bridges", "the castle guard",
+    // "Lucy’s builder", "the builder said".
+    for (const [text, speaker] of [
+      ['“Who?” asked Constructor’s voice.', 'Unknown [speech]'],
+      ['A constructor voice said, “Hello.”', 'a constructor voice [speech]'],
+      ['“Done,” said toString.', 'Unknown [speech]'],
+      ['“Wait,” said Tom, a constructor of bridges.', 'Tom [speech]'],
+      ['“Halt!” said the constructor guard.', 'the constructor guard [speech]'],
+      ['“Hi,” said Lucy’s constructor.', 'Unknown [speech]'],
+      ['“Ready,” the constructor said.', 'Unknown [speech]'],
+    ] as const) {
+      expect(speakers(text)).toEqual([speaker]);
+      expect(plainLabels(text)).toBe(true);
+    }
   });
 });
 

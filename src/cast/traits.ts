@@ -150,7 +150,7 @@ const NOUNS = nouns(
 );
 
 /** First words of a description rather than a name ("the old man"). */
-const DETERMINER_WORDS = new Set(Object.keys(DETERMINERS));
+const DETERMINER_WORDS: ReadonlySet<string> = DETERMINERS;
 
 /**
  * Words that end what a description says about its head: "the king of the giants", "the old man

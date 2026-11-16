@@ -93,7 +93,7 @@ export function timePhraseStart(ts: Token[], v: number, i: number): number {
   let stop = i;
   while (stop > v + 1 && !ts[stop]!.punctBefore) {
     const w = ts[stop - 1]!.text.toLowerCase();
-    if (!(w in DETERMINERS) && !TIME_COUNTS.has(w) && !unit.test(w)) break;
+    if (!DETERMINERS.has(w) && !TIME_COUNTS.has(w) && !unit.test(w)) break;
     stop--;
   }
   return stop;
@@ -400,7 +400,7 @@ export function arrives(ts: Token[], v: number, i: number): boolean {
       next === 'a' && word(v + 2) === 'little' && ['after', 'before', 'past'].includes(word(v + 3));
     return little || KNOCKING_WHERE.has(next) || LY_ADVERB.test(next);
   }
-  if (verb === 'returned' && (next in DETERMINERS || BARE_OBJECTS.has(next))) return false;
+  if (verb === 'returned' && (DETERMINERS.has(next) || BARE_OBJECTS.has(next))) return false;
   if (verb === 'came' && next === 'down' && word(v + 2) === 'with') return false;
   const decision =
     ['to', 'at'].includes(next) &&
@@ -481,13 +481,13 @@ export function untilTimeAt(ts: Token[]): number {
   const until =
     t > 0 &&
     (UNTIL.has(wordAt(ts, t - 1)) ||
-      (wordAt(ts, t - 1) in DETERMINERS && UNTIL.has(wordAt(ts, t - 2))));
+      (DETERMINERS.has(wordAt(ts, t - 1)) && UNTIL.has(wordAt(ts, t - 2))));
   return until ? t : -1;
 }
 
 /** The word before the time phrase at `t`, past a determiner: "for" in "for the next day". */
 function wordBeforeTime(ts: Token[], t: number): string {
   let p = t - 1;
-  if (wordAt(ts, p) in DETERMINERS) p--;
+  if (DETERMINERS.has(wordAt(ts, p))) p--;
   return wordAt(ts, p);
 }

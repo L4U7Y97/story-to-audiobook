@@ -4,7 +4,7 @@ import type { Unit } from '../units';
 import { Attributor } from './attributor';
 
 /** Stored with each analysis. Bump when the same text gets different labels. */
-export const HEURISTIC_VERSION = 3;
+export const HEURISTIC_VERSION = 4;
 
 interface HeuristicInput {
   text: string;

@@ -12,6 +12,9 @@ vi.mock('@/ui/composables/usePlayer', () => import('../../helpers/ui').then((m) 
 
 afterEach(unmountView);
 
+/** Waits long enough for a press to become a drag (useSortable's hold). */
+const hold = () => new Promise((resolve) => setTimeout(resolve, 350));
+
 describe('book sections', () => {
   it('opens a book page with only that book’s parts', async () => {
     const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
@@ -179,6 +182,7 @@ describe('book sections', () => {
     });
     Object.assign(pointerDown, { pointerId: 12 });
     title.dispatchEvent(pointerDown);
+    await hold();
     // A press on a row must not start selecting text across rows.
     const selectStart = new Event('selectstart', { bubbles: true, cancelable: true });
     parts[1]!.dispatchEvent(selectStart);
@@ -260,6 +264,7 @@ describe('book sections', () => {
     });
     Object.assign(pointerDown, { pointerId: 7 });
     actions!.dispatchEvent(pointerDown);
+    await hold();
     const pointerMove = new MouseEvent('pointermove', {
       bubbles: true,
       cancelable: true,
@@ -318,6 +323,7 @@ describe('book sections', () => {
     });
     Object.assign(titlePointerDown, { pointerId: 11 });
     draggedBook.querySelector('h2')!.dispatchEvent(titlePointerDown);
+    await hold();
     const titlePointerMove = new MouseEvent('pointermove', {
       bubbles: true,
       cancelable: true,
@@ -404,6 +410,7 @@ describe('book sections', () => {
     });
     Object.assign(pointerDown, { pointerId: 8 });
     actions!.dispatchEvent(pointerDown);
+    await hold();
     const actionPointerMove = new MouseEvent('pointermove', {
       bubbles: true,
       cancelable: true,
@@ -570,5 +577,76 @@ describe('book sections', () => {
     await open(second);
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(second.open).toBe(false);
+  });
+
+  it('scrolls instead of dragging when a row moves before it is held, and drags after a hold', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    await addPart(db, stored.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'The next part.',
+    });
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const parts = await until(() => {
+      const current = host.querySelectorAll<HTMLElement>('.part');
+      return current.length === 2 ? [...current] : undefined;
+    }, 'the parts');
+    const [first, second] = parts as [HTMLElement, HTMLElement];
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(second);
+    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue({
+      top: 100,
+      bottom: 200,
+      left: 0,
+      right: 400,
+      width: 400,
+      height: 100,
+      x: 0,
+      y: 100,
+      toJSON: () => ({}),
+    });
+    const pointer = (type: string, target: EventTarget, clientY: number, pointerId: number) => {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX: 20,
+        clientY,
+      });
+      Object.assign(event, { pointerId });
+      target.dispatchEvent(event);
+    };
+    const touchMove = () => {
+      const event = new Event('touchmove', { bubbles: true, cancelable: true });
+      first.dispatchEvent(event);
+      return event;
+    };
+    const titles = () => [...host.querySelectorAll('.part-title')].map((t) => t.textContent);
+
+    // A swipe: the row moves straight away, so the page scrolls and nothing is dragged.
+    pointer('pointerdown', first, 10, 1);
+    pointer('pointermove', window, 180, 1);
+    expect(touchMove().defaultPrevented).toBe(false);
+    await hold();
+    await nextTick();
+    expect(first.classList.contains('dragging')).toBe(false);
+    pointer('pointermove', window, 190, 1);
+    await nextTick();
+    expect(titles()).toEqual(['One', 'Two']);
+    pointer('pointerup', window, 190, 1);
+
+    // A hold, then a move: the row is dragged and the page does not scroll.
+    pointer('pointerdown', first, 10, 2);
+    await hold();
+    await nextTick();
+    expect(first.classList.contains('dragging')).toBe(true);
+    expect(touchMove().defaultPrevented).toBe(true);
+    pointer('pointermove', window, 180, 2);
+    await nextTick();
+    expect(titles()).toEqual(['Two', 'One']);
+    pointer('pointerup', window, 180, 2);
+    await until(async () => {
+      const current = await listParts(db, stored.storyId);
+      return current.map((part) => part.title).join(',') === 'Two,One' ? current : undefined;
+    }, 'the order saved after the held drag');
   });
 });

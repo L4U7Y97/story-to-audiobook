@@ -3,7 +3,8 @@ import { computed } from 'vue';
 import type { Sortable } from '../composables/useSortable';
 
 /**
- * One reorderable item of a list driven by `useSortable`: hold and drag it, or press ArrowUp /
+ * One reorderable item of a list driven by `useSortable`: hold it still, then drag it (a swipe
+ * that moves straight away scrolls the page instead), or press ArrowUp /
  * ArrowDown on its actions button (`summary`). A tap on a non-interactive part of it emits `open`.
  * Items can nest (parts inside a book); each item only reacts to presses that are its own.
  */
@@ -71,6 +72,7 @@ function onClick(event: MouseEvent) {
     :data-sortable-id="disabled ? undefined : id"
     :data-sortable-group="disabled ? undefined : group"
     @pointerdown.capture="onPointerDown"
+    @touchmove="sortable.touchMove"
     @keydown="onKeyDown"
     @click="onClick"
     @dragstart.prevent
@@ -83,7 +85,6 @@ function onClick(event: MouseEvent) {
 .whole-handle,
 .sortable[data-sortable-id] :deep([data-sortable-handle]) {
   cursor: grab;
-  touch-action: none;
 }
 
 .whole-handle:active,

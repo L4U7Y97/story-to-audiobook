@@ -140,7 +140,6 @@ summary {
 
 summary.reorderable {
   cursor: grab;
-  touch-action: none;
 }
 
 summary.reorderable:active {

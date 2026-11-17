@@ -1,9 +1,9 @@
 import { onUnmounted, ref, type Ref } from 'vue';
 
-/** How long a press must last before it becomes a drag without moving. */
-const HOLD_MS = 250;
-/** How far a press must move before it becomes a drag without waiting. */
-const MOVE_PX = 6;
+/** How long a press must stay still before it becomes a drag. */
+const HOLD_MS = 300;
+/** Moving further than this before the hold ends gives up the press (it is a scroll, or a swipe). */
+const MOVE_PX = 8;
 
 type Session = {
   group: string;
@@ -19,8 +19,14 @@ type Session = {
 export type Sortable = {
   /** The item being dragged, while a drag is active. */
   dragged: Ref<{ group: string; id: string } | undefined>;
-  /** Starts a press that becomes a drag after a hold or a small move. */
+  /** Starts a press that becomes a drag once held still for a moment. */
   press(group: string, id: string, event: PointerEvent): void;
+  /**
+   * Keeps a dragging finger from scrolling the page. Only a touchmove listener that is not passive
+   * can stop a scroll, and the browser only honours one that was already on the element when the
+   * touch began, so items call this from their own listener.
+   */
+  touchMove(event: TouchEvent): void;
   /** Moves an item one place up (-1) or down (+1) and saves it. */
   step(group: string, id: string, delta: number): void;
   /** `items` in the order the drag currently previews (unchanged outside a drag of `group`). */
@@ -60,6 +66,7 @@ export function useSortable(options: {
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
     window.addEventListener('pointercancel', onCancel);
+    window.addEventListener('contextmenu', onContextMenu, true);
     // A press on an item is a potential drag, so it must not start selecting text across rows.
     document.addEventListener('selectstart', preventDefault, true);
   }
@@ -70,6 +77,7 @@ export function useSortable(options: {
     current.dragging = true;
     window.getSelection()?.removeAllRanges();
     document.documentElement.classList.add('sorting');
+    navigator.vibrate?.(10);
     dragged.value = { group: current.group, id: current.id };
     preview.value = { group: current.group, ids: [...current.originalOrder] };
   }
@@ -78,10 +86,11 @@ export function useSortable(options: {
     const current = session;
     if (!current || current.pointerId !== event.pointerId) return;
     if (!current.dragging) {
-      if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) < MOVE_PX) {
-        return;
+      // Moving before the hold ends is a scroll (or a mouse swipe), not a drag.
+      if (Math.hypot(event.clientX - current.startX, event.clientY - current.startY) >= MOVE_PX) {
+        end();
       }
-      activate(current);
+      return;
     }
     event.preventDefault();
 
@@ -117,6 +126,15 @@ export function useSortable(options: {
     }
   }
 
+  function touchMove(event: TouchEvent) {
+    if (session?.dragging && event.cancelable) event.preventDefault();
+  }
+
+  /** A long press on a link would open its menu; while dragging it is the drag instead. */
+  function onContextMenu(event: Event) {
+    if (session?.dragging) event.preventDefault();
+  }
+
   function onCancel(event: PointerEvent) {
     if (session?.pointerId === event.pointerId) end();
   }
@@ -126,6 +144,7 @@ export function useSortable(options: {
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onCancel);
+    window.removeEventListener('contextmenu', onContextMenu, true);
     document.removeEventListener('selectstart', preventDefault, true);
     if (session?.dragging) document.documentElement.classList.remove('sorting');
     session = undefined;
@@ -148,7 +167,7 @@ export function useSortable(options: {
   }
 
   onUnmounted(end);
-  return { dragged, press, step, arrange };
+  return { dragged, press, touchMove, step, arrange };
 }
 
 function preventDefault(event: Event) {

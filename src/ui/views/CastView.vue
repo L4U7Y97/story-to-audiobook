@@ -125,14 +125,101 @@ const voiceChoices = computed(() => {
 });
 const colors = computed(() => speakerColorIndex(story.value?.cast ?? []));
 
+/** How each character's voice plays on this device (a missing voice is substituted). */
+const resolved = computed(
+  () =>
+    new Map(
+      (story.value?.cast ?? []).map((c) => [c.id, resolveVoice(c.voice, deviceVoices.value)]),
+    ),
+);
+
+const linesOfMember = (c: Character) => usage.value?.get(c.id) ?? 0;
+
+type SortMode = 'lines' | 'name' | 'first';
+const SORTS: Array<{ value: SortMode; label: string }> = [
+  { value: 'lines', label: 'Most lines' },
+  { value: 'name', label: 'A–Z' },
+  { value: 'first', label: 'First heard' },
+];
+const sortMode = ref<SortMode>('lines');
+/** Where each member is first heard: its first line's place across the parts, in story order. */
+const firstHeard = computed(() => {
+  const at = new Map<string, number>();
+  let place = 0;
+  for (const a of analyses.value ?? []) {
+    for (const s of a?.segments ?? []) if (!at.has(s.speakerId)) at.set(s.speakerId, place++);
+  }
+  return at;
+});
+function bySort(a: Character, b: Character): number {
+  if (sortMode.value === 'name') return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' });
+  if (sortMode.value === 'first') {
+    const never = Number.MAX_SAFE_INTEGER;
+    return (firstHeard.value.get(a.id) ?? never) - (firstHeard.value.get(b.id) ?? never);
+  }
+  return linesOfMember(b) - linesOfMember(a);
+}
+
 const ROLE_ORDER = { narrator: 0, unknown: 2, character: 1 } as const;
+/** A cast longer than this folds its minor characters (MINOR_LINES or fewer) behind one row. */
+const FOLD_OVER = 6;
+const MINOR_LINES = 2;
+const isMinor = (c: Character) => c.role === 'character' && linesOfMember(c) <= MINOR_LINES;
+/** The minor characters folded away, if the cast is long and has major ones to show. */
+const folded = computed(() => {
+  const characters = (story.value?.cast ?? []).filter((c) => c.role === 'character');
+  const minor = characters.filter(isMinor);
+  const fold =
+    characters.length > FOLD_OVER && minor.length > 1 && minor.length < characters.length;
+  return new Set(fold ? minor.map((c) => c.id) : []);
+});
+/** By role, then folded members after the rest, then by the chosen order. */
 const sorted = computed(() =>
   [...(story.value?.cast ?? [])].sort(
     (a, b) =>
       ROLE_ORDER[a.role] - ROLE_ORDER[b.role] ||
-      (usage.value?.get(b.id) ?? 0) - (usage.value?.get(a.id) ?? 0),
+      Number(folded.value.has(a.id)) - Number(folded.value.has(b.id)) ||
+      bySort(a, b),
   ),
 );
+
+type FilterKey = 'few' | 'substituted' | 'traits';
+const FILTERS: Array<{ key: FilterKey; label: string; test: (c: Character) => boolean }> = [
+  { key: 'few', label: `${MINOR_LINES} lines or fewer`, test: isMinor },
+  {
+    key: 'substituted',
+    label: 'Substituted',
+    test: (c) => !!resolved.value.get(c.id)?.substituted,
+  },
+  {
+    key: 'traits',
+    label: 'No traits',
+    test: (c) => c.role !== 'unknown' && TRAIT_KEYS.every((k) => cleanTraits(c)[k] === undefined),
+  },
+];
+const filter = ref<FilterKey>();
+/** The filters with someone to show, each with how many. */
+const filterChips = computed(() =>
+  FILTERS.map((f) => ({ ...f, count: sorted.value.filter(f.test).length })).filter(
+    (f) => f.count > 0 || f.key === filter.value,
+  ),
+);
+function toggleFilter(key: FilterKey) {
+  filter.value = filter.value === key ? undefined : key;
+}
+
+/** The one member whose controls are open; the others show as a row. */
+const openId = ref<string>();
+function toggleOpen(c: Character) {
+  openId.value = openId.value === c.id ? undefined : c.id;
+}
+const minorOpen = ref(false);
+
+/** "Microsoft Zira - English (United States)" → "Zira"; other names stay as they are. */
+function shortVoiceName(name: string | undefined): string {
+  if (!name) return 'Default voice';
+  return name.replace(/^(Microsoft|Google|Apple)\s+/u, '').replace(/\s+[-(].*$/u, '') || name;
+}
 /** The page's sections, one per role, each saying what its members do. */
 const GROUPS = [
   {
@@ -151,21 +238,32 @@ const GROUPS = [
 const analysed = computed(() => (analyses.value ?? []).some(Boolean));
 
 const query = ref('');
+const filtering = computed(() => !!query.value.trim() || !!filter.value);
 /** Hidden, not removed, so a card's open editor and what is typed in it outlive a search. */
-const shown = computed(() => new Set(filterCast(sorted.value, query.value).map((c) => c.id)));
+const shown = computed(() => {
+  const test = FILTERS.find((f) => f.key === filter.value)?.test ?? (() => true);
+  return new Set(
+    filterCast(sorted.value, query.value)
+      .filter(test)
+      .map((c) => c.id),
+  );
+});
+/** A member's row is on the page: it matches, and isn't folded away (a search unfolds all). */
+const visible = (c: Character) =>
+  shown.value.has(c.id) && (filtering.value || minorOpen.value || !folded.value.has(c.id));
 const groups = computed(() =>
   GROUPS.map((g) => {
     const members = sorted.value.filter((c) => c.role === g.role);
-    return { ...g, members, shown: members.filter((c) => shown.value.has(c.id)).length };
+    const fold = members.filter((c) => folded.value.has(c.id));
+    return {
+      ...g,
+      members,
+      shown: members.filter((c) => shown.value.has(c.id)).length,
+      /** The first folded member, before which the fold's row goes. */
+      foldAt: fold[0]?.id,
+      foldNames: fold.map((c) => c.name),
+    };
   }),
-);
-
-/** How each character's voice plays on this device (a missing voice is substituted). */
-const resolved = computed(
-  () =>
-    new Map(
-      (story.value?.cast ?? []).map((c) => [c.id, resolveVoice(c.voice, deviceVoices.value)]),
-    ),
 );
 
 /** Saves a change to the cast and has the player take it up; a failure is shown on the page. */
@@ -406,14 +504,39 @@ function toldLabel(c: Character): string {
     </details>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
-    <CastFilter v-if="sorted.length" v-model="query" />
-    <p v-if="query.trim() && !shown.size" class="muted" role="status">
-      Nobody in the cast is called “{{ query.trim() }}”.
+    <div v-if="sorted.length" class="toolbar">
+      <div class="find">
+        <CastFilter v-model="query" />
+        <label class="sort">
+          <select v-model="sortMode" aria-label="Sort by">
+            <option v-for="s in SORTS" :key="s.value" :value="s.value">{{ s.label }}</option>
+          </select>
+        </label>
+      </div>
+      <div v-if="filterChips.length" class="chips" role="group" aria-label="Show only">
+        <button
+          v-for="f in filterChips"
+          :key="f.key"
+          type="button"
+          class="filter-chip"
+          :aria-pressed="filter === f.key"
+          @click="toggleFilter(f.key)"
+        >
+          {{ f.label }} <span class="n">{{ f.count }}</span>
+        </button>
+      </div>
+      <p v-if="filtering && shown.size" class="muted small" aria-live="polite">
+        Showing {{ shown.size }} of {{ sorted.length }}
+      </p>
+    </div>
+    <p v-if="filtering && !shown.size" class="muted" role="status">
+      <template v-if="query.trim()">Nobody in the cast is called “{{ query.trim() }}”.</template>
+      <template v-else>Nobody in the cast matches this filter.</template>
     </p>
 
     <section
       v-for="g in groups"
-      v-show="!query.trim() || g.shown"
+      v-show="!filtering || g.shown"
       :key="g.role"
       class="group"
       :aria-labelledby="`group-${g.role}`"
@@ -447,142 +570,195 @@ function toldLabel(c: Character): string {
       </template>
 
       <ul class="cast">
-        <li
-          v-for="c in g.members"
-          v-show="shown.has(c.id)"
-          :key="c.id"
-          class="card character"
-          :style="{ '--tint': speakerTint(colors, c.id) }"
-        >
-          <div class="head">
-            <span class="swatch" aria-hidden="true" />
-            <div>
-              <h3>{{ c.name }}</h3>
-              <p class="muted small">
-                <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
-                <template v-else>{{ count(usage?.get(c.id) ?? 0, 'line') }}</template>
-                <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
-                <template v-if="c.aliases.length"> · also “{{ c.aliases.join('”, “') }}”</template>
-              </p>
-            </div>
-            <button class="preview" :aria-label="`Preview ${c.name}’s voice`" @click="preview(c)">
-              Preview
-            </button>
-          </div>
-
-          <div class="voice">
-            <div class="voice-head">
-              <label :for="`voice-${c.id}`">Voice</label>
-              <span :id="`voice-mode-${c.id}`" class="chip" :class="{ manual: c.voice.manual }">
-                {{ c.voice.manual ? 'Set by hand' : 'Automatic' }}
-              </span>
-              <button
-                v-if="c.voice.manual"
-                type="button"
-                class="link back"
-                :aria-label="`Back to an automatic voice for ${c.name}`"
-                @click="repickVoice(c)"
-              >
-                Back to automatic
-              </button>
-            </div>
-            <select
-              :id="`voice-${c.id}`"
-              :aria-describedby="`voice-mode-${c.id}`"
-              :value="c.voice.voiceName ?? ''"
-              @change="onVoicePicked(c, ($event.target as HTMLSelectElement).value)"
+        <template v-for="c in g.members" :key="c.id">
+          <li v-if="c.id === g.foldAt" v-show="!filtering" class="fold">
+            <button
+              type="button"
+              class="fold-toggle"
+              :aria-expanded="minorOpen"
+              @click="minorOpen = !minorOpen"
             >
-              <option value="">Device default ({{ c.voice.lang }})</option>
-              <option v-if="resolved.get(c.id)?.substituted" :value="c.voice.voiceName">
-                {{ c.voice.voiceName }} (not on this device)
-              </option>
-              <option v-for="v in voiceChoices" :key="v.name" :value="v.name">
-                {{ v.label }}
-              </option>
-            </select>
-          </div>
-          <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
-            <span class="badge">Substituted</span>
-            This voice isn't installed here, so
-            {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads
-            instead, with the same pitch and speed.
-          </p>
-          <div class="sliders">
-            <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
-              <span class="dial-label">
-                {{ dial === 'pitch' ? 'Pitch' : 'Speed' }}
-                <span class="dial-value">{{ dialText(dialValue(c, dial)) }}</span>
+              <span class="fold-title">
+                Minor characters <span class="n">{{ g.foldNames.length }}</span
+                ><span class="sr-only">: </span>
               </span>
-              <input
-                type="range"
-                min="0.5"
-                max="2"
-                step="0.05"
-                :value="dialValue(c, dial)"
-                :aria-valuetext="dialText(dialValue(c, dial))"
-                @input="onDialInput(c, dial, $event)"
-                @change="onDialChange(c, dial, $event)"
-              />
-            </label>
-          </div>
-
-          <details>
-            <summary class="chevron">Edit names or merge</summary>
-            <CharacterEditor
-              :key="c.name + c.aliases.join()"
-              :character="c"
-              :cast="story?.cast ?? []"
-              :name-error="nameClash?.id === c.id ? clashText : undefined"
-              @save="saveNames(c, $event)"
-              @merge="merge(c, $event)"
-            />
-          </details>
-
-          <CharacterTraits
-            v-if="c.role !== 'unknown'"
-            :character="c"
-            :voice-kept="voiceKept.has(c.id)"
-            @change="changeTraits(c, $event)"
-            @repick="repickVoice(c)"
-          />
-
-          <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
-            <summary class="chevron">See {{ c.name }}’s lines</summary>
-            <template v-if="memberLines.get(c.id)">
-              <p v-if="!memberLines.get(c.id)!.length" class="muted small">
-                Their lines are in parts that need analysing again.
-              </p>
-              <ol>
-                <li
-                  v-for="l in memberLines.get(c.id)!.slice(0, linesShown.get(c.id) ?? LINES_PAGE)"
-                  :key="l.partId + ':' + l.index"
-                >
-                  <RouterLink
-                    :to="{
-                      name: 'reader',
-                      params: { id, partId: l.partId },
-                      query: { line: String(l.index) },
-                    }"
+              <span class="muted small fold-names">
+                {{ g.foldNames.slice(0, 3).join(', ')
+                }}<template v-if="g.foldNames.length > 3">, +{{ g.foldNames.length - 3 }}</template>
+              </span>
+            </button>
+          </li>
+          <li
+            v-show="visible(c)"
+            :id="`member-${c.id}`"
+            class="card character"
+            :class="{ open: openId === c.id }"
+            :style="{ '--tint': speakerTint(colors, c.id) }"
+          >
+            <div class="head">
+              <span class="swatch" aria-hidden="true" />
+              <div class="who">
+                <h3>
+                  <button
+                    type="button"
+                    class="toggle"
+                    :aria-expanded="openId === c.id"
+                    :aria-controls="`member-${c.id}-body`"
+                    :aria-describedby="`member-${c.id}-meta`"
+                    @click="toggleOpen(c)"
                   >
-                    <span class="line-part muted small">{{ l.partTitle }}</span>
-                    <span class="line-text" :data-mode="l.segment.mode">{{ l.text }}</span>
-                  </RouterLink>
-                </li>
-              </ol>
+                    {{ c.name }}
+                  </button>
+                </h3>
+                <div :id="`member-${c.id}-meta`">
+                  <p class="muted small meta">
+                    <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
+                    <template v-else>{{ count(usage?.get(c.id) ?? 0, 'line') }}</template>
+                    <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
+                    <template v-if="c.aliases.length">
+                      · also “{{ c.aliases.join('”, “') }}”</template
+                    >
+                  </p>
+                  <p class="muted small meta voice-sum">
+                    {{ shortVoiceName(resolved.get(c.id)?.voiceName) }}
+                    <span v-if="c.voice.manual" class="flag">· set by hand</span>
+                    <span v-if="resolved.get(c.id)?.substituted" class="flag warn">
+                      · substituted</span
+                    >
+                  </p>
+                </div>
+              </div>
+              <span class="chev" aria-hidden="true" />
               <button
-                v-if="memberLines.get(c.id)!.length > (linesShown.get(c.id) ?? LINES_PAGE)"
-                type="button"
-                class="link"
-                @click="showMoreLines(c)"
+                class="preview"
+                :aria-label="`Preview ${c.name}’s voice`"
+                title="Preview"
+                @click="preview(c)"
               >
-                Show more ({{
-                  memberLines.get(c.id)!.length - (linesShown.get(c.id) ?? LINES_PAGE)
-                }}
-                left)
+                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                  <path d="M8 5v14l11-7z" fill="currentColor" />
+                </svg>
               </button>
-            </template>
-          </details>
-        </li>
+            </div>
+
+            <div v-show="openId === c.id" :id="`member-${c.id}-body`" class="body">
+              <div class="voice">
+                <div class="voice-head">
+                  <label :for="`voice-${c.id}`">Voice</label>
+                  <span :id="`voice-mode-${c.id}`" class="chip" :class="{ manual: c.voice.manual }">
+                    {{ c.voice.manual ? 'Set by hand' : 'Automatic' }}
+                  </span>
+                  <button
+                    v-if="c.voice.manual"
+                    type="button"
+                    class="link back"
+                    :aria-label="`Back to an automatic voice for ${c.name}`"
+                    @click="repickVoice(c)"
+                  >
+                    Back to automatic
+                  </button>
+                </div>
+                <select
+                  :id="`voice-${c.id}`"
+                  :aria-describedby="`voice-mode-${c.id}`"
+                  :value="c.voice.voiceName ?? ''"
+                  @change="onVoicePicked(c, ($event.target as HTMLSelectElement).value)"
+                >
+                  <option value="">Device default ({{ c.voice.lang }})</option>
+                  <option v-if="resolved.get(c.id)?.substituted" :value="c.voice.voiceName">
+                    {{ c.voice.voiceName }} (not on this device)
+                  </option>
+                  <option v-for="v in voiceChoices" :key="v.name" :value="v.name">
+                    {{ v.label }}
+                  </option>
+                </select>
+              </div>
+              <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
+                <span class="badge">Substituted</span>
+                This voice isn't installed here, so
+                {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads
+                instead, with the same pitch and speed.
+              </p>
+              <div class="sliders">
+                <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
+                  <span class="dial-label">
+                    {{ dial === 'pitch' ? 'Pitch' : 'Speed' }}
+                    <span class="dial-value">{{ dialText(dialValue(c, dial)) }}</span>
+                  </span>
+                  <input
+                    type="range"
+                    min="0.5"
+                    max="2"
+                    step="0.05"
+                    :value="dialValue(c, dial)"
+                    :aria-valuetext="dialText(dialValue(c, dial))"
+                    @input="onDialInput(c, dial, $event)"
+                    @change="onDialChange(c, dial, $event)"
+                  />
+                </label>
+              </div>
+
+              <details>
+                <summary class="chevron">Edit names or merge</summary>
+                <CharacterEditor
+                  :key="c.name + c.aliases.join()"
+                  :character="c"
+                  :cast="story?.cast ?? []"
+                  :name-error="nameClash?.id === c.id ? clashText : undefined"
+                  @save="saveNames(c, $event)"
+                  @merge="merge(c, $event)"
+                />
+              </details>
+
+              <CharacterTraits
+                v-if="c.role !== 'unknown'"
+                :character="c"
+                :voice-kept="voiceKept.has(c.id)"
+                @change="changeTraits(c, $event)"
+                @repick="repickVoice(c)"
+              />
+
+              <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
+                <summary class="chevron">See {{ c.name }}’s lines</summary>
+                <template v-if="memberLines.get(c.id)">
+                  <p v-if="!memberLines.get(c.id)!.length" class="muted small">
+                    Their lines are in parts that need analysing again.
+                  </p>
+                  <ol>
+                    <li
+                      v-for="l in memberLines
+                        .get(c.id)!
+                        .slice(0, linesShown.get(c.id) ?? LINES_PAGE)"
+                      :key="l.partId + ':' + l.index"
+                    >
+                      <RouterLink
+                        :to="{
+                          name: 'reader',
+                          params: { id, partId: l.partId },
+                          query: { line: String(l.index) },
+                        }"
+                      >
+                        <span class="line-part muted small">{{ l.partTitle }}</span>
+                        <span class="line-text" :data-mode="l.segment.mode">{{ l.text }}</span>
+                      </RouterLink>
+                    </li>
+                  </ol>
+                  <button
+                    v-if="memberLines.get(c.id)!.length > (linesShown.get(c.id) ?? LINES_PAGE)"
+                    type="button"
+                    class="link"
+                    @click="showMoreLines(c)"
+                  >
+                    Show more ({{
+                      memberLines.get(c.id)!.length - (linesShown.get(c.id) ?? LINES_PAGE)
+                    }}
+                    left)
+                  </button>
+                </template>
+              </details>
+            </div>
+          </li>
+        </template>
       </ul>
     </section>
   </main>
@@ -638,21 +814,172 @@ function toldLabel(c: Character): string {
   gap: 12px;
 }
 
-.character {
+/* The search, sort and filters stay in reach while a long cast scrolls under them. */
+.toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: grid;
-  gap: 10px;
+  gap: 8px;
+  margin: 0 calc(-1 * var(--gutter));
+  padding: 8px var(--gutter);
+  background: var(--bg);
 }
 
-.head {
+.toolbar .small {
+  margin: 0;
+}
+
+.find {
   display: grid;
-  grid-template-columns: auto 1fr auto;
-  gap: 12px;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.sort select {
+  width: auto;
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.filter-chip {
+  min-height: 36px;
+  padding: 0 12px;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  gap: 6px;
+}
+
+.filter-chip[aria-pressed='true'] {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--accent-fg);
+}
+
+.n {
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+}
+
+.character {
+  padding-block: 8px;
+}
+
+.body {
+  display: grid;
+  gap: 10px;
+  padding-top: 10px;
+}
+
+/* A row: the name's button covers it all, bar the preview button, so a tap anywhere opens it. */
+.head {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: 4px 12px;
   align-items: center;
+}
+
+.who {
+  min-width: 0;
 }
 
 .head h3 {
   font-size: 1.05rem;
   margin: 0;
+}
+
+.toggle {
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  font-weight: 600;
+  text-align: start;
+  justify-content: flex-start;
+}
+
+.toggle::after {
+  content: '';
+  position: absolute;
+  inset: -8px calc(-1 * var(--gutter));
+  border-radius: var(--radius);
+}
+
+.toggle:focus-visible {
+  outline: none;
+}
+
+.toggle:focus-visible::after {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.meta {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.flag.warn {
+  color: var(--warn);
+}
+
+/* Turned, so painted above the row's button: taps pass through it to the button. */
+.chev {
+  width: 8px;
+  height: 8px;
+  margin-inline: 4px;
+  border-right: 2px solid var(--muted);
+  border-bottom: 2px solid var(--muted);
+  transform: rotate(45deg);
+  transition: transform 0.15s;
+  pointer-events: none;
+}
+
+.open .chev {
+  transform: rotate(-135deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .chev {
+    transition: none;
+  }
+}
+
+.preview {
+  position: relative;
+  z-index: 1;
+  width: 44px;
+  padding: 0;
+  border-radius: 50%;
+}
+
+.fold-toggle {
+  width: 100%;
+  min-height: 56px;
+  display: grid;
+  justify-items: start;
+  gap: 2px;
+  padding: 8px var(--gutter);
+  border-style: dashed;
+  text-align: start;
+}
+
+.fold-title {
+  font-weight: 600;
+}
+
+.fold-names {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 
 .tips {

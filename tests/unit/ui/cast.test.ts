@@ -933,3 +933,122 @@ describe('the voice rules', () => {
     expect(tips.open).toBe(false);
   });
 });
+
+describe('the compact list', () => {
+  const body = (card: HTMLElement) => card.querySelector<HTMLElement>('.body')!;
+  const toggle = (card: HTMLElement) => card.querySelector<HTMLButtonElement>('h3 .toggle')!;
+  const isOpen = (card: HTMLElement) => body(card).style.display !== 'none';
+  const characterNames = (host: HTMLElement) =>
+    [...host.querySelectorAll<HTMLElement>('section.group')[1]!.querySelectorAll('li.card')]
+      .filter((li) => (li as HTMLElement).style.display !== 'none')
+      .map((li) => li.querySelector('h3')!.textContent?.trim());
+
+  it('shows each member as a row that opens one at a time', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const [holmesCard, watsonCard] = [cardOf(host, 'Holmes'), cardOf(host, 'Watson')];
+    expect(isOpen(holmesCard)).toBe(false);
+    expect(toggle(holmesCard).getAttribute('aria-expanded')).toBe('false');
+
+    toggle(holmesCard).click();
+    await until(() => isOpen(holmesCard), 'Holmes open');
+    expect(toggle(holmesCard).getAttribute('aria-expanded')).toBe('true');
+    toggle(watsonCard).click();
+    await until(() => isOpen(watsonCard), 'Watson open');
+    expect(isOpen(holmesCard)).toBe(false);
+    toggle(watsonCard).click();
+    await until(() => !isOpen(watsonCard), 'Watson closed');
+  });
+
+  it('sums up each voice in its row: the voice heard, and whether it was set by hand', async () => {
+    stubVoices.push(zira, david);
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const summary = () =>
+      cardOf(host, 'Holmes').querySelector('.voice-sum')!.textContent?.replace(/\s+/gu, ' ').trim();
+    await chooseVoice(cardOf(host, 'Holmes'), david.name);
+    await until(() => summary() === 'David · set by hand', 'the summary');
+  });
+
+  it('sorts characters by lines, by name or by when they are first heard', async () => {
+    const host = await openCast(
+      await storeStory([
+        ['“Hi,”', 'Zed', 'speech'],
+        [' said Zed. ', 'N', 'narration'],
+        ['“Hello,”', 'Amy', 'speech'],
+        [' said Amy. ', 'N', 'narration'],
+        ['“Yes,”', 'Amy', 'speech'],
+        [' said Amy again.', 'N', 'narration'],
+      ]),
+    );
+    const sort = host.querySelector<HTMLSelectElement>('.sort select')!;
+    expect(characterNames(host)).toEqual(['Amy', 'Zed']);
+    for (const [mode, names] of [
+      ['first', ['Zed', 'Amy']],
+      ['name', ['Amy', 'Zed']],
+    ] as const) {
+      sort.value = mode;
+      sort.dispatchEvent(new Event('change'));
+      await until(() => characterNames(host).join() === names.join(), `the ${mode} order`);
+    }
+  });
+
+  it('filters by chips that count who they would show', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const chip = (label: string) =>
+      [...host.querySelectorAll<HTMLButtonElement>('.filter-chip')].find((b) =>
+        b.textContent?.includes(label),
+      )!;
+    // The narrator and both characters have no traits; the unknown speaker has none to set.
+    expect(chip('No traits').textContent?.replace(/\s+/gu, ' ').trim()).toBe('No traits 3');
+    expect(chip('2 lines or fewer').textContent).toContain('2');
+
+    chip('2 lines or fewer').click();
+    await until(() => chip('2 lines or fewer').getAttribute('aria-pressed') === 'true', 'pressed');
+    const sections = [...host.querySelectorAll<HTMLElement>('section.group')];
+    await until(() => sections[0]!.style.display === 'none', 'the narrator hidden');
+    expect(characterNames(host)).toEqual(['Holmes', 'Watson']);
+    expect(host.querySelector('.toolbar [aria-live]')!.textContent?.trim()).toBe('Showing 2 of 4');
+
+    chip('2 lines or fewer').click();
+    await until(() => sections[0]!.style.display !== 'none', 'everyone back');
+  });
+
+  describe('of a long cast', () => {
+    // Three characters with three lines each, five with one.
+    const major = ['Ann', 'Ben', 'Cal'];
+    const minor = ['Dee', 'Eve', 'Fay', 'Gus', 'Hal'];
+    const chunks: Chunk[] = [
+      ...major.flatMap((n): Chunk[] =>
+        [1, 2, 3].flatMap((i): Chunk[] => [
+          [`“Line ${i},”`, n, 'speech'],
+          [` said ${n}. `, 'N', 'narration'],
+        ]),
+      ),
+      ...minor.flatMap((n): Chunk[] => [
+        ['“Hm,”', n, 'speech'],
+        [` said ${n}. `, 'N', 'narration'],
+      ]),
+    ];
+    const fold = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('.fold-toggle')!;
+
+    it('folds the minor characters behind one row that names them', async () => {
+      const host = await openCast(await storeStory(chunks));
+      expect(characterNames(host)).toEqual(major);
+      expect(fold(host).textContent?.replace(/\s+/gu, ' ').trim()).toBe(
+        'Minor characters 5: Dee, Eve, Fay, +2',
+      );
+      expect(fold(host).getAttribute('aria-expanded')).toBe('false');
+
+      fold(host).click();
+      await until(() => characterNames(host).length === 8, 'the minor characters');
+      expect(characterNames(host)).toEqual([...major, ...minor]);
+    });
+
+    it('unfolds them for a search', async () => {
+      const host = await openCast(await storeStory(chunks));
+      typeInto(host.querySelector<HTMLInputElement>('.cast-filter input')!, 'gus');
+      await until(() => characterNames(host).join() === 'Gus', 'Gus');
+      expect(fold(host).closest('li')!.style.display).toBe('none');
+    });
+  });
+});

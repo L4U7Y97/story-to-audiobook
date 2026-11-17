@@ -15,6 +15,49 @@ afterEach(unmountView);
 /** Waits long enough for a press to become a drag (useSortable's hold). */
 const hold = () => new Promise((resolve) => setTimeout(resolve, 350));
 
+/** How far a dragged row is drawn from its place (the `translate` useSortable sets), in px. */
+const shiftOf = (row: HTMLElement) =>
+  Number(/(-?[\d.]+)px\s*$/.exec(row.style.getPropertyValue('translate'))?.[1] ?? 0);
+
+/**
+ * Lays rows out as a browser would for a drag (happy-dom has no layout): `heights` px tall (one
+ * for all, or one per row), one under the other from y = 0 in their list's current order, a
+ * dragged row drawn at its shift.
+ */
+function stack(rows: HTMLElement[], heights: number | number[] = 100) {
+  const list = rows[0]!.parentElement!;
+  const heightOf = (row: HTMLElement) =>
+    typeof heights === 'number' ? heights : heights[rows.indexOf(row)]!;
+  const topOf = (row: HTMLElement) => {
+    let top = 0;
+    for (const child of list.children) {
+      if (child === row) break;
+      if (rows.includes(child as HTMLElement)) top += heightOf(child as HTMLElement);
+    }
+    return top;
+  };
+  const rect = (top: number, height: number) => ({
+    top,
+    bottom: top + height,
+    left: 0,
+    right: 400,
+    width: 400,
+    height,
+    x: 0,
+    y: top,
+    toJSON: () => ({}),
+  });
+  const total = rows.reduce((sum, row) => sum + heightOf(row), 0);
+  vi.spyOn(list, 'getBoundingClientRect').mockReturnValue(rect(0, total));
+  for (const row of rows) {
+    Object.defineProperty(row, 'offsetTop', { configurable: true, get: () => topOf(row) });
+    Object.defineProperty(row, 'offsetHeight', { configurable: true, get: () => heightOf(row) });
+    vi.spyOn(row, 'getBoundingClientRect').mockImplementation(() =>
+      rect(topOf(row) + shiftOf(row), heightOf(row)),
+    );
+  }
+}
+
 describe('book sections', () => {
   it('opens a book page with only that book’s parts', async () => {
     const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
@@ -156,22 +199,10 @@ describe('book sections', () => {
       return current.length === 3 ? [...current] : undefined;
     }, 'the parts in the first book');
     const title = parts[0]!.querySelector<HTMLAnchorElement>('.part-title')!;
-    const target = parts[2]!;
 
     expect(title.getAttribute('draggable')).toBe('false');
     window.getSelection()!.selectAllChildren(book);
-    vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
-    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({
-      top: 200,
-      bottom: 300,
-      left: 0,
-      right: 400,
-      width: 400,
-      height: 100,
-      x: 0,
-      y: 200,
-      toJSON: () => ({}),
-    });
+    stack(parts);
 
     const pointerDown = new MouseEvent('pointerdown', {
       bubbles: true,
@@ -241,19 +272,7 @@ describe('book sections', () => {
     expect(actions).not.toBeNull();
     expect(host.textContent).not.toContain('Move book up');
     expect(host.textContent).not.toContain('Move book down');
-    const target = sections[2]!;
-    vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
-    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({
-      top: 200,
-      bottom: 300,
-      left: 0,
-      right: 400,
-      width: 400,
-      height: 100,
-      x: 0,
-      y: 200,
-      toJSON: () => ({}),
-    });
+    stack([...sections]);
 
     const pointerDown = new MouseEvent('pointerdown', {
       bubbles: true,
@@ -299,27 +318,13 @@ describe('book sections', () => {
     const draggedBook = [...host.querySelectorAll<HTMLElement>('.book')].find((section) =>
       section.querySelector('h2')?.textContent?.includes('Book 1'),
     )!;
-    const titleTarget = [...host.querySelectorAll<HTMLElement>('.book')].find((section) =>
-      section.querySelector('h2')?.textContent?.includes('Book 2'),
-    )!;
-    vi.spyOn(document, 'elementFromPoint').mockReturnValue(titleTarget);
-    vi.spyOn(titleTarget, 'getBoundingClientRect').mockReturnValue({
-      top: 200,
-      bottom: 300,
-      left: 0,
-      right: 400,
-      width: 400,
-      height: 100,
-      x: 0,
-      y: 200,
-      toJSON: () => ({}),
-    });
+    // Book 1 is last now (200–300): held 10px above its centre and dragged right up to the top.
     const titlePointerDown = new MouseEvent('pointerdown', {
       bubbles: true,
       cancelable: true,
       button: 0,
       clientX: 20,
-      clientY: 0,
+      clientY: 240,
     });
     Object.assign(titlePointerDown, { pointerId: 11 });
     draggedBook.querySelector('h2')!.dispatchEvent(titlePointerDown);
@@ -328,14 +333,13 @@ describe('book sections', () => {
       bubbles: true,
       cancelable: true,
       clientX: 20,
-      clientY: 210,
+      clientY: -400,
     });
     Object.assign(titlePointerMove, { pointerId: 11 });
     window.dispatchEvent(titlePointerMove);
     await nextTick();
 
     expect(draggedBook.classList.contains('dragging')).toBe(true);
-    expect(document.elementFromPoint).toHaveBeenCalled();
     expect([...host.querySelectorAll('.book h2')].map((heading) => heading.textContent)).toEqual([
       'Book 1',
       'Book 2',
@@ -382,24 +386,12 @@ describe('book sections', () => {
     }, 'the part sections');
     const row = parts[0]!;
     const actions = row.querySelector<HTMLElement>('.part-menu summary');
-    const target = parts[2]!;
 
     expect(actions).not.toBeNull();
     expect(row).not.toBeNull();
     expect(host.textContent).not.toContain('Move up');
     expect(host.textContent).not.toContain('Move down');
-    vi.spyOn(document, 'elementFromPoint').mockReturnValue(target);
-    vi.spyOn(target, 'getBoundingClientRect').mockReturnValue({
-      top: 200,
-      bottom: 300,
-      left: 0,
-      right: 400,
-      width: 400,
-      height: 100,
-      x: 0,
-      y: 200,
-      toJSON: () => ({}),
-    });
+    stack([...parts]);
 
     const pointerDown = new MouseEvent('pointerdown', {
       bubbles: true,
@@ -447,18 +439,6 @@ describe('book sections', () => {
     expect(shownTitles()).toBe('Two,Three,One');
     expect(shown.filter((order) => order !== 'Two,Three,One')).toEqual([]);
 
-    vi.spyOn(document, 'elementFromPoint').mockReturnValue(parts[1]!);
-    vi.spyOn(parts[1]!, 'getBoundingClientRect').mockReturnValue({
-      top: 0,
-      bottom: 100,
-      left: 0,
-      right: 400,
-      width: 400,
-      height: 100,
-      x: 0,
-      y: 0,
-      toJSON: () => ({}),
-    });
     const titlePointerDown = new MouseEvent('pointerdown', {
       bubbles: true,
       cancelable: true,
@@ -603,19 +583,8 @@ describe('book sections', () => {
       const current = host.querySelectorAll<HTMLElement>('.part');
       return current.length === 2 ? [...current] : undefined;
     }, 'the parts');
-    const [first, second] = parts as [HTMLElement, HTMLElement];
-    vi.spyOn(document, 'elementFromPoint').mockReturnValue(second);
-    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue({
-      top: 100,
-      bottom: 200,
-      left: 0,
-      right: 400,
-      width: 400,
-      height: 100,
-      x: 0,
-      y: 100,
-      toJSON: () => ({}),
-    });
+    const [first] = parts as [HTMLElement, HTMLElement];
+    stack(parts);
     const pointer = (type: string, target: EventTarget, clientY: number, pointerId: number) => {
       const event = new MouseEvent(type, {
         bubbles: true,
@@ -662,7 +631,7 @@ describe('book sections', () => {
     }, 'the order saved after the held drag');
   });
 
-  it('moves a dragged row up and down with the pointer, inside its list only', async () => {
+  it('moves a dragged row up and down with the pointer, inside its list, to either end', async () => {
     const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
     await addPart(db, stored.storyId, {
       title: 'Two',
@@ -674,32 +643,10 @@ describe('book sections', () => {
       const current = host.querySelectorAll<HTMLElement>('.part');
       return current.length === 2 ? [...current] : undefined;
     }, 'the parts');
-    const [first, second] = parts as [HTMLElement, HTMLElement];
-    const list = first.parentElement!;
-    const rect = (top: number) => ({
-      top,
-      bottom: top + 100,
-      left: 0,
-      right: 400,
-      width: 400,
-      height: 100,
-      x: 0,
-      y: top,
-      toJSON: () => ({}),
-    });
-    const shift = () => Number(/(-?[\d.]+)px/.exec(first.style.getPropertyValue('translate'))?.[1]);
-    // Rows are 100px tall, one under the other, in a 200px list; the dragged one is drawn shifted.
-    vi.spyOn(list, 'getBoundingClientRect').mockReturnValue({
-      ...rect(0),
-      bottom: 200,
-      height: 200,
-    });
-    vi.spyOn(first, 'getBoundingClientRect').mockImplementation(() =>
-      rect([...list.children].indexOf(first) * 100 + (shift() || 0)),
-    );
-    Object.defineProperty(first, 'offsetHeight', { value: 100 });
-    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue(rect(100));
-    vi.spyOn(document, 'elementFromPoint').mockReturnValue(second);
+    const [first] = parts as [HTMLElement, HTMLElement];
+    // A tall row (200px, say one showing an error) above a short one (50px): a 250px list.
+    stack(parts, [200, 50]);
+    const shift = () => shiftOf(first);
     const pointer = (type: string, target: EventTarget, clientX: number, clientY: number) => {
       const event = new MouseEvent(type, {
         bubbles: true,
@@ -713,38 +660,98 @@ describe('book sections', () => {
     };
     const titles = () => [...host.querySelectorAll('.part-title')].map((t) => t.textContent);
 
-    // Grabbed 40px above its centre: the row moves with the pointer, keeping that grip.
-    pointer('pointerdown', first, 20, 10);
+    // Grabbed 40px above its centre: the row moves with the pointer, keeping that grip, and keeps
+    // its place until its bottom edge passes the middle of the row below.
+    pointer('pointerdown', first, 20, 60);
     await hold();
     await nextTick();
-    pointer('pointermove', window, 20, 60);
-    expect(shift()).toBe(50);
+    pointer('pointermove', window, 20, 80);
+    expect(shift()).toBe(20);
     expect(titles()).toEqual(['One', 'Two']);
 
     // Far above the list: the first row stays at the top, where it is.
     pointer('pointermove', window, 20, -300);
     expect(shift()).toBe(0);
 
-    // Far below the list (and off to the side): the row stops at the bottom of its list, and its
-    // place is picked where it is drawn: along its own column, at its centre.
+    // Far below the list (and off to the side): the row stops at the bottom of its list and takes
+    // the last place.
     pointer('pointermove', window, 900, 500);
-    expect(shift()).toBe(100);
-    expect(document.elementFromPoint).toHaveBeenLastCalledWith(200, 150);
+    expect(shift()).toBe(50);
     await nextTick();
     expect(titles()).toEqual(['Two', 'One']);
     // In its new place it is drawn where it was, so it does not jump.
     expect(shift()).toBe(0);
 
-    pointer('pointerup', window, 900, 500);
+    // Back up past the top: although it is taller than the row above, it takes the first place.
+    pointer('pointermove', window, 20, -300);
+    expect(shift()).toBe(-50);
+    await nextTick();
+    expect(titles()).toEqual(['One', 'Two']);
+    expect(shift()).toBe(0);
+
+    pointer('pointermove', window, 20, 500);
+    await nextTick();
+    expect(titles()).toEqual(['Two', 'One']);
+    pointer('pointerup', window, 20, 500);
     // Let go: a mouse moving on while the order saves drags nothing.
     pointer('pointermove', window, 20, -300);
     await nextTick();
     expect(titles()).toEqual(['Two', 'One']);
-    expect(document.elementFromPoint).toHaveBeenLastCalledWith(200, 150);
     await until(async () => {
       const current = await listParts(db, stored.storyId);
       return current.map((part) => part.title).join(',') === 'Two,One' ? current : undefined;
     }, 'the order saved after following the pointer');
     expect(first.style.getPropertyValue('translate')).toBe('');
+  });
+
+  it('scrolls the page while a row is dragged near the bottom of the screen', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    await addPart(db, stored.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'The next part.',
+    });
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const parts = await until(() => {
+      const current = host.querySelectorAll<HTMLElement>('.part');
+      return current.length === 2 ? [...current] : undefined;
+    }, 'the parts');
+    const [first] = parts as [HTMLElement, HTMLElement];
+    // A 600px list on a 300px tall screen: it goes on below the bottom edge.
+    stack(parts, 300);
+    const screenHeight = Object.getOwnPropertyDescriptor(window, 'innerHeight');
+    Object.defineProperty(window, 'innerHeight', { configurable: true, value: 300 });
+    const page = document.scrollingElement ?? document.documentElement;
+    page.scrollTop = 0;
+    const pointer = (type: string, target: EventTarget, clientY: number) => {
+      const event = new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientY });
+      Object.assign(event, { pointerId: 4 });
+      target.dispatchEvent(event);
+    };
+    try {
+      pointer('pointerdown', first, 150);
+      await hold();
+      // In the middle of the screen: no scrolling.
+      pointer('pointermove', window, 150);
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(page.scrollTop).toBe(0);
+
+      // Near the bottom edge: the page scrolls down, and keeps scrolling with the pointer still.
+      pointer('pointermove', window, 290);
+      await until(() => page.scrollTop > 0 || undefined, 'the page scrolling down');
+      const scrolled = page.scrollTop;
+      await until(() => page.scrollTop > scrolled || undefined, 'the page still scrolling');
+
+      // Let go: the scrolling stops.
+      pointer('pointerup', window, 290);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      const stopped = page.scrollTop;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(page.scrollTop).toBe(stopped);
+    } finally {
+      if (screenHeight) Object.defineProperty(window, 'innerHeight', screenHeight);
+      else delete (window as { innerHeight?: number }).innerHeight;
+      page.scrollTop = 0;
+    }
   });
 });

@@ -6,6 +6,10 @@ const HOLD_MS = 300;
 const MOVE_PX = 8;
 /** How long a dropped item takes to settle into its place. */
 const SETTLE_MS = 180;
+/** How near the screen's top or bottom edge a drag starts scrolling the page. */
+const EDGE_PX = 64;
+/** The fastest that scrolling goes (with the pointer at or past the edge), in px per frame. */
+const SCROLL_PX = 16;
 /** Longest a dropped order is shown while waiting for the list to report it. */
 const DROPPED_MS = 2000;
 
@@ -17,15 +21,14 @@ type Session = {
   pointerId: number;
   startX: number;
   startY: number;
-  /** The latest pointer position. */
-  x: number;
+  /** The latest pointer height. */
   y: number;
   /** Where the item was grabbed: pointer y minus the item's centre when the drag started. */
   grab: number;
   /** How far the item is shifted from its place in the list, in px. */
   offset: number;
-  /** Where the item's centre is drawn (the pointer less the grip, kept inside the list). */
-  centre: number;
+  /** The pending auto-scroll frame, while dragging. */
+  scrollFrame: number;
   originalOrder: string[];
   dragging: boolean;
   /** Let go and being saved: the item no longer follows the pointer. */
@@ -89,11 +92,10 @@ export function useSortable(options: {
       pointerId: event.pointerId,
       startX: event.clientX,
       startY: event.clientY,
-      x: event.clientX,
       y: event.clientY,
       grab: 0,
       offset: 0,
-      centre: 0,
+      scrollFrame: 0,
       originalOrder,
       dragging: false,
       released: false,
@@ -123,12 +125,46 @@ export function useSortable(options: {
     dragged.value = { group: current.group, id: current.id };
     preview.value = { group: current.group, ids: [...current.originalOrder] };
     follow(current);
+    const tick = () => {
+      if (session !== current || current.released) return;
+      autoScroll(current);
+      current.scrollFrame = requestAnimationFrame(tick);
+    };
+    current.scrollFrame = requestAnimationFrame(tick);
+  }
+
+  /**
+   * Near the top or bottom edge of the screen (or of the list's scrolling box), scrolls towards
+   * that edge, faster the closer the pointer gets, while the list goes on past it. The item stays
+   * under the pointer and keeps finding its place as the list moves.
+   */
+  function autoScroll(current: Session) {
+    const list = current.element.parentElement?.getBoundingClientRect();
+    if (!list) return;
+    const box = scrollingBoxOf(current.element);
+    const scroller = box ?? document.scrollingElement ?? document.documentElement;
+    const view = box ? box.getBoundingClientRect() : { top: 0, bottom: window.innerHeight };
+    const zone = Math.min(EDGE_PX, (view.bottom - view.top) / 4);
+    if (zone <= 0) return;
+    let speed = 0;
+    if (current.y < view.top + zone && list.top < view.top) {
+      speed = -SCROLL_PX * Math.min(1, (view.top + zone - current.y) / zone);
+      speed = Math.max(speed, list.top - view.top);
+    } else if (current.y > view.bottom - zone && list.bottom > view.bottom) {
+      speed = SCROLL_PX * Math.min(1, (current.y - (view.bottom - zone)) / zone);
+      speed = Math.min(speed, list.bottom - view.bottom);
+    }
+    if (!speed) return;
+    const scrolled = scroller.scrollTop;
+    scroller.scrollTop = scrolled + speed;
+    if (scroller.scrollTop === scrolled) return;
+    follow(current);
+    reorder(current);
   }
 
   function onMove(event: PointerEvent) {
     const current = session;
     if (!current || current.pointerId !== event.pointerId || current.released) return;
-    current.x = event.clientX;
     current.y = event.clientY;
     if (!current.dragging) {
       // Moving before the hold ends is a scroll (or a mouse swipe), not a drag.
@@ -164,32 +200,40 @@ export function useSortable(options: {
       const half = element.offsetHeight / 2;
       centre = Math.max(list.top + half, Math.min(list.bottom - half, centre));
     }
-    current.centre = centre;
     current.offset = centre - home;
     element.style.setProperty('translate', `0 ${current.offset}px`);
   }
 
   /**
-   * Previews the dragged item before or after the item of its group under the dragged item's
-   * centre: where it is drawn decides its place, so an item drawn over the end of the list (it
-   * stops there) always goes to that end.
+   * Previews the dragged item's place from where it is drawn: it passes an item above once its top
+   * edge rises past that item's middle, and an item below once its bottom edge sinks past it. So an
+   * item held at either end of its list (it stops there) always takes that end, whatever the
+   * heights. Positions are layout positions (offsetTop), which the list's move animation does not
+   * disturb.
    */
   function reorder(current: Session) {
     const ids = preview.value?.ids;
     if (!ids) return;
-    // Hit-test along the item's own column, so a pointer that strays sideways changes nothing.
-    const own = current.element.getBoundingClientRect();
-    const x = own.width > 0 ? own.left + own.width / 2 : current.x;
-    const y = current.centre;
-
-    const target = itemAt(x, y, current.group);
-    const targetId = target?.dataset.sortableId;
-    if (!target || !targetId || targetId === current.id) return;
+    const element = current.element;
+    const items = new Map<string, HTMLElement>();
+    for (const child of element.parentElement?.children ?? []) {
+      const id = child instanceof HTMLElement ? child.dataset.sortableId : undefined;
+      if (id && (child as HTMLElement).dataset.sortableGroup === current.group) {
+        items.set(id, child as HTMLElement);
+      }
+    }
+    const top = element.offsetTop + current.offset;
+    const bottom = top + element.offsetHeight;
+    const from = ids.indexOf(current.id);
     const remaining = ids.filter((id) => id !== current.id);
-    const targetIndex = remaining.indexOf(targetId);
-    if (targetIndex < 0) return;
-    const rect = target.getBoundingClientRect();
-    remaining.splice(targetIndex + (y >= rect.top + rect.height / 2 ? 1 : 0), 0, current.id);
+    const before = remaining.filter((id) => {
+      const wasBefore = ids.indexOf(id) < from;
+      const item = items.get(id);
+      if (!item) return wasBefore;
+      const middle = item.offsetTop + item.offsetHeight / 2;
+      return wasBefore ? top >= middle : bottom > middle;
+    }).length;
+    remaining.splice(before, 0, current.id);
     if (remaining.some((id, index) => id !== ids[index])) {
       preview.value = { group: current.group, ids: remaining };
       // The item has a new place in the list: once it is laid out there, shift it back under the
@@ -239,7 +283,10 @@ export function useSortable(options: {
 
   function end() {
     const current = session;
-    if (current) clearTimeout(current.holdTimer);
+    if (current) {
+      clearTimeout(current.holdTimer);
+      cancelAnimationFrame(current.scrollFrame);
+    }
     window.removeEventListener('pointermove', onMove);
     window.removeEventListener('pointerup', onUp);
     window.removeEventListener('pointercancel', onCancel);
@@ -337,12 +384,12 @@ function settle(element: HTMLElement) {
   });
 }
 
-/** The item of `group` under a point, if any. */
-function itemAt(x: number, y: number, group: string): HTMLElement | undefined {
-  let element = document.elementFromPoint(x, y)?.closest<HTMLElement>('[data-sortable-id]');
-  while (element) {
-    if (element.dataset.sortableGroup === group) return element;
-    element = element.parentElement?.closest<HTMLElement>('[data-sortable-id]');
+/** The nearest box around `element` that scrolls vertically, if any (else the page scrolls). */
+function scrollingBoxOf(element: HTMLElement): HTMLElement | undefined {
+  for (let box = element.parentElement; box; box = box.parentElement) {
+    if (box === document.body || box === document.documentElement) break;
+    const overflow = getComputedStyle(box).overflowY;
+    if (/auto|scroll|overlay/.test(overflow) && box.scrollHeight > box.clientHeight) return box;
   }
   return undefined;
 }

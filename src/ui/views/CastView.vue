@@ -297,6 +297,7 @@ async function setVoice(
     // The voice is now the one the user wants for the traits as they are.
     noteVoiceKept(character.id, false);
   });
+  await replay(character.id);
 }
 
 type Dial = 'pitch' | 'rate';
@@ -353,11 +354,15 @@ async function changeTraits(character: Character, changes: TraitChanges) {
   // Choosing the value a trait already has changes nothing, so there is nothing to say then.
   const [before, after] = [cleanTraits(character), cleanTraits(withTraits(character, changes))];
   const changed = TRAIT_KEYS.some((key) => before[key] !== after[key]);
+  let voiceChanged = false;
   await changeCast(async () => {
     const voices = await voicesReady;
     const { repicked } = await setTraitsInStory(db, props.id, character.id, changes, voices);
     if (changed) noteVoiceKept(character.id, !repicked);
+    voiceChanged = repicked;
   });
+  // A new voice for the new traits is played; a kept one sounds as before.
+  if (voiceChanged) await replay(character.id);
 }
 
 /** Picks a member's voice again from its traits, also when it was set by hand. */
@@ -366,6 +371,7 @@ async function repickVoice(character: Character) {
     await repickVoiceInStory(db, props.id, character.id, await voicesReady);
     noteVoiceKept(character.id, false);
   });
+  await replay(character.id);
 }
 
 const hasCharacters = computed(() => story.value?.cast.some((c) => c.role === 'character'));
@@ -401,9 +407,78 @@ function leaveMatch() {
   matched.value = false;
 }
 
+/** A preview's line is one of the member's own, long enough to hear the voice, short enough to wait for. */
+const SAMPLE_MIN = 40;
+const SAMPLE_MAX = 140;
+const SAMPLES_KEPT = 20;
+/** A line as it is read aloud: no quote marks or dangling comma, cut after a sentence if long. */
+function speakable(raw: string): string {
+  let t = raw.replace(/\s+/gu, ' ').trim();
+  t = t.replace(/^[“”"‘’'—–-]+\s*/u, '').replace(/[\s“”"‘’'—–,;:-]+$/u, '');
+  if (t.length <= SAMPLE_MAX) return t;
+  const head = t.slice(0, SAMPLE_MAX);
+  const sentence = head.search(/[.!?…](?=[^.!?…]*$)/u);
+  if (sentence >= SAMPLE_MIN - 1) return head.slice(0, sentence + 1);
+  return head.slice(0, head.lastIndexOf(' ')).replace(/[,;:]$/u, '');
+}
+/** The lines a preview of `c` can play, in story order: those of a good length, else the longest. */
+function samplesOf(c: Character): string[] {
+  const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
+  const texts = linesOf(analyses.value ?? [], c.id).flatMap((l) => {
+    const part = byId.get(l.partId);
+    return part ? [speakable(part.text.slice(l.segment.start, l.segment.end))] : [];
+  });
+  const fit = texts.filter((t) => t.length >= SAMPLE_MIN);
+  if (fit.length) return fit.slice(0, SAMPLES_KEPT);
+  const words = (t: string) => t.split(' ').length;
+  return texts
+    .filter((t) => words(t) >= 3)
+    .sort((a, b) => b.length - a.length)
+    .slice(0, 1);
+}
+/** Which of its samples each member plays; "Next line" moves it on. */
+const sampleAt = ref(new Map<string, number>());
+function sampleOf(c: Character, samples = samplesOf(c)): string {
+  if (!samples.length) return `Hello, I am ${c.name}.`;
+  return samples[(sampleAt.value.get(c.id) ?? 0) % samples.length]!;
+}
+/** The open member's samples, worked out once per change rather than once per use. */
+const openSamples = computed(() => {
+  const c = story.value?.cast.find((m) => m.id === openId.value);
+  return c ? samplesOf(c) : [];
+});
+
+/** The member whose preview is being spoken. */
+const speaking = ref<string>();
+let previewRun = 0;
 async function preview(character: Character) {
-  const sample = `Hello, I am ${character.name}.`;
-  await player.preview(sample, character.voice);
+  const run = ++previewRun;
+  speaking.value = character.id;
+  try {
+    await player.preview(sampleOf(character), character.voice);
+  } finally {
+    // A later preview, or Stop, has taken over: what it shows stays.
+    if (run === previewRun) speaking.value = undefined;
+  }
+}
+async function togglePreview(character: Character) {
+  if (speaking.value !== character.id) return preview(character);
+  previewRun++;
+  speaking.value = undefined;
+  await player.stop();
+}
+function nextSample(character: Character) {
+  const next = new Map(sampleAt.value);
+  next.set(character.id, (next.get(character.id) ?? 0) + 1);
+  sampleAt.value = next;
+  void preview(character);
+}
+/** Each change to a voice plays it, so it is heard without reaching for the preview button. */
+const playOnChange = ref(true);
+async function replay(id: string) {
+  if (!playOnChange.value || error.value) return;
+  const member = (await getStory(db, props.id))?.cast.find((c) => c.id === id);
+  if (member) await preview(member);
 }
 
 async function saveNames(character: Character, changes: { name: string; aliases: string[] }) {
@@ -631,17 +706,45 @@ function toldLabel(c: Character): string {
               <span class="chev" aria-hidden="true" />
               <button
                 class="preview"
+                :class="{ speaking: speaking === c.id }"
                 :aria-label="`Preview ${c.name}’s voice`"
-                title="Preview"
-                @click="preview(c)"
+                :aria-pressed="speaking === c.id"
+                :title="speaking === c.id ? 'Stop' : 'Preview'"
+                @click="togglePreview(c)"
               >
                 <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                  <path d="M8 5v14l11-7z" fill="currentColor" />
+                  <rect
+                    v-if="speaking === c.id"
+                    x="6"
+                    y="6"
+                    width="12"
+                    height="12"
+                    rx="1.5"
+                    fill="currentColor"
+                  />
+                  <path v-else d="M8 5v14l11-7z" fill="currentColor" />
                 </svg>
               </button>
             </div>
 
             <div v-show="openId === c.id" :id="`member-${c.id}-body`" class="body">
+              <div v-if="openId === c.id" class="sample" :class="{ speaking: speaking === c.id }">
+                <p class="sample-text">“{{ sampleOf(c, openSamples) }}”</p>
+                <div class="sample-actions">
+                  <button
+                    v-if="openSamples.length > 1"
+                    type="button"
+                    class="link"
+                    @click="nextSample(c)"
+                  >
+                    Next line
+                  </button>
+                  <label class="auto">
+                    <input v-model="playOnChange" type="checkbox" />
+                    Play after each change
+                  </label>
+                </div>
+              </div>
               <div class="voice">
                 <div class="voice-head">
                   <label :for="`voice-${c.id}`">Voice</label>
@@ -698,7 +801,7 @@ function toldLabel(c: Character): string {
                 </label>
               </div>
 
-              <details>
+              <details class="names">
                 <summary class="chevron">Edit names or merge</summary>
                 <CharacterEditor
                   :key="c.name + c.aliases.join()"
@@ -958,6 +1061,50 @@ function toldLabel(c: Character): string {
   width: 44px;
   padding: 0;
   border-radius: 50%;
+}
+
+.preview.speaking {
+  border-color: var(--tint, var(--accent));
+  color: var(--tint, var(--accent));
+}
+
+/* The line a preview plays, in the member's colour, lit while it is spoken. */
+.sample {
+  display: grid;
+  gap: 4px;
+  padding: 8px 10px;
+  border-inline-start: 3px solid var(--tint, var(--muted));
+  border-radius: 8px;
+}
+
+.sample.speaking {
+  background: color-mix(in srgb, var(--tint, var(--accent)) 14%, transparent);
+}
+
+.sample-text {
+  margin: 0;
+  font-size: 0.95rem;
+}
+
+.sample-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 16px;
+}
+
+.auto {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  font-size: 0.85rem;
+}
+
+.auto input {
+  width: 18px;
+  height: 18px;
+  margin: 0;
 }
 
 .fold-toggle {

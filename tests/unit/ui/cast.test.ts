@@ -9,6 +9,8 @@ import {
   db,
   holdVoices,
   mountView,
+  previewed,
+  stopped,
   storeStory,
   stubVoices,
   submit,
@@ -288,7 +290,7 @@ describe('the cast search', () => {
 
   it('keeps what is typed in a card’s editor while the card is searched out of view', async () => {
     const host = await openCast(await storeStory(holmes));
-    const editor = cardOf(host, 'Watson').querySelector('details')!;
+    const editor = cardOf(host, 'Watson').querySelector<HTMLDetailsElement>('details.names')!;
     editor.open = true;
     const nameInput = editor.querySelector<HTMLInputElement>('.editor .fields input')!;
     typeInto(nameInput, 'John Watson');
@@ -296,7 +298,9 @@ describe('the cast search', () => {
     await until(() => !shownNames(host).includes('Watson'), 'Watson hidden');
     typeInto(search(host), '');
     await until(() => shownNames(host).includes('Watson'), 'Watson back');
-    expect(cardOf(host, 'Watson').querySelector('details')!.open).toBe(true);
+    expect(cardOf(host, 'Watson').querySelector<HTMLDetailsElement>('details.names')!.open).toBe(
+      true,
+    );
     expect(
       cardOf(host, 'Watson').querySelector<HTMLInputElement>('.editor .fields input')!.value,
     ).toBe('John Watson');
@@ -1050,5 +1054,90 @@ describe('the compact list', () => {
       await until(() => characterNames(host).join() === 'Gus', 'Gus');
       expect(fold(host).closest('li')!.style.display).toBe('none');
     });
+  });
+});
+
+describe('auditions', () => {
+  const LONG_1 = 'I have been watching the house across the street for three days now';
+  const LONG_2 = 'Nobody has come in or out, and yet the lamp is lit every single evening';
+  const watcher: Chunk[] = [
+    [`“${LONG_1},”`, 'Holmes', 'speech'],
+    [' said Holmes. ', 'N', 'narration'],
+    [`“${LONG_2}.”`, 'Holmes', 'speech'],
+    [' he added. “Hm,”', 'N', 'narration'],
+    ['“Thank you,”', 'Watson', 'speech'],
+    [' said Watson.', 'N', 'narration'],
+  ];
+  const playButton = (card: HTMLElement) =>
+    card.querySelector<HTMLButtonElement>('button.preview')!;
+  const open = async (card: HTMLElement) => {
+    card.querySelector<HTMLButtonElement>('h3 .toggle')!.click();
+    await until(() => card.querySelector('.sample'), 'the open card');
+  };
+  const spoken = () => previewed.mock.calls.map(([text]) => text);
+
+  it('play one of the member’s own lines, or a greeting when none will do', async () => {
+    const host = await openCast(await storeStory(holmes));
+    // Too short for a sample, but the longest Holmes has: read without its quotes and comma.
+    await open(cardOf(host, 'Holmes'));
+    const sample = () => cardOf(host, 'Holmes').querySelector('.sample-text')!.textContent?.trim();
+    await until(() => sample() === '“Come in, Watson”', 'the parts');
+    playButton(cardOf(host, 'Holmes')).click();
+    await until(() => previewed.mock.calls.length === 1, 'the preview');
+    playButton(cardOf(host, 'Watson')).click();
+    await until(() => previewed.mock.calls.length === 2, 'the second preview');
+    // "Thank you" is too short to tell a voice by.
+    expect(spoken()).toEqual(['Come in, Watson', 'Hello, I am Watson.']);
+  });
+
+  it('show the line in the open card, and “Next line” plays the next one', async () => {
+    const host = await openCast(await storeStory(watcher));
+    const card = cardOf(host, 'Holmes');
+    await open(card);
+    const text = () => card.querySelector('.sample-text')!.textContent?.trim();
+    expect(text()).toBe(`“${LONG_1}”`);
+    button(card, 'Next line')!.click();
+    await until(() => text() === `“${LONG_2}.”`, 'the next line');
+    await until(() => spoken().includes(`${LONG_2}.`), 'the next line spoken');
+    // Watson has a single line, so there is no next one.
+    await open(cardOf(host, 'Watson'));
+    expect(button(cardOf(host, 'Watson'), 'Next line')).toBeUndefined();
+  });
+
+  it('turn the preview button into Stop while the line is spoken', async () => {
+    const host = await openCast(await storeStory(holmes));
+    let finish = () => {};
+    previewed.mockImplementationOnce(() => new Promise<void>((resolve) => (finish = resolve)));
+    const play = playButton(cardOf(host, 'Holmes'));
+    play.click();
+    await until(() => play.getAttribute('aria-pressed') === 'true', 'speaking');
+    play.click();
+    await until(() => play.getAttribute('aria-pressed') === 'false', 'stopped');
+    expect(stopped).toHaveBeenCalledTimes(1);
+    finish();
+
+    // A preview that ends by itself lets go of the button too.
+    play.click();
+    await until(() => previewed.mock.calls.length === 2, 'the second preview');
+    await until(() => play.getAttribute('aria-pressed') === 'false', 'the end');
+  });
+
+  it('play the new voice after each change, unless told not to', async () => {
+    stubVoices.push(zira, david);
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const card = cardOf(host, 'Holmes');
+    await open(card);
+    await chooseVoice(card, david.name);
+    await until(() => previewed.mock.calls.length === 1, 'the replay');
+    expect(previewed.mock.calls[0]![1]).toMatchObject({ voiceName: david.name, manual: true });
+
+    const auto = card.querySelector<HTMLInputElement>('.auto input')!;
+    auto.checked = false;
+    auto.dispatchEvent(new Event('change'));
+    await chooseVoice(card, zira.name);
+    await storedMember(story, story.ids.Holmes!, (m) => m.voice.voiceName === zira.name);
+    await pause();
+    expect(previewed).toHaveBeenCalledTimes(1);
   });
 });

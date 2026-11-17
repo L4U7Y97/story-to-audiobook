@@ -4,7 +4,7 @@
 import { vi } from 'vitest';
 import { createApp, defineComponent, h, shallowRef, type App, type Component } from 'vue';
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
-import type { Character, Mode, Segment, Traits } from '@/format/types';
+import type { Character, Mode, Segment, Traits, VoiceSettings } from '@/format/types';
 import type { DeviceVoice } from '@/playback/engine';
 import type { PlayerSnapshot } from '@/playback/player';
 import { getAppDb } from '@/storage/db';
@@ -42,6 +42,15 @@ export function holdVoices(): () => void {
  */
 export const castChanged = vi.fn<() => void>();
 
+/**
+ * The stubbed player's preview (the line and voice it was asked to speak) and stop. A preview ends
+ * at once unless a test gives it a longer run; unmountView forgets the calls and any such run.
+ */
+export const previewed = vi.fn<(text: string, voice: VoiceSettings) => Promise<void>>(
+  async () => undefined,
+);
+export const stopped = vi.fn<() => Promise<void>>(async () => undefined);
+
 /** What usePlayer.ts exports, with a player that does nothing and an engine listing stubVoices. */
 export function playerStub() {
   const done = async () => undefined;
@@ -49,10 +58,10 @@ export function playerStub() {
     play: done,
     pause: done,
     resume: done,
-    stop: done,
+    stop: stopped,
     jump: done,
     setSpeed: done,
-    preview: done,
+    preview: previewed,
     skipSegment: done,
     skipParagraph: done,
     skipPart: done,
@@ -167,6 +176,9 @@ export function unmountView() {
   stubVoices.length = 0;
   voicesHeld = undefined;
   castChanged.mockClear();
+  previewed.mockReset();
+  previewed.mockImplementation(async () => undefined);
+  stopped.mockClear();
 }
 
 /** Polls until `check` gives something truthy: live queries and saves land asynchronously. */

@@ -354,8 +354,12 @@ const traitsOf = (card: HTMLElement) => card.querySelector<HTMLDetailsElement>('
 const traitsSummary = (card: HTMLElement) =>
   traitsOf(card).querySelector('summary')!.textContent?.trim();
 const keptNote = (card: HTMLElement) => traitsOf(card).querySelector('.warning');
-/** The card's voice picker: the first list in it. */
-const voiceSelect = (card: HTMLElement) => card.querySelector<HTMLSelectElement>('select')!;
+/** The card's voice button, which opens the voice sheet; `data-voice` is the voice chosen. */
+const voiceButton = (card: HTMLElement) => card.querySelector<HTMLButtonElement>('.voice-button')!;
+/** The open voice sheet. */
+const sheet = () => document.querySelector<HTMLElement>('[role="dialog"]');
+/** The sheet's row for the voice called `name` ('' the device default). */
+const sheetRow = (name: string) => sheet()?.querySelector<HTMLElement>(`li[data-voice="${name}"]`);
 const optionLabels = (select: HTMLSelectElement) =>
   [...select.options].map((o) => o.textContent?.trim());
 
@@ -375,12 +379,14 @@ function chooseTrait(card: HTMLElement, label: string, option: string) {
   select.dispatchEvent(new Event('change'));
 }
 
-/** Picks the device voice called `name` ('' is the device default) in a card's voice picker. */
+/** Picks the device voice called `name` ('' is the device default) in a card's voice sheet. */
 async function chooseVoice(card: HTMLElement, name: string) {
-  const select = voiceSelect(card);
-  await until(() => [...select.options].some((o) => o.value === name), `the voice ${name}`);
-  select.value = name;
-  select.dispatchEvent(new Event('change'));
+  voiceButton(card).click();
+  const row = await until(() => sheetRow(name), `the voice ${name}`);
+  const use = button(row, 'Use');
+  if (use) use.click();
+  else button(sheet()!, 'Done')!.click();
+  await until(() => !sheet(), 'the sheet to close');
 }
 
 /** The stored member `id`, once `saved` holds for it. */
@@ -445,7 +451,10 @@ describe('a member’s traits', () => {
     const saved = await storedMember(story, story.ids.Holmes!, (m) => m.gender === 'female');
     expect(saved.voice.voiceName).toBe(zira.name);
     expect(saved.voice.manual).toBeUndefined();
-    await until(() => voiceSelect(cardOf(host, 'Holmes')).value === zira.name, 'the new voice');
+    await until(
+      () => voiceButton(cardOf(host, 'Holmes')).dataset.voice === zira.name,
+      'the new voice',
+    );
     expect(keptNote(cardOf(host, 'Holmes'))).toBeNull();
     // A story being played takes the new voice up from its next line.
     await playerTold(1);
@@ -631,18 +640,23 @@ describe('a change made before the device has listed its voices', () => {
 });
 
 describe('the voice picker', () => {
-  it('tells the gender a voice’s name gives away, and which voices are online', async () => {
-    stubVoices.push(zira, david, plain, { name: 'en-cloud', lang: 'en-US', network: true });
+  it('tells the gender a voice’s name gives away, its accent, and which are online', async () => {
+    stubVoices.push(zira, david, plain, { name: 'en-cloud', lang: 'en-GB', network: true });
     const host = await openCast(await storeStory(holmes));
-    const select = voiceSelect(cardOf(host, 'Holmes'));
-    await until(() => select.options.length > 1, 'the voices');
-    expect(optionLabels(select)).toEqual([
-      'Device default (en-US)',
-      'Microsoft Zira - English (United States) (female)',
-      'Microsoft David - English (United States) (male)',
-      'en-plain',
-      'en-cloud (online)',
+    voiceButton(cardOf(host, 'Holmes')).click();
+    await until(() => sheetRow('en-cloud'), 'the voices');
+    const titles = [...sheet()!.querySelectorAll('li .title')].map((t) =>
+      t.textContent?.replace(/\s+/gu, ' ').trim(),
+    );
+    expect(titles).toEqual([
+      'Device default en-US',
+      'Zira female · US',
+      'David male · US',
+      'en-plain US',
+      'en-cloud UK · online',
     ]);
+    // A shortened name keeps the full one beside it.
+    expect(sheetRow(zira.name)!.querySelector('.full')!.textContent?.trim()).toBe(zira.name);
   });
 
   it('marks a voice chosen by hand as manual', async () => {
@@ -889,9 +903,9 @@ describe('the voice rules', () => {
     expect(chip(card)).toBe('Automatic');
     expect(back(card)).toBeUndefined();
     // The picker is described by the chip, so a screen reader hears it with the voice.
-    const select = voiceSelect(card);
+    const picker = voiceButton(card);
     expect(
-      host.querySelector(`#${select.getAttribute('aria-describedby')}`)?.textContent?.trim(),
+      host.querySelector(`#${picker.getAttribute('aria-describedby')}`)?.textContent?.trim(),
     ).toBe('Automatic');
 
     await chooseVoice(card, david.name);
@@ -1139,5 +1153,92 @@ describe('auditions', () => {
     await storedMember(story, story.ids.Holmes!, (m) => m.voice.voiceName === zira.name);
     await pause();
     expect(previewed).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the voice sheet', () => {
+  it('opens from the voice button, closes on Esc, and gives focus back to the button', async () => {
+    stubVoices.push(zira, david);
+    const host = await openCast(await storeStory(holmes));
+    const picker = voiceButton(cardOf(host, 'Holmes'));
+    expect(picker.textContent).toContain('Device default');
+    picker.click();
+    const dialog = await until(sheet, 'the sheet');
+    expect(dialog.getAttribute('aria-modal')).toBe('true');
+    expect(dialog.textContent).toContain('Voice for Holmes');
+    await until(() => document.activeElement === dialog, 'focus in the sheet');
+    // The voice in use says so instead of offering itself.
+    expect(sheetRow('')!.textContent).toContain('In use');
+
+    dialog.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    await until(() => !sheet(), 'the sheet to close');
+    await until(() => document.activeElement === picker, 'focus back on the button');
+  });
+
+  it('plays the member in a voice without saving it, and says who else has it', async () => {
+    stubVoices.push(zira, david);
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    await chooseVoice(cardOf(host, 'Watson'), david.name);
+    await storedMember(story, story.ids.Watson!, (m) => m.voice.voiceName === david.name);
+    previewed.mockClear();
+
+    voiceButton(cardOf(host, 'Holmes')).click();
+    const row = await until(() => sheetRow(david.name), 'David’s row');
+    expect(row.querySelector('.users')!.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
+      'Also Watson',
+    );
+    row.querySelector<HTMLButtonElement>('.hear')!.click();
+    await until(() => previewed.mock.calls.length === 1, 'the audition');
+    expect(previewed.mock.calls[0]![1]).toMatchObject({ voiceName: david.name, pitch: 1 });
+    await pause();
+    const holmesNow = (await getStory(db, story.storyId))!.cast.find(
+      (c) => c.id === story.ids.Holmes,
+    )!;
+    expect(holmesNow.voice.voiceName).toBeUndefined();
+  });
+});
+
+describe('voices that sound alike', () => {
+  /** Sets each member's pitch and rate; with no device voices, only twins sound alike. */
+  async function voices(story: StoredStory, pitches: Record<string, number>) {
+    const { cast } = (await getStory(db, story.storyId))!;
+    await updateStory(db, story.storyId, {
+      cast: cast.map((c) => ({ ...c, voice: { lang: 'en-US', pitch: pitches[c.name]!, rate: 1 } })),
+    });
+  }
+  const note = (card: HTMLElement) =>
+    card.querySelector('.alike')?.textContent?.replace(/\s+/gu, ' ').trim();
+
+  it('warn about a character who sounds like the narrator, until another is picked', async () => {
+    const story = await storeStory(holmes);
+    await voices(story, { Narrator: 1, 'Unknown speaker': 1.3, Holmes: 1, Watson: 0.8 });
+    const host = await openCast(story);
+    expect(note(cardOf(host, 'Holmes'))).toBe('Sounds like the narrator. Pick another voice');
+    expect(note(cardOf(host, 'Watson'))).toBeUndefined();
+    expect(note(cardOf(host, 'Narrator'))).toBeUndefined();
+    expect(cardOf(host, 'Holmes').querySelector('.voice-sum')!.textContent).toContain(
+      'sounds alike',
+    );
+
+    button(cardOf(host, 'Holmes'), 'Pick another voice')!.click();
+    await until(() => !note(cardOf(host, 'Holmes')), 'the warning to go');
+  });
+
+  it('name the others a character sounds close to, and take you to them', async () => {
+    const story = await storeStory(holmes);
+    await voices(story, { Narrator: 1, 'Unknown speaker': 1.3, Holmes: 1.2, Watson: 1.2 });
+    const host = await openCast(story);
+    expect(note(cardOf(host, 'Holmes'))).toBe('Sounds close to Watson. Pick another voice');
+    const chips = [...host.querySelectorAll<HTMLButtonElement>('.filter-chip')];
+    expect(chips.find((b) => b.textContent?.includes('Sound alike'))!.textContent).toContain('2');
+
+    button(cardOf(host, 'Holmes'), 'Watson')!.click();
+    const watson = cardOf(host, 'Watson');
+    await until(
+      () => watson.querySelector('.toggle')!.getAttribute('aria-expanded') === 'true',
+      'Watson open',
+    );
+    expect(document.activeElement).toBe(watson.querySelector('.toggle'));
   });
 });

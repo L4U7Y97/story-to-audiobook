@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onMounted, ref, watch } from 'vue';
 import type { Character, VoiceSettings } from '@/format/types';
 import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
@@ -23,10 +23,12 @@ import {
   renameCharacter,
   setAliases,
 } from '@/cast/castOps';
+import { clashesWithNarrator } from '@/cast/assignVoices';
 import { resolveVoice } from '@/cast/resolveVoice';
 import { cleanTraits, TRAIT_KEYS, withTraits } from '@/cast/traits';
 import { voiceProfile } from '@/cast/voiceProfile';
 import CastFilter from '../components/CastFilter.vue';
+import VoiceSheet from '../components/VoiceSheet.vue';
 import CharacterEditor from '../components/CharacterEditor.vue';
 import CharacterTraits from '../components/CharacterTraits.vue';
 import { useLiveQuery } from '../composables/useLiveQuery';
@@ -115,14 +117,26 @@ const deviceVoices = ref<DeviceVoice[]>([]);
 onMounted(async () => {
   deviceVoices.value = await voicesReady;
 });
-/** The voices a picker lists, each with what is known of it: "en-us-x-tpc-local (female)". */
-const voiceChoices = computed(() => {
+/** The voices the voice sheet offers: the device's for the story's language, else all of them. */
+const offeredVoices = computed(() => {
   const forLang = voicesForLang(deviceVoices.value, DEFAULT_LOCALE);
-  return (forLang.length ? forLang : deviceVoices.value).map((v) => {
-    const notes = [voiceProfile(v).gender, v.network ? 'online' : undefined].filter(Boolean);
-    return { name: v.name, label: notes.length ? `${v.name} (${notes.join(', ')})` : v.name };
-  });
+  return forLang.length ? forLang : deviceVoices.value;
 });
+/** What a member's voice button says: "Zira · female · US", or the default, or a missing voice. */
+function voiceTitle(c: Character): { title: string; tags: string[]; full: string } {
+  const name = c.voice.voiceName;
+  if (!name) return { title: 'Device default', tags: [c.voice.lang], full: '' };
+  const device = deviceVoices.value.find((v) => v.name === name);
+  if (!device) return { title: shortVoiceName(name), tags: ['not on this device'], full: name };
+  const region = device.lang.split(/[-_]/u)[1]?.toUpperCase();
+  const tags = [
+    voiceProfile(device).gender,
+    region === 'GB' ? 'UK' : region,
+    device.network ? 'online' : undefined,
+  ].filter((t): t is string => !!t);
+  return { title: shortVoiceName(name), tags, full: name === shortVoiceName(name) ? '' : name };
+}
+
 const colors = computed(() => speakerColorIndex(story.value?.cast ?? []));
 
 /** How each character's voice plays on this device (a missing voice is substituted). */
@@ -132,6 +146,25 @@ const resolved = computed(
       (story.value?.cast ?? []).map((c) => [c.id, resolveVoice(c.voice, deviceVoices.value)]),
     ),
 );
+
+/**
+ * Who each member can't be told from on this device: the same voice heard at a pitch within 0.05,
+ * the combinations automatic picks never give (clashesWithNarrator). The narrator's card says
+ * nothing; those near it say so on theirs.
+ */
+const soundAlikes = computed(() => {
+  const cast = story.value?.cast ?? [];
+  return new Map(
+    cast.map((c) => [
+      c.id,
+      c.role === 'narrator'
+        ? []
+        : cast.filter(
+            (o) => o.id !== c.id && clashesWithNarrator(c.voice, o.voice, deviceVoices.value),
+          ),
+    ]),
+  );
+});
 
 const linesOfMember = (c: Character) => usage.value?.get(c.id) ?? 0;
 
@@ -183,7 +216,7 @@ const sorted = computed(() =>
   ),
 );
 
-type FilterKey = 'few' | 'substituted' | 'traits';
+type FilterKey = 'few' | 'substituted' | 'alike' | 'traits';
 const FILTERS: Array<{ key: FilterKey; label: string; test: (c: Character) => boolean }> = [
   { key: 'few', label: `${MINOR_LINES} lines or fewer`, test: isMinor },
   {
@@ -191,6 +224,7 @@ const FILTERS: Array<{ key: FilterKey; label: string; test: (c: Character) => bo
     label: 'Substituted',
     test: (c) => !!resolved.value.get(c.id)?.substituted,
   },
+  { key: 'alike', label: 'Sound alike', test: (c) => !!soundAlikes.value.get(c.id)?.length },
   {
     key: 'traits',
     label: 'No traits',
@@ -214,6 +248,16 @@ function toggleOpen(c: Character) {
   openId.value = openId.value === c.id ? undefined : c.id;
 }
 const minorOpen = ref(false);
+/** Opens another member's card and brings it into view, unfolding it if need be. */
+function goToMember(c: Character) {
+  openId.value = c.id;
+  if (folded.value.has(c.id)) minorOpen.value = true;
+  void nextTick(() => {
+    const row = document.getElementById(`member-${c.id}`);
+    row?.scrollIntoView({ block: 'nearest' });
+    row?.querySelector<HTMLButtonElement>('.toggle')?.focus();
+  });
+}
 
 /** "Microsoft Zira - English (United States)" → "Zira"; other names stay as they are. */
 function shortVoiceName(name: string | undefined): string {
@@ -451,11 +495,11 @@ const openSamples = computed(() => {
 /** The member whose preview is being spoken. */
 const speaking = ref<string>();
 let previewRun = 0;
-async function preview(character: Character) {
+async function preview(character: Character, voice: VoiceSettings = character.voice) {
   const run = ++previewRun;
   speaking.value = character.id;
   try {
-    await player.preview(sampleOf(character), character.voice);
+    await player.preview(sampleOf(character), voice);
   } finally {
     // A later preview, or Stop, has taken over: what it shows stays.
     if (run === previewRun) speaking.value = undefined;
@@ -467,6 +511,39 @@ async function togglePreview(character: Character) {
   speaking.value = undefined;
   await player.stop();
 }
+
+/** The member whose voice sheet is open. */
+const sheetFor = ref<string>();
+const sheetMember = computed(() => story.value?.cast.find((c) => c.id === sheetFor.value));
+function closeSheet() {
+  const id = sheetFor.value;
+  sheetFor.value = undefined;
+  // Back to the button that opened it, as a dialog does.
+  if (id) void nextTick(() => document.getElementById(`voice-${id}`)?.focus());
+}
+function useVoice(name: string) {
+  const member = sheetMember.value;
+  if (member) onVoicePicked(member, name);
+  closeSheet();
+}
+/** Plays the sheet's member in another voice, keeping its pitch and speed, without saving it. */
+async function audition(name: string) {
+  const member = sheetMember.value;
+  if (!member) return;
+  const device = deviceVoices.value.find((v) => v.name === name);
+  const voice = {
+    ...member.voice,
+    voiceName: device?.name,
+    lang: device?.lang ?? member.voice.lang,
+  };
+  if (!device) delete voice.voiceName;
+  await preview(member, voice);
+}
+const stopPreview = async () => {
+  previewRun++;
+  speaking.value = undefined;
+  await player.stop();
+};
 function nextSample(character: Character) {
   const next = new Map(sampleAt.value);
   next.set(character.id, (next.get(character.id) ?? 0) + 1);
@@ -697,6 +774,9 @@ function toldLabel(c: Character): string {
                   <p class="muted small meta voice-sum">
                     {{ shortVoiceName(resolved.get(c.id)?.voiceName) }}
                     <span v-if="c.voice.manual" class="flag">· set by hand</span>
+                    <span v-if="soundAlikes.get(c.id)?.length" class="flag warn">
+                      · sounds alike</span
+                    >
                     <span v-if="resolved.get(c.id)?.substituted" class="flag warn">
                       · substituted</span
                     >
@@ -747,7 +827,7 @@ function toldLabel(c: Character): string {
               </div>
               <div class="voice">
                 <div class="voice-head">
-                  <label :for="`voice-${c.id}`">Voice</label>
+                  <span class="voice-label">Voice</span>
                   <span :id="`voice-mode-${c.id}`" class="chip" :class="{ manual: c.voice.manual }">
                     {{ c.voice.manual ? 'Set by hand' : 'Automatic' }}
                   </span>
@@ -761,26 +841,53 @@ function toldLabel(c: Character): string {
                     Back to automatic
                   </button>
                 </div>
-                <select
+                <button
                   :id="`voice-${c.id}`"
+                  type="button"
+                  class="voice-button"
+                  :data-voice="c.voice.voiceName ?? ''"
+                  aria-haspopup="dialog"
+                  :aria-label="`${c.name}’s voice: ${voiceTitle(c).title}. Change`"
                   :aria-describedby="`voice-mode-${c.id}`"
-                  :value="c.voice.voiceName ?? ''"
-                  @change="onVoicePicked(c, ($event.target as HTMLSelectElement).value)"
+                  @click="sheetFor = c.id"
                 >
-                  <option value="">Device default ({{ c.voice.lang }})</option>
-                  <option v-if="resolved.get(c.id)?.substituted" :value="c.voice.voiceName">
-                    {{ c.voice.voiceName }} (not on this device)
-                  </option>
-                  <option v-for="v in voiceChoices" :key="v.name" :value="v.name">
-                    {{ v.label }}
-                  </option>
-                </select>
+                  <span class="voice-title">
+                    {{ voiceTitle(c).title }}
+                    <span v-if="voiceTitle(c).tags.length" class="voice-tags">
+                      · {{ voiceTitle(c).tags.join(' · ') }}
+                    </span>
+                  </span>
+                  <span v-if="voiceTitle(c).full" class="voice-full">{{ voiceTitle(c).full }}</span>
+                  <span class="voice-change" aria-hidden="true">Change</span>
+                </button>
               </div>
               <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
                 <span class="badge">Substituted</span>
                 This voice isn't installed here, so
                 {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads
                 instead, with the same pitch and speed.
+              </p>
+              <p v-if="soundAlikes.get(c.id)?.length" class="alike small">
+                <template v-if="soundAlikes.get(c.id)!.some((o) => o.role === 'narrator')">
+                  Sounds like the narrator.
+                </template>
+                <template v-else>
+                  Sounds close to
+                  <template v-for="(o, i) in soundAlikes.get(c.id)!" :key="o.id"
+                    ><template v-if="i">, </template
+                    ><button
+                      type="button"
+                      class="link who"
+                      :style="{ '--tint': speakerTint(colors, o.id) }"
+                      @click="goToMember(o)"
+                    >
+                      <span class="dot" aria-hidden="true" />{{ o.name }}
+                    </button></template
+                  >.
+                </template>
+                <button type="button" class="link" @click="repickVoice(c)">
+                  Pick another voice
+                </button>
               </p>
               <div class="sliders">
                 <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
@@ -864,6 +971,19 @@ function toldLabel(c: Character): string {
         </template>
       </ul>
     </section>
+
+    <VoiceSheet
+      v-if="sheetMember"
+      :member="sheetMember"
+      :cast="story?.cast ?? []"
+      :colors="colors"
+      :voices="offeredVoices"
+      :device-voices="deviceVoices"
+      :audition="audition"
+      :stop="stopPreview"
+      @use="useVoice"
+      @close="closeSheet"
+    />
   </main>
 </template>
 
@@ -1196,6 +1316,71 @@ function toldLabel(c: Character): string {
 .chip.manual {
   border-color: var(--accent);
   color: var(--accent);
+}
+
+.voice-label {
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+/* The voice in use; a tap opens the voice sheet. */
+.voice-button {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  justify-items: start;
+  align-items: center;
+  gap: 0 12px;
+  width: 100%;
+  padding: 8px 12px;
+  text-align: start;
+}
+
+.voice-title {
+  font-weight: 600;
+}
+
+.voice-tags {
+  font-weight: 400;
+  color: var(--muted);
+  font-size: 0.85rem;
+}
+
+.voice-full {
+  grid-column: 1;
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.voice-change {
+  grid-column: 2;
+  grid-row: 1 / span 2;
+  color: var(--accent);
+  font-size: 0.85rem;
+}
+
+.alike {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0 6px;
+  margin: 0;
+  color: var(--warn);
+}
+
+.who {
+  gap: 4px;
+  color: var(--fg);
+}
+
+.dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--tint, var(--muted));
 }
 
 .link.back {

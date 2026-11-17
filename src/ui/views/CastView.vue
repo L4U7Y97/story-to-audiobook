@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import type { Character, VoiceSettings } from '@/format/types';
 import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
@@ -8,6 +8,9 @@ import { listParts } from '@/storage/parts';
 import {
   matchVoicesInStory,
   mergeCharactersInStory,
+  recordCastChange,
+  undoCastChange,
+  type CastUndo,
   repickVoiceInStory,
   setTraitsInStory,
   setVoiceInStory,
@@ -98,7 +101,30 @@ function excerpt(text: string, max = 140): string {
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
 }
 
-const error = ref('');
+/** A short note where a change was made: in a member's card, or by the page's own buttons (PAGE). */
+interface Note {
+  text: string;
+  error?: boolean;
+}
+const PAGE = 'page';
+const notes = ref(new Map<string, Note>());
+/** Says `text` at `at`, or clears what was said there. */
+/** How long a note saying what was done stays; a failure stays until the next change there. */
+const NOTE_MS = 4000;
+const noteTimers = new Map<string, ReturnType<typeof setTimeout>>();
+function note(at: string, text?: string, error = false) {
+  const next = new Map(notes.value);
+  if (text) next.set(at, { text, error });
+  else next.delete(at);
+  notes.value = next;
+  clearTimeout(noteTimers.get(at));
+  noteTimers.delete(at);
+  if (text && !error)
+    noteTimers.set(
+      at,
+      setTimeout(() => note(at), NOTE_MS),
+    );
+}
 /** A name refused because another member already has it, shown in member `id`'s editor. */
 const nameClash = ref<{ id: string; name: string }>();
 /** Why, worded from the cast as it is now: it goes once no other member has the name. */
@@ -310,15 +336,84 @@ const groups = computed(() =>
   }),
 );
 
-/** Saves a change to the cast and has the player take it up; a failure is shown on the page. */
-async function changeCast(change: () => Promise<void>) {
+/**
+ * Saves a change to the cast and has the player take it up. A failure is said where the change
+ * was made (`at`), and what was said there before goes. Tells whether it was saved.
+ */
+async function changeCast(change: () => Promise<void>, at: string): Promise<boolean> {
   try {
     await change();
-    error.value = '';
+    note(at);
+    player.castChanged();
+    return true;
+  } catch (e) {
+    note(at, e instanceof Error ? e.message : String(e), true);
+    return false;
+  }
+}
+
+/**
+ * The last change that can be undone, and what the bar at the bottom says of it. Shallow: the
+ * undo is written back to IndexedDB as it is, and a reactive proxy of it can't be stored.
+ */
+const snack = shallowRef<{ text: string; undo?: CastUndo }>();
+/**
+ * A change that can be undone: saved as changeCast does, then offered in the bar with `text`.
+ * Tells whether it was saved, and whether it changed anything.
+ */
+async function withUndo(
+  text: string,
+  at: string,
+  change: () => Promise<void>,
+): Promise<{ ok: boolean; changed: boolean }> {
+  let undo: CastUndo | undefined;
+  const ok = await changeCast(async () => {
+    undo = await recordCastChange(db, props.id, change);
+  }, at);
+  if (ok && undo) showSnack({ text, undo });
+  return { ok, changed: !!undo };
+}
+/** How long the bar stays; pointing at it or focusing it holds it, so Undo can't slip away. */
+const SNACK_MS = 5000;
+let snackTimer: ReturnType<typeof setTimeout> | undefined;
+let snackHeld = false;
+function showSnack(next?: { text: string; undo?: CastUndo }) {
+  snack.value = next;
+  armSnack();
+}
+function armSnack() {
+  clearTimeout(snackTimer);
+  if (snack.value && !snackHeld) snackTimer = setTimeout(() => showSnack(), SNACK_MS);
+}
+function holdSnack(held: boolean) {
+  snackHeld = held;
+  armSnack();
+}
+onBeforeUnmount(() => {
+  clearTimeout(snackTimer);
+  clearTimeout(flashTimer);
+  noteTimers.forEach((t) => clearTimeout(t));
+});
+async function undoLast() {
+  const undo = snack.value?.undo;
+  if (!undo) return;
+  try {
+    await undoCastChange(db, undo);
+    showSnack({ text: 'Undone.' });
+    nameClash.value = undefined;
     player.castChanged();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    showSnack({ text: e instanceof Error ? e.message : String(e) });
   }
+}
+
+/** A member just merged into, lit for a moment so the eye finds it. */
+const flashId = ref<string>();
+let flashTimer: ReturnType<typeof setTimeout> | undefined;
+function flash(id: string) {
+  flashId.value = id;
+  clearTimeout(flashTimer);
+  flashTimer = setTimeout(() => (flashId.value = undefined), 1600);
 }
 
 /** Members whose last change of traits left a voice set by hand as it was. */
@@ -335,13 +430,14 @@ function noteVoiceKept(id: string, kept: boolean) {
 async function setVoice(
   character: Character,
   changes: Partial<Pick<VoiceSettings, 'voiceName' | 'lang' | 'pitch' | 'rate'>>,
-) {
-  await changeCast(async () => {
+): Promise<boolean> {
+  const ok = await changeCast(async () => {
     await setVoiceInStory(db, props.id, character.id, changes);
     // The voice is now the one the user wants for the traits as they are.
     noteVoiceKept(character.id, false);
-  });
-  await replay(character.id);
+  }, character.id);
+  if (ok) await replay(character.id);
+  return ok;
 }
 
 type Dial = 'pitch' | 'rate';
@@ -358,9 +454,8 @@ function onDialInput(c: Character, dial: Dial, event: Event) {
 }
 async function onDialChange(c: Character, dial: Dial, event: Event) {
   const value = Number((event.target as HTMLInputElement).value);
-  await setVoice(c, { [dial]: value });
   // A refused save leaves the stored value, which the label then shows again.
-  if (error.value) dropDraft(c.id, dial);
+  if (!(await setVoice(c, { [dial]: value }))) dropDraft(c.id, dial);
 }
 function dropDraft(id: string, dial: Dial) {
   const next = new Map(drafts.value);
@@ -383,14 +478,6 @@ function dialText(value: number): string {
   return Math.abs(value - 1) < 0.001 ? 'Normal' : `${value.toFixed(2)}×`;
 }
 
-function onVoicePicked(character: Character, name: string) {
-  const voice = deviceVoices.value.find((v) => v.name === name);
-  void setVoice(
-    character,
-    voice ? { voiceName: voice.name, lang: voice.lang } : { voiceName: undefined },
-  );
-}
-
 type TraitChanges = Parameters<typeof setTraitsInStory>[3];
 
 /** Sets or clears traits; the member's voice follows them unless it was set by hand. */
@@ -404,51 +491,41 @@ async function changeTraits(character: Character, changes: TraitChanges) {
     const { repicked } = await setTraitsInStory(db, props.id, character.id, changes, voices);
     if (changed) noteVoiceKept(character.id, !repicked);
     voiceChanged = repicked;
-  });
+  }, character.id);
   // A new voice for the new traits is played; a kept one sounds as before.
   if (voiceChanged) await replay(character.id);
 }
 
 /** Picks a member's voice again from its traits, also when it was set by hand. */
 async function repickVoice(character: Character) {
-  await changeCast(async () => {
-    await repickVoiceInStory(db, props.id, character.id, await voicesReady);
-    noteVoiceKept(character.id, false);
-  });
-  await replay(character.id);
+  const { ok } = await withUndo(
+    `${character.name}’s voice picked again.`,
+    character.id,
+    async () => {
+      await repickVoiceInStory(db, props.id, character.id, await voicesReady);
+      noteVoiceKept(character.id, false);
+    },
+  );
+  if (ok) await replay(character.id);
 }
 
 const hasCharacters = computed(() => story.value?.cast.some((c) => c.role === 'character'));
-/** What "Match voices to traits" would do, counted from the cast as it is now. */
+/** What "Match voices to traits" does, counted from the cast as it is before it. */
 const matchText = computed(() => {
   const characters = (story.value?.cast ?? []).filter((c) => c.role === 'character');
   const kept = characters.filter((c) => c.voice.manual).length;
   const repicked = characters.length - kept;
+  if (repicked === 0)
+    return 'Missing traits guessed from names. Every voice was set by hand, so none changed.';
   const stay =
-    kept === 0
-      ? ''
-      : `; the ${count(kept, 'voice')} you set by hand ${kept === 1 ? 'stays' : 'stay'}`;
-  const pick =
-    repicked === 0
-      ? 'Guesses missing traits from names; every voice was set by hand, so none changes'
-      : `Picks ${count(repicked, 'voice')} again to suit traits guessed from names${stay}`;
-  return `${pick}. Press again to confirm.`;
+    kept === 0 ? '' : ` The ${count(kept, 'voice')} set by hand ${kept === 1 ? 'stays' : 'stay'}.`;
+  return `${count(repicked, 'voice')} picked again to suit traits guessed from names.${stay}`;
 });
-/** "Match voices to traits" was pressed once: the next press does it. */
-const matching = ref(false);
-const matched = ref(false);
 async function matchVoices() {
-  matched.value = false;
-  if (!matching.value) return void (matching.value = true);
-  matching.value = false;
-  await changeCast(async () => {
-    await matchVoicesInStory(db, props.id, await voicesReady);
-    matched.value = true;
-  });
-}
-function leaveMatch() {
-  matching.value = false;
-  matched.value = false;
+  const { ok, changed } = await withUndo(matchText.value, PAGE, async () =>
+    matchVoicesInStory(db, props.id, await voicesReady),
+  );
+  if (ok && !changed) note(PAGE, 'Every voice already suits its traits.');
 }
 
 /** A preview's line is one of the member's own, long enough to hear the voice, short enough to wait for. */
@@ -521,10 +598,19 @@ function closeSheet() {
   // Back to the button that opened it, as a dialog does.
   if (id) void nextTick(() => document.getElementById(`voice-${id}`)?.focus());
 }
-function useVoice(name: string) {
+/** A voice chosen by hand in the voice sheet; it can be undone. */
+async function useVoice(name: string) {
   const member = sheetMember.value;
-  if (member) onVoicePicked(member, name);
   closeSheet();
+  if (!member) return;
+  const voice = deviceVoices.value.find((v) => v.name === name);
+  const changes = voice ? { voiceName: voice.name, lang: voice.lang } : { voiceName: undefined };
+  const title = voice ? shortVoiceName(voice.name) : 'the device default';
+  const { ok } = await withUndo(`${member.name} now speaks with ${title}.`, member.id, async () => {
+    await setVoiceInStory(db, props.id, member.id, changes);
+    noteVoiceKept(member.id, false);
+  });
+  if (ok) await replay(member.id);
 }
 /** Plays the sheet's member in another voice, keeping its pitch and speed, without saving it. */
 async function audition(name: string) {
@@ -553,7 +639,7 @@ function nextSample(character: Character) {
 /** Each change to a voice plays it, so it is heard without reaching for the preview button. */
 const playOnChange = ref(true);
 async function replay(id: string) {
-  if (!playOnChange.value || error.value) return;
+  if (!playOnChange.value) return;
   const member = (await getStory(db, props.id))?.cast.find((c) => c.id === id);
   if (member) await preview(member);
 }
@@ -561,33 +647,45 @@ async function replay(id: string) {
 async function saveNames(character: Character, changes: { name: string; aliases: string[] }) {
   const s = story.value;
   if (!s) return;
+  const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
+  if (changes.name.trim() === character.name && same(changes.aliases, character.aliases)) {
+    nameClash.value = undefined;
+    return note(character.id, 'No changes to save.');
+  }
   // A name, or one of the other names, that someone else already has is refused.
   const clash = findNameClash(s.cast, character.id, changes, s.narratorId);
   if (clash) return void (nameClash.value = { id: character.id, name: clash.name });
   nameClash.value = undefined;
   const renamed = renameCharacter(s.cast, character.id, changes.name);
-  if (!renamed.ok) return void (error.value = renamed.reason);
+  if (!renamed.ok) return note(character.id, renamed.reason, true);
   // Keep the alias renameCharacter adds for the old name alongside the edited list.
   const added = renamed.value
     .find((c) => c.id === character.id)!
     .aliases.filter((a) => !character.aliases.includes(a));
   const aliases = [...new Set([...changes.aliases, ...added])];
   const result = setAliases(renamed.value, character.id, aliases);
-  if (!result.ok) return void (error.value = result.reason);
-  error.value = '';
-  await updateStory(db, s.id, { cast: result.value });
+  if (!result.ok) return note(character.id, result.reason, true);
+  const saved = await changeCast(() => updateStory(db, s.id, { cast: result.value }), character.id);
+  if (saved) note(character.id, 'Names saved.');
 }
 
 async function merge(character: Character, intoId: string) {
-  try {
-    await mergeCharactersInStory(db, props.id, character.id, intoId);
-    error.value = '';
-    // A refused name's message described the cast before this merge, often the merge it suggested.
-    nameClash.value = undefined;
-    player.castChanged();
-  } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
-  }
+  const into = story.value?.cast.find((c) => c.id === intoId);
+  if (!into) return;
+  const lines = linesOfMember(character);
+  const moved = lines ? ` · ${count(lines, 'line')} moved` : '';
+  const text =
+    character.role === 'character'
+      ? `${character.name} merged into ${into.name}${moved}.`
+      : `${character.name}’s lines given to ${into.name}${moved}.`;
+  const { ok } = await withUndo(text, character.id, () =>
+    mergeCharactersInStory(db, props.id, character.id, intoId),
+  );
+  if (!ok) return;
+  // A refused name's message described the cast before this merge, often the merge it suggested.
+  nameClash.value = undefined;
+  flash(into.id);
+  goToMember(into);
 }
 
 /**
@@ -654,7 +752,6 @@ function toldLabel(c: Character): string {
         </li>
       </ul>
     </details>
-    <p v-if="error" class="error" role="alert">{{ error }}</p>
 
     <div v-if="sorted.length" class="toolbar">
       <div class="find">
@@ -703,16 +800,15 @@ function toldLabel(c: Character): string {
 
       <template v-if="g.role === 'character'">
         <div v-if="hasCharacters" class="match">
-          <button
-            type="button"
-            :class="{ danger: matching }"
-            @click="matchVoices"
-            @blur="leaveMatch"
+          <button type="button" @click="matchVoices">Match voices to traits</button>
+          <p
+            v-if="notes.get(PAGE)"
+            class="card-note small"
+            :class="{ error: notes.get(PAGE)!.error }"
+            :role="notes.get(PAGE)!.error ? 'alert' : 'status'"
           >
-            {{ matching ? 'Confirm match' : 'Match voices to traits' }}
-          </button>
-          <p v-if="matching" class="warning" role="status">{{ matchText }}</p>
-          <p v-if="matched" class="muted small done" role="status">Voices matched to traits.</p>
+            {{ notes.get(PAGE)!.text }}
+          </p>
         </div>
         <p v-else-if="story" class="empty card">
           <template v-if="analysed">No characters were found in the analysed parts.</template>
@@ -744,7 +840,7 @@ function toldLabel(c: Character): string {
             v-show="visible(c)"
             :id="`member-${c.id}`"
             class="card character"
-            :class="{ open: openId === c.id }"
+            :class="{ open: openId === c.id, flash: flashId === c.id }"
             :style="{ '--tint': speakerTint(colors, c.id) }"
           >
             <div class="head">
@@ -808,6 +904,14 @@ function toldLabel(c: Character): string {
             </div>
 
             <div v-show="openId === c.id" :id="`member-${c.id}-body`" class="body">
+              <p
+                v-if="notes.get(c.id)"
+                class="card-note small"
+                :class="{ error: notes.get(c.id)!.error }"
+                :role="notes.get(c.id)!.error ? 'alert' : 'status'"
+              >
+                {{ notes.get(c.id)!.text }}
+              </p>
               <div v-if="openId === c.id" class="sample" :class="{ speaking: speaking === c.id }">
                 <p class="sample-text">“{{ sampleOf(c, openSamples) }}”</p>
                 <div class="sample-actions">
@@ -911,7 +1015,6 @@ function toldLabel(c: Character): string {
               <details class="names">
                 <summary class="chevron">Edit names or merge</summary>
                 <CharacterEditor
-                  :key="c.name + c.aliases.join()"
                   :character="c"
                   :cast="story?.cast ?? []"
                   :name-error="nameClash?.id === c.id ? clashText : undefined"
@@ -972,6 +1075,24 @@ function toldLabel(c: Character): string {
       </ul>
     </section>
 
+    <!-- Always there, so what appears in it is announced. -->
+    <div class="snack-region" aria-live="polite">
+      <div
+        v-if="snack"
+        class="snackbar"
+        @mouseenter="holdSnack(true)"
+        @mouseleave="holdSnack(false)"
+        @focusin="holdSnack(true)"
+        @focusout="holdSnack(false)"
+      >
+        <span class="snack-text">{{ snack.text }}</span>
+        <button v-if="snack.undo" type="button" class="snack-undo" @click="undoLast">Undo</button>
+        <button type="button" class="snack-close" aria-label="Dismiss" @click="showSnack()">
+          ×
+        </button>
+      </div>
+    </div>
+
     <VoiceSheet
       v-if="sheetMember"
       :member="sheetMember"
@@ -1017,17 +1138,6 @@ function toldLabel(c: Character): string {
 
 .match button {
   justify-self: start;
-}
-
-.warning {
-  margin: 0;
-  color: var(--warn);
-  font-size: 0.9rem;
-}
-
-.danger {
-  border-color: var(--danger);
-  color: var(--danger);
 }
 
 .cast {
@@ -1425,8 +1535,85 @@ function toldLabel(c: Character): string {
   background: none;
 }
 
-.error {
+.card-note {
+  margin: 0;
+  color: var(--muted);
+}
+
+.card-note.error {
   color: var(--danger);
+}
+
+/* Lit for a moment after a merge into it, so the eye finds it. */
+.card.flash {
+  animation: flash 1.6s ease-out;
+}
+
+@keyframes flash {
+  from {
+    box-shadow: 0 0 0 3px var(--tint, var(--accent));
+  }
+  to {
+    box-shadow: 0 0 0 3px transparent;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .card.flash {
+    animation: none;
+    box-shadow: 0 0 0 3px var(--tint, var(--accent));
+  }
+}
+
+/* The last change and its Undo, above everything at the bottom of the screen. */
+.snack-region {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 10;
+  display: flex;
+  justify-content: center;
+  padding: 0 var(--gutter) calc(var(--gutter) + env(safe-area-inset-bottom));
+  pointer-events: none;
+}
+
+.snackbar {
+  pointer-events: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  max-width: 688px;
+  padding: 4px 4px 4px 16px;
+  border-radius: var(--radius);
+  background: var(--fg);
+  color: var(--bg);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 30%);
+}
+
+.snack-text {
+  flex: 1;
+  font-size: 0.9rem;
+}
+
+.snack-undo,
+.snack-close {
+  border: 0;
+  background: none;
+  color: inherit;
+}
+
+.snack-undo {
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+}
+
+.snack-close {
+  width: 44px;
+  padding: 0;
+  font-size: 1.3rem;
 }
 
 .lines ol {

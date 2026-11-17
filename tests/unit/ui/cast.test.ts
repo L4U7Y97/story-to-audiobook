@@ -62,15 +62,13 @@ const clash = (card: HTMLElement) => card.querySelector('.editor .fields [role="
 const clashShown = (card: HTMLElement) =>
   until(() => clash(card)?.textContent?.trim(), 'the name clash');
 
-/** Chooses `target` in a card's merge list, then presses Merge and Confirm merge. */
+/** Chooses `target` in a card's merge list, then presses Merge. */
 async function mergeInto(card: HTMLElement, target: string) {
   const select = card.querySelector<HTMLSelectElement>('.editor .merge select')!;
   select.value = [...select.options].find((o) => o.textContent?.trim() === target)!.value;
   select.dispatchEvent(new Event('change'));
   const merge = () => card.querySelector<HTMLButtonElement>('.editor .merge button')!;
   await until(() => !merge().disabled, 'Merge');
-  merge().click();
-  await until(() => merge().textContent?.trim() === 'Confirm merge', 'Confirm merge');
   merge().click();
 }
 
@@ -464,7 +462,8 @@ describe('a member’s traits', () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
     const card = cardOf(host, 'Holmes');
-    const error = () => host.querySelector('main > p.error');
+    // Said in the card the change was made in.
+    const error = () => card.querySelector('.card-note.error');
     expect(error()).toBeNull();
 
     const failing = () => {
@@ -626,10 +625,7 @@ describe('a change made before the device has listed its voices', () => {
     const story = await storeStory(holmes, woman);
     const host = await openCast(story);
     const before = await castOf(story);
-    const match = host.querySelector<HTMLButtonElement>('.match button')!;
-    match.click();
-    await until(() => match.textContent?.trim() === 'Confirm match', 'the first press');
-    match.click();
+    host.querySelector<HTMLButtonElement>('.match button')!.click();
     await pause();
     expect(await castOf(story)).toEqual(before);
 
@@ -705,20 +701,18 @@ describe('the voice picker', () => {
 });
 
 describe('“Match voices to traits”', () => {
-  // Truthful about a story from before voices were marked: its hand-picked voices have no mark.
   // Counted from the cast: Holmes's voice is set by hand, Watson's and the old man's are not.
-  const WARNING =
-    'Picks 2 voices again to suit traits guessed from names; the 1 voice you set by hand stays. ' +
-    'Press again to confirm.';
+  const DONE =
+    '2 voices picked again to suit traits guessed from names. The 1 voice set by hand stays.';
   const oldMan: Chunk[] = [
     ...holmes,
     ['\n\n“Who goes there?”', 'the old man', 'speech'],
     [' asked the old man.', 'N', 'narration'],
   ];
   const matchButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('.match button');
-  const warning = (host: HTMLElement) => host.querySelector('.match .warning');
+  const snackbar = () => document.querySelector<HTMLElement>('.snackbar');
 
-  it('needs two presses, then guesses traits from names and picks the voices again', async () => {
+  it('guesses traits from names and picks the voices again in one press, then can be undone', async () => {
     // The narrator reads with the device's first voice, Zira. Watson, picked first, takes the
     // plain voice, so a pick that ignored the old man's traits would take Jenny.
     stubVoices.push(zira, plain, jenny, david);
@@ -730,19 +724,7 @@ describe('“Match voices to traits”', () => {
     await playerTold(1);
     const before = (await getStory(db, story.storyId))!.cast;
 
-    const match = matchButton(host)!;
-    expect(match.textContent?.trim()).toBe('Match voices to traits');
-    expect(warning(host)).toBeNull();
-    match.click();
-    const shown = await until(() => warning(host), 'the warning');
-    expect(shown.textContent?.trim().replace(/\s+/gu, ' ')).toBe(WARNING);
-    expect(match.classList.contains('danger')).toBe(true);
-    expect(match.textContent?.trim()).toBe('Confirm match');
-    // Nothing happens before the second press, and the player is told of nothing new.
-    expect((await getStory(db, story.storyId))!.cast).toEqual(before);
-    expect(castChanged).toHaveBeenCalledTimes(1);
-
-    match.click();
+    matchButton(host)!.click();
     const saved = await storedMember(story, story.ids['the old man']!, (m) => m.age === 'elder');
     expect(saved).toMatchObject({ gender: 'male', age: 'elder', voice: { voiceName: david.name } });
     await playerTold(2);
@@ -756,32 +738,28 @@ describe('“Match voices to traits”', () => {
       before.find((c) => c.id === story.ids.Holmes),
     );
     expect(after.slice(0, 2)).toEqual(before.slice(0, 2));
-    // The button is back to its first press, and says what it did.
-    await until(() => !warning(host), 'the warning to go');
-    expect(match.classList.contains('danger')).toBe(false);
-    expect(match.textContent?.trim()).toBe('Match voices to traits');
-    const done = await until(() => host.querySelector('.match .done'), 'the result');
-    expect(done.textContent?.trim()).toBe('Voices matched to traits.');
-    // What it did is said until focus moves on.
-    match.dispatchEvent(new Event('blur'));
-    await until(() => !host.querySelector('.match .done'), 'the result to go');
+    // What it did, counted, with Undo.
+    const bar = await until(snackbar, 'the bar');
+    expect(bar.querySelector('.snack-text')!.textContent?.trim()).toBe(DONE);
+
+    button(bar, 'Undo')!.click();
+    await until(async () => {
+      const cast = (await getStory(db, story.storyId))!.cast;
+      return JSON.stringify(cast) === JSON.stringify(before);
+    }, 'the cast as it was');
+    await until(() => snackbar()?.textContent?.includes('Undone.'), 'Undone');
+    expect(button(snackbar()!, 'Undo')).toBeUndefined();
+    await playerTold(3);
   });
 
-  it('is disarmed when focus leaves the button', async () => {
-    stubVoices.push(zira, david);
-    const story = await storeStory(oldMan);
-    const host = await openCast(story);
-    const before = (await getStory(db, story.storyId))!.cast;
-    const match = matchButton(host)!;
-    match.click();
-    await until(() => warning(host), 'the warning');
-    match.dispatchEvent(new Event('blur'));
-    await until(() => !warning(host), 'the warning to go');
-    expect(match.textContent?.trim()).toBe('Match voices to traits');
-    // The next press is a first press again.
-    match.click();
-    await until(() => warning(host), 'the warning again');
-    expect((await getStory(db, story.storyId))!.cast).toEqual(before);
+  it('says so when every voice already suits its traits', async () => {
+    stubVoices.push(zira, plain, jenny, david);
+    const host = await openCast(await storeStory(oldMan));
+    matchButton(host)!.click();
+    await until(() => snackbar(), 'the first match');
+    matchButton(host)!.click();
+    const said = await until(() => host.querySelector('.match .card-note'), 'the note');
+    expect(said.textContent?.trim()).toBe('Every voice already suits its traits.');
   });
 
   it('is not offered when the cast has no characters', async () => {
@@ -886,7 +864,10 @@ describe('a card', () => {
     select.value = [...select.options].find((o) => o.textContent?.trim() === 'Watson')!.value;
     select.dispatchEvent(new Event('change'));
     await until(() => !merge.disabled, 'Merge');
-    expect(merge.hasAttribute('aria-describedby')).toBe(false);
+    // It now says what a merge does instead.
+    expect(hint()?.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
+      '“Holmes” will be removed and all their lines read by “Watson”. You can undo this.',
+    );
     expect(card.textContent).not.toContain('Choose a character first.');
   });
 });
@@ -1240,5 +1221,158 @@ describe('voices that sound alike', () => {
       'Watson open',
     );
     expect(document.activeElement).toBe(watson.querySelector('.toggle'));
+  });
+});
+
+describe('undo and feedback', () => {
+  const snackbar = () => document.querySelector<HTMLElement>('.snackbar');
+  const noteIn = (card: HTMLElement) =>
+    card.querySelector('.card-note')?.textContent?.replace(/\s+/gu, ' ').trim();
+
+  it('merges in one press, opens the member merged into, and undoes the merge', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const before = (await getStory(db, story.storyId))!;
+    await mergeInto(cardOf(host, 'Watson'), 'Holmes');
+    await until(() => !host.textContent?.includes('Watson’s lines'), 'Watson gone');
+
+    const bar = await until(snackbar, 'the bar');
+    expect(bar.querySelector('.snack-text')!.textContent?.trim()).toBe(
+      'Watson merged into Holmes · 1 line moved.',
+    );
+    const holmesCard = cardOf(host, 'Holmes');
+    await until(
+      () => holmesCard.querySelector('.toggle')!.getAttribute('aria-expanded') === 'true',
+      'Holmes open',
+    );
+    expect(holmesCard.classList.contains('flash')).toBe(true);
+    expect(document.activeElement).toBe(holmesCard.querySelector('.toggle'));
+
+    button(bar, 'Undo')!.click();
+    await until(
+      () =>
+        [...host.querySelectorAll('li.card h3')].some((h) => h.textContent?.trim() === 'Watson'),
+      'Watson back',
+    );
+    const after = (await getStory(db, story.storyId))!;
+    expect(after.cast).toEqual(before.cast);
+    expect(await db.analyses.bulkGet(after.partIds)).toEqual(
+      await db.analyses.bulkGet(before.partIds),
+    );
+  });
+
+  it('refuses an undo once the cast has changed since, and says why', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    await mergeInto(cardOf(host, 'Watson'), 'Holmes');
+    const bar = await until(snackbar, 'the bar');
+    chooseTrait(cardOf(host, 'Holmes'), 'Gender', 'Male');
+    await storedMember(story, story.ids.Holmes!, (m) => m.gender === 'male');
+
+    button(bar, 'Undo')!.click();
+    await until(
+      () =>
+        snackbar()?.textContent?.includes('The cast has changed since, so this can’t be undone.'),
+      'the refusal',
+    );
+    const cast = (await getStory(db, story.storyId))!.cast;
+    expect(cast.some((c) => c.id === story.ids.Watson)).toBe(false);
+  });
+
+  it('offers to undo a voice used from the voice sheet', async () => {
+    stubVoices.push(zira, david);
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    await chooseVoice(cardOf(host, 'Holmes'), david.name);
+    const bar = await until(snackbar, 'the bar');
+    expect(bar.querySelector('.snack-text')!.textContent?.trim()).toBe(
+      'Holmes now speaks with David.',
+    );
+    button(bar, 'Undo')!.click();
+    const back = await storedMember(story, story.ids.Holmes!, (m) => !m.voice.voiceName);
+    expect(back.voice.manual).toBeUndefined();
+  });
+
+  it('says in the card that names were saved, or that nothing changed, keeping focus', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const card = cardOf(host, 'Watson');
+    const save = card.querySelector<HTMLButtonElement>('.editor .fields button[type="submit"]')!;
+    save.focus();
+    saveNames(card, {});
+    await until(() => noteIn(card) === 'No changes to save.', 'nothing to save');
+
+    saveNames(card, { name: 'John Watson' });
+    await until(() => noteIn(card) === 'Names saved.', 'saved');
+    await storedMember(story, story.ids.Watson!, (m) => m.name === 'John Watson');
+    // The editor shows the saved names and keeps focus: it is not rebuilt.
+    const [nameInput, aliasesInput] =
+      card.querySelectorAll<HTMLInputElement>('.editor .fields input');
+    await until(() => aliasesInput!.value === 'Watson', 'the old name kept as another name');
+    expect(nameInput!.value).toBe('John Watson');
+    expect(card.querySelector('.editor .fields button[type="submit"]')).toBe(save);
+    expect(document.activeElement).toBe(save);
+  });
+});
+
+describe('notifications', () => {
+  const snackbar = () => document.querySelector<HTMLElement>('.snackbar');
+  /** Fakes only setTimeout, still moving with real time, so waits on the page keep working. */
+  const fakeTime = () =>
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'], shouldAdvanceTime: true });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('close the undo bar after 8 seconds, but not while it is pointed at or focused', async () => {
+    const host = await openCast(await storeStory(holmes));
+    fakeTime();
+    await mergeInto(cardOf(host, 'Watson'), 'Holmes');
+    const bar = await until(snackbar, 'the bar');
+
+    bar.dispatchEvent(new MouseEvent('mouseenter'));
+    vi.advanceTimersByTime(20_000);
+    await pause();
+    expect(snackbar()).not.toBeNull();
+    bar.dispatchEvent(new MouseEvent('mouseleave'));
+    vi.advanceTimersByTime(7_000);
+    await pause();
+    expect(snackbar()).not.toBeNull();
+    vi.advanceTimersByTime(1_000);
+    await until(() => !snackbar(), 'the bar to close');
+
+    // Focus on Undo holds it too.
+    await mergeInto(cardOf(host, 'Holmes'), 'Narrator');
+    const next = await until(snackbar, 'the next bar');
+    next.dispatchEvent(new FocusEvent('focusin'));
+    vi.advanceTimersByTime(20_000);
+    await pause();
+    expect(snackbar()).not.toBeNull();
+  });
+
+  it('let “Names saved.” go after 4 seconds, while a failure stays', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const card = cardOf(host, 'Watson');
+    const noteIn = () => card.querySelector('.card-note');
+    fakeTime();
+    saveNames(card, { name: 'John Watson' });
+    await until(() => noteIn()?.textContent?.includes('Names saved.'), 'saved');
+    vi.advanceTimersByTime(4_000);
+    await until(() => !noteIn(), 'the note to go');
+
+    const failing = () => {
+      throw new Error('disk full');
+    };
+    db.stories.hook('updating', failing);
+    try {
+      chooseTrait(card, 'Gender', 'Male');
+      await until(() => noteIn()?.textContent?.includes('disk full'), 'the failure');
+    } finally {
+      db.stories.hook('updating').unsubscribe(failing);
+    }
+    vi.advanceTimersByTime(60_000);
+    await pause();
+    expect(noteIn()?.textContent).toContain('disk full');
   });
 });

@@ -12,6 +12,82 @@ import type { StoryDb } from './db';
 import { now } from './ids';
 import { DEFAULT_LOCALE } from './stories';
 
+/** What undoCastChange needs to put a story's cast, and the analyses a change rewrote, back. */
+export interface CastUndo {
+  storyId: string;
+  /** The story's updatedAt as the change left it: any later write to the story makes it stale. */
+  updatedAt: string;
+  /** The cast before the change, and (JSON) as the change left it. */
+  cast: Character[];
+  castAfter: string;
+  /** The analyses the change rewrote, as they were before it. */
+  analyses: Analysis[];
+  /** The same analyses as the change left them, to tell that nothing has rewritten them since. */
+  after: string[];
+}
+
+/** Why an undo was refused: the story was changed again after the change it would undo. */
+export const STALE_UNDO = 'The cast has changed since, so this can’t be undone.';
+
+async function castState(db: StoryDb, storyId: string) {
+  const story = await db.stories.get(storyId);
+  if (!story) throw new Error(`story ${storyId} not found`);
+  const analyses = (await db.analyses.bulkGet(story.partIds)).filter(
+    (a): a is Analysis => a !== undefined,
+  );
+  return { story, analyses };
+}
+
+/**
+ * Runs `change` (one of the cast changes here) and returns how to undo it, or undefined when it
+ * wrote nothing. The change keeps its own transaction: it may wait on things Dexie can't hold a
+ * transaction open across (the device's voices), so the state is read before and after instead,
+ * and undoCastChange refuses when anything was written in between.
+ */
+export async function recordCastChange(
+  db: StoryDb,
+  storyId: string,
+  change: () => Promise<void>,
+): Promise<CastUndo | undefined> {
+  const before = await castState(db, storyId);
+  await change();
+  const after = await castState(db, storyId);
+  const was = new Map(before.analyses.map((a) => [a.partId, a]));
+  const rewritten = after.analyses.flatMap((a) => {
+    const old = was.get(a.partId);
+    const json = JSON.stringify(a);
+    return old && JSON.stringify(old) !== json ? [{ old, json }] : [];
+  });
+  const castAfter = JSON.stringify(after.story.cast);
+  if (castAfter === JSON.stringify(before.story.cast) && !rewritten.length) return undefined;
+  return {
+    storyId,
+    updatedAt: after.story.updatedAt,
+    cast: before.story.cast,
+    castAfter,
+    analyses: rewritten.map((r) => r.old),
+    after: rewritten.map((r) => r.json),
+  };
+}
+
+/**
+ * Puts back the cast and analyses `undo` holds, in one transaction, unless the story or one of
+ * those analyses was written since the change (STALE_UNDO): undoing then would lose that write.
+ */
+export async function undoCastChange(db: StoryDb, undo: CastUndo): Promise<void> {
+  await db.transaction('rw', db.stories, db.analyses, async () => {
+    const story = await db.stories.get(undo.storyId);
+    // Timestamps are to the millisecond, so the cast itself is compared too.
+    const changed =
+      !story || story.updatedAt !== undo.updatedAt || JSON.stringify(story.cast) !== undo.castAfter;
+    if (changed) throw new Error(STALE_UNDO);
+    const current = await db.analyses.bulkGet(undo.analyses.map((a) => a.partId));
+    if (current.some((a, i) => JSON.stringify(a) !== undo.after[i])) throw new Error(STALE_UNDO);
+    await db.stories.update(undo.storyId, { cast: undo.cast, updatedAt: now() });
+    await db.analyses.bulkPut(undo.analyses);
+  });
+}
+
 /**
  * Merges one character into another across the whole story in a single transaction: the cast and
  * every affected analysis are rewritten and re-validated, or nothing changes.

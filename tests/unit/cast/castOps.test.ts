@@ -28,7 +28,12 @@ import { openStoryDb, type StoryDb } from '@/storage/db';
 import { createStory, getStory, updateStory } from '@/storage/stories';
 import { addPart, getPart } from '@/storage/parts';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
-import { mergeCharactersInStory } from '@/storage/cast';
+import {
+  mergeCharactersInStory,
+  recordCastChange,
+  STALE_UNDO,
+  undoCastChange,
+} from '@/storage/cast';
 import { buildUtterances } from '@/playback/utterances';
 import { baseCast, loadFixture } from '../../helpers/fixtures';
 
@@ -1140,5 +1145,74 @@ describe('filterCast', () => {
 
   it('finds nobody for a name no one has', () => {
     expect(names('Heathcliff')).toEqual([]);
+  });
+});
+
+describe('recordCastChange and undoCastChange', () => {
+  let db: StoryDb | undefined;
+  afterEach(async () => {
+    await db?.delete();
+  });
+
+  async function pride() {
+    db = openStoryDb(`undo-${Math.random()}`);
+    const { text } = loadFixture('en/pride-ch1');
+    const story = await createStory(db, { title: 'Pride and Prejudice', lang: 'en' });
+    const cut = text.indexOf('“My dear Mr. Bennet,” replied his wife');
+    const one = await addPart(db, story.id, paste(text.slice(0, cut)));
+    const two = await addPart(db, story.id, paste(text.slice(cut)));
+    await analyzePart(db, one.id, { voices: [] });
+    await analyzePart(db, two.id, { voices: [] });
+    const cast = (await getStory(db, story.id))!.cast;
+    const id = (name: string) => cast.find((c) => c.name === name)!.id;
+    const state = async () => ({
+      cast: (await getStory(db!, story.id))!.cast,
+      analyses: await Promise.all([one, two].map((p) => getAnalysis(db!, p.id))),
+    });
+    return { db, story, id, state };
+  }
+
+  it('puts a merge back: the cast and every part it rewrote', async () => {
+    const { db, story, id, state } = await pride();
+    const before = await state();
+    const undo = await recordCastChange(db, story.id, () =>
+      mergeCharactersInStory(db, story.id, id('his wife'), id('his lady')),
+    );
+    expect(undo).toBeDefined();
+    expect(undo!.analyses.length).toBeGreaterThan(0);
+    expect(await state()).not.toEqual(before);
+
+    await undoCastChange(db, undo!);
+    expect(await state()).toEqual(before);
+  });
+
+  it('gives nothing to undo for a change that wrote nothing', async () => {
+    const { db, story } = await pride();
+    expect(await recordCastChange(db, story.id, async () => undefined)).toBeUndefined();
+  });
+
+  it('refuses once the story was written again, and changes nothing', async () => {
+    const { db, story, id, state } = await pride();
+    const undo = await recordCastChange(db, story.id, () =>
+      mergeCharactersInStory(db, story.id, id('his wife'), id('his lady')),
+    );
+    const { cast } = (await getStory(db, story.id))!;
+    await updateStory(db, story.id, {
+      cast: cast.map((c) => (c.id === id('his lady') ? { ...c, name: 'Lady Lucas' } : c)),
+    });
+    const later = await state();
+    await expect(undoCastChange(db, undo!)).rejects.toThrow(STALE_UNDO);
+    expect(await state()).toEqual(later);
+  });
+
+  it('refuses once a part it rewrote was analysed again', async () => {
+    const { db, story, id } = await pride();
+    const undo = await recordCastChange(db, story.id, () =>
+      mergeCharactersInStory(db, story.id, id('his wife'), id('his lady')),
+    );
+    const partId = undo!.analyses[0]!.partId;
+    const analysis = (await getAnalysis(db, partId))!;
+    await saveAnalysis(db, { ...analysis, createdAt: 'later' });
+    await expect(undoCastChange(db, undo!)).rejects.toThrow(STALE_UNDO);
   });
 });

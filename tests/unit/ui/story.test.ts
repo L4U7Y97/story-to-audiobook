@@ -425,15 +425,27 @@ describe('book sections', () => {
       'Three',
       'One',
     ]);
+    // Every order the list shows from the drop on, until its data has the saved order.
+    const shownTitles = () =>
+      [...host.querySelectorAll('.part-title')].map((title) => title.textContent).join(',');
+    const shown: string[] = [];
+    const observer = new MutationObserver(() => shown.push(shownTitles()));
+    observer.observe(row.parentElement!, { childList: true });
     const actionPointerUp = new MouseEvent('pointerup', { bubbles: true, cancelable: true });
     Object.assign(actionPointerUp, { pointerId: 8 });
     window.dispatchEvent(actionPointerUp);
     await until(async () => {
       const currentParts = await listParts(db, stored.storyId);
-      return currentParts.map((part) => part.title).join(',') === 'One,Two,Three'
+      return currentParts.map((part) => part.title).join(',') === 'Two,Three,One'
         ? currentParts
         : undefined;
     }, 'the part order dragged from its actions control');
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    observer.disconnect();
+    // The dropped order stays: the list never flashes back to the order before the drag while the
+    // save reaches it.
+    expect(shownTitles()).toBe('Two,Three,One');
+    expect(shown.filter((order) => order !== 'Two,Three,One')).toEqual([]);
 
     vi.spyOn(document, 'elementFromPoint').mockReturnValue(parts[1]!);
     vi.spyOn(parts[1]!, 'getBoundingClientRect').mockReturnValue({
@@ -466,22 +478,22 @@ describe('book sections', () => {
     window.dispatchEvent(pointerMove);
     await nextTick();
 
+    // A tap (no hold) moves nothing.
     expect([...host.querySelectorAll('.part-title')].map((title) => title.textContent)).toEqual([
-      'One',
       'Two',
       'Three',
+      'One',
     ]);
 
     const pointerUp = new MouseEvent('pointerup', { bubbles: true, cancelable: true });
     Object.assign(pointerUp, { pointerId: 10 });
     window.dispatchEvent(pointerUp);
 
-    await until(async () => {
-      const currentParts = await listParts(db, stored.storyId);
-      return currentParts.map((part) => part.title).join(',') === 'Two,Three,One'
-        ? currentParts
-        : undefined;
-    }, 'the saved part order');
+    // Nor does it save anything.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect((await listParts(db, stored.storyId)).map((part) => part.title).join(',')).toBe(
+      'Two,Three,One',
+    );
 
     actions!.click();
     await nextTick();
@@ -648,5 +660,91 @@ describe('book sections', () => {
       const current = await listParts(db, stored.storyId);
       return current.map((part) => part.title).join(',') === 'Two,One' ? current : undefined;
     }, 'the order saved after the held drag');
+  });
+
+  it('moves a dragged row up and down with the pointer, inside its list only', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    await addPart(db, stored.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'The next part.',
+    });
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const parts = await until(() => {
+      const current = host.querySelectorAll<HTMLElement>('.part');
+      return current.length === 2 ? [...current] : undefined;
+    }, 'the parts');
+    const [first, second] = parts as [HTMLElement, HTMLElement];
+    const list = first.parentElement!;
+    const rect = (top: number) => ({
+      top,
+      bottom: top + 100,
+      left: 0,
+      right: 400,
+      width: 400,
+      height: 100,
+      x: 0,
+      y: top,
+      toJSON: () => ({}),
+    });
+    const shift = () => Number(/(-?[\d.]+)px/.exec(first.style.getPropertyValue('translate'))?.[1]);
+    // Rows are 100px tall, one under the other, in a 200px list; the dragged one is drawn shifted.
+    vi.spyOn(list, 'getBoundingClientRect').mockReturnValue({
+      ...rect(0),
+      bottom: 200,
+      height: 200,
+    });
+    vi.spyOn(first, 'getBoundingClientRect').mockImplementation(() =>
+      rect([...list.children].indexOf(first) * 100 + (shift() || 0)),
+    );
+    Object.defineProperty(first, 'offsetHeight', { value: 100 });
+    vi.spyOn(second, 'getBoundingClientRect').mockReturnValue(rect(100));
+    vi.spyOn(document, 'elementFromPoint').mockReturnValue(second);
+    const pointer = (type: string, target: EventTarget, clientX: number, clientY: number) => {
+      const event = new MouseEvent(type, {
+        bubbles: true,
+        cancelable: true,
+        button: 0,
+        clientX,
+        clientY,
+      });
+      Object.assign(event, { pointerId: 3 });
+      target.dispatchEvent(event);
+    };
+    const titles = () => [...host.querySelectorAll('.part-title')].map((t) => t.textContent);
+
+    // Grabbed 40px above its centre: the row moves with the pointer, keeping that grip.
+    pointer('pointerdown', first, 20, 10);
+    await hold();
+    await nextTick();
+    pointer('pointermove', window, 20, 60);
+    expect(shift()).toBe(50);
+    expect(titles()).toEqual(['One', 'Two']);
+
+    // Far above the list: the first row stays at the top, where it is.
+    pointer('pointermove', window, 20, -300);
+    expect(shift()).toBe(0);
+
+    // Far below the list (and off to the side): the row stops at the bottom of its list, and its
+    // place is picked where it is drawn: along its own column, at its centre.
+    pointer('pointermove', window, 900, 500);
+    expect(shift()).toBe(100);
+    expect(document.elementFromPoint).toHaveBeenLastCalledWith(200, 150);
+    await nextTick();
+    expect(titles()).toEqual(['Two', 'One']);
+    // In its new place it is drawn where it was, so it does not jump.
+    expect(shift()).toBe(0);
+
+    pointer('pointerup', window, 900, 500);
+    // Let go: a mouse moving on while the order saves drags nothing.
+    pointer('pointermove', window, 20, -300);
+    await nextTick();
+    expect(titles()).toEqual(['Two', 'One']);
+    expect(document.elementFromPoint).toHaveBeenLastCalledWith(200, 150);
+    await until(async () => {
+      const current = await listParts(db, stored.storyId);
+      return current.map((part) => part.title).join(',') === 'Two,One' ? current : undefined;
+    }, 'the order saved after following the pointer');
+    expect(first.style.getPropertyValue('translate')).toBe('');
   });
 });

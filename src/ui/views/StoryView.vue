@@ -605,6 +605,13 @@ function wordCount(text: string): number {
     opacity 180ms ease;
 }
 
+/* A lifted book has no card of its own: its background reaches a little past its edges. */
+.book-list > .book.dragging {
+  box-shadow:
+    0 0 0 8px var(--surface),
+    0 10px 28px 8px rgb(0 0 0 / 25%);
+}
+
 .book-header {
   display: flex;
   align-items: center;

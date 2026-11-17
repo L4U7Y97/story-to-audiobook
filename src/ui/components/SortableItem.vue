@@ -46,7 +46,7 @@ function onPointerDown(event: PointerEvent) {
   // Links and the actions button drag too (the click after a drag is swallowed); other controls
   // keep their own behaviour.
   if (!target.closest('summary, a') && target.closest(INTERACTIVE)) return;
-  props.sortable.press(props.group, props.id, event);
+  props.sortable.press(props.group, props.id, event, event.currentTarget as HTMLElement);
 }
 
 function onKeyDown(event: KeyboardEvent) {
@@ -92,8 +92,31 @@ function onClick(event: MouseEvent) {
   cursor: grabbing;
 }
 
-.dragging {
-  opacity: 0.7;
-  z-index: 1;
+/*
+ * The dragged item is lifted: a little bigger, opaque, with a shadow, above its neighbours. It
+ * follows the pointer through the `translate` that useSortable sets, so it never animates that,
+ * nor `transform` (which the list's move animation uses), only its lift. `transform` stays in the
+ * list at no duration: Vue's TransitionGroup checks the first item for a transform transition to
+ * decide whether to animate the list at all, and the dragged item may be that first item.
+ */
+.sortable.dragging {
+  position: relative;
+  z-index: 2;
+  scale: 1.03;
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: 0 10px 28px rgb(0 0 0 / 25%);
+  /* The pointer finds the items under it, not this one. */
+  pointer-events: none;
+  transition:
+    scale 120ms ease,
+    box-shadow 120ms ease,
+    transform 0s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sortable.dragging {
+    transition: none;
+  }
 }
 </style>

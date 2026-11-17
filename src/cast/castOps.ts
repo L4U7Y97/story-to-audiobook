@@ -321,6 +321,20 @@ export function partsToldBy(
   return analyses.filter((a) => a && tellerOf(a.segments, narratorId) === id).length;
 }
 
+/** partsToldBy for everyone at once: each analysed part's teller, counted. */
+export function partsToldByAll(
+  analyses: ReadonlyArray<Analysis | undefined>,
+  narratorId: string,
+): Map<string, number> {
+  const told = new Map<string, number>();
+  for (const a of analyses) {
+    if (!a) continue;
+    const id = tellerOf(a.segments, narratorId);
+    told.set(id, (told.get(id) ?? 0) + 1);
+  }
+  return told;
+}
+
 /** Folds case, accents and curly apostrophes, so "renee" finds "Renée" and "o'b" finds "O’Brien". */
 function searchKey(text: string): string {
   return text

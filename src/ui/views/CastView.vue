@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
-import type { Character, VoiceSettings } from '@/format/types';
+import type { Character, Part, VoiceSettings } from '@/format/types';
 import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
 import { DEFAULT_LOCALE, getStory, updateStory } from '@/storage/stories';
-import { listParts } from '@/storage/parts';
 import {
   matchVoicesInStory,
   mergeCharactersInStory,
@@ -22,11 +21,12 @@ import {
   findNameClash,
   findTypedNameOwner,
   linesOf,
-  partsToldBy,
+  type LineRef,
+  partsToldByAll,
   renameCharacter,
   setAliases,
 } from '@/cast/castOps';
-import { clashesWithNarrator } from '@/cast/assignVoices';
+import { clashesInVoice } from '@/cast/assignVoices';
 import { resolveVoice } from '@/cast/resolveVoice';
 import { cleanTraits, TRAIT_KEYS, withTraits } from '@/cast/traits';
 import { voiceProfile } from '@/cast/voiceProfile';
@@ -46,19 +46,92 @@ const props = defineProps<{ id: string }>();
 const db = getAppDb();
 const { player } = usePlayer(props.id);
 
-const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
-const { data: analyses } = useLiveQuery(async () => {
-  const s = await getStory(db, props.id);
-  return db.analyses.bulkGet(s?.partIds ?? []);
-}, [() => props.id]);
-const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
+const { data: story, loaded: storyLoaded } = useLiveQuery(
+  () => getStory(db, props.id),
+  [() => props.id],
+);
+/**
+ * The story's parts, as a key. The analyses and parts are read again when it changes, not on
+ * every save of the story: its place is saved every few seconds while it plays.
+ */
+const partIdsKey = computed(() => story.value?.partIds.join('\n'));
+const { data: analyses, error: analysesError } = useLiveQuery(async () => {
+  const ids = story.value?.partIds;
+  return ids && db.analyses.bulkGet(ids);
+}, [partIdsKey]);
+/**
+ * The parts' text is only for an open card's lines and samples and for the merge sheet, so it is
+ * read once the list is on screen (or as soon as one of those wants it), not before.
+ */
+const partsWanted = ref(false);
+const { data: parts } = useLiveQuery(async () => {
+  const ids = story.value?.partIds;
+  if (!partsWanted.value || !ids) return undefined;
+  return (await db.parts.bulkGet(ids)).filter((p): p is Part => p !== undefined);
+}, [partIdsKey, partsWanted]);
+const partsById = computed(() => new Map((parts.value ?? []).map((p) => [p.id, p])));
+/** Asks for the parts' text now, for what is about to show or play it; resolves once it is read. */
+function readParts(): Promise<void> {
+  partsWanted.value = true;
+  if (parts.value || !story.value) return Promise.resolve();
+  return new Promise((resolve) => {
+    const stop = watch(parts, (read) => {
+      if (!read) return;
+      stop();
+      resolve();
+    });
+  });
+}
+
+/**
+ * The cast, the same array for as long as it is unchanged, so what is worked out from it isn't
+ * worked out again each time the story is saved for another reason.
+ */
+const cast = computed<Character[]>((previous) => {
+  const next = story.value?.cast ?? [];
+  return previous && JSON.stringify(previous) === JSON.stringify(next) ? previous : next;
+});
+const narratorId = computed(() => story.value?.narratorId);
+/** The page reads the story only through these, so a save that changes neither redraws nothing. */
+const storyTitle = computed(() => story.value?.title ?? 'Story');
+const storyMissing = computed(() => storyLoaded.value && !story.value);
+
+/** Pairs the user said are not one person; kept on this device for the story. */
+const notSame = ref(new Set<string>());
+const notSameLoaded = ref(false);
+onMounted(async () => {
+  try {
+    notSame.value = await getNotSame(props.id);
+  } finally {
+    notSameLoaded.value = true;
+  }
+});
+
+/** Until the cast and its line counts are known, a placeholder list stands in for it. */
+const loading = computed(
+  () =>
+    !storyLoaded.value ||
+    (!!story.value && !analyses.value && !analysesError.value) ||
+    !notSameLoaded.value,
+);
+// Once the list is on screen, the parts' text is read in the background.
+watch(
+  loading,
+  (still) => {
+    if (still || partsWanted.value) return;
+    void nextTick(() => requestAnimationFrame(() => setTimeout(() => (partsWanted.value = true))));
+  },
+  { immediate: true },
+);
+
 /** Segment count per character across all analysed parts. */
 const usage = computed(() => analyses.value && castUsage(analyses.value));
 /** Parts each character tells, i.e. reads most of the narration of. */
 const told = computed(() => {
-  const s = story.value;
-  if (!s) return new Map<string, number>();
-  return new Map(s.cast.map((c) => [c.id, partsToldBy(analyses.value ?? [], c.id, s.narratorId)]));
+  const narrator = narratorId.value;
+  return narrator && analyses.value
+    ? partsToldByAll(analyses.value, narrator)
+    : new Map<string, number>();
 });
 
 /** Members whose "Lines" list is open: a list is only worked out while it is shown. */
@@ -70,8 +143,10 @@ const LINES_PAGE = 50;
 const SHORT_LINES = 3;
 function onLinesToggle(c: Character, event: Event) {
   const next = new Set(linesOpen.value);
-  if ((event.target as HTMLDetailsElement).open) next.add(c.id);
-  else next.delete(c.id);
+  if ((event.target as HTMLDetailsElement).open) {
+    next.add(c.id);
+    void readParts();
+  } else next.delete(c.id);
   linesOpen.value = next;
 }
 function showMoreLines(c: Character) {
@@ -85,29 +160,35 @@ function showMoreLines(c: Character) {
  */
 /** The analyses that still fit their part's text: an edited part's old one is left out. */
 const currentAnalyses = computed(() => {
-  const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
+  const byId = partsById.value;
   return (analyses.value ?? []).filter((a) => a && byId.get(a.partId)?.textHash === a.textHash);
 });
+/** Each open list's lines: how many there are, and the ones shown, with their text. */
 const memberLines = computed(() => {
-  const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
+  const lists = new Map<string, { total: number; shown: ShownLine[] }>();
+  // Until the parts' text is read, a list waits rather than say its lines need analysing again.
+  if (!parts.value) return lists;
+  const byId = partsById.value;
   const current = currentAnalyses.value;
   // A member with a few lines shows them open in its card, so they are worked out when it is.
   const ids = new Set(linesOpen.value);
   if (openId.value && (usage.value?.get(openId.value) ?? 0) <= SHORT_LINES) ids.add(openId.value);
-  return new Map(
-    [...ids].map((id) => [
-      id,
-      linesOf(current, id).map((l) => {
-        const part = byId.get(l.partId)!;
-        return {
-          ...l,
-          partTitle: part.title,
-          text: excerpt(part.text.slice(l.segment.start, l.segment.end)),
-        };
-      }),
-    ]),
-  );
+  for (const id of ids) {
+    const lines = linesOf(current, id);
+    // Only the lines shown are cut out of their part: the narrator's can run to thousands.
+    const shown = lines.slice(0, linesShown.value.get(id) ?? LINES_PAGE).map((l) => {
+      const part = byId.get(l.partId)!;
+      return {
+        ...l,
+        partTitle: part.title,
+        text: excerpt(part.text.slice(l.segment.start, l.segment.end)),
+      };
+    });
+    lists.set(id, { total: lines.length, shown });
+  }
+  return lists;
 });
+type ShownLine = LineRef & { partTitle: string; text: string };
 function excerpt(text: string, max = 140): string {
   const t = text.replace(/\s+/gu, ' ').trim();
   return t.length > max ? `${t.slice(0, max - 1).trimEnd()}…` : t;
@@ -157,8 +238,11 @@ const clashText = computed(() => {
 /** The device's voices, asked for once: a change made before they are listed waits for them. */
 const voicesReady = getEngine().listVoices();
 const deviceVoices = ref<DeviceVoice[]>([]);
+/** Until the voices are listed, a member's voice is shown as it is stored, not as "Default voice". */
+const voicesLoaded = ref(false);
 onMounted(async () => {
   deviceVoices.value = await voicesReady;
+  voicesLoaded.value = true;
 });
 /** The voices the voice sheet offers: the device's for the story's language, else all of them. */
 const offeredVoices = computed(() => {
@@ -180,32 +264,36 @@ function voiceTitle(c: Character): { title: string; tags: string[]; full: string
   return { title: shortVoiceName(name), tags, full: name === shortVoiceName(name) ? '' : name };
 }
 
-const colors = computed(() => speakerColorIndex(story.value?.cast ?? []));
+const colors = computed(() => speakerColorIndex(cast.value));
 
 /** How each character's voice plays on this device (a missing voice is substituted). */
 const resolved = computed(
-  () =>
-    new Map(
-      (story.value?.cast ?? []).map((c) => [c.id, resolveVoice(c.voice, deviceVoices.value)]),
-    ),
+  () => new Map(cast.value.map((c) => [c.id, resolveVoice(c.voice, deviceVoices.value)])),
 );
 
 /**
  * Who each member can't be told from on this device: the same voice heard at a pitch within 0.05,
  * the combinations automatic picks never give (clashesWithNarrator). The narrator's card says
- * nothing; those near it say so on theirs.
+ * nothing; those near it say so on theirs. Each voice is resolved once (resolved) and only members
+ * heard with the same voice are compared: comparing every pair afresh took seconds on a big cast.
  */
 const soundAlikes = computed(() => {
-  const cast = story.value?.cast ?? [];
+  const members = cast.value;
+  const spoken = (c: Character) => resolved.value.get(c.id)?.voiceName ?? c.voice.voiceName;
+  const byVoice = new Map<string | undefined, Character[]>();
+  for (const c of members) {
+    const name = spoken(c);
+    const same = byVoice.get(name);
+    if (same) same.push(c);
+    else byVoice.set(name, [c]);
+  }
   return new Map(
-    cast.map((c) => [
-      c.id,
-      c.role === 'narrator'
-        ? []
-        : cast.filter(
-            (o) => o.id !== c.id && clashesWithNarrator(c.voice, o.voice, deviceVoices.value),
-          ),
-    ]),
+    members.map((c) => {
+      if (c.role === 'narrator') return [c.id, []];
+      const name = spoken(c);
+      const same = byVoice.get(name) ?? [];
+      return [c.id, same.filter((o) => o.id !== c.id && clashesInVoice(c.voice, o.voice, name))];
+    }),
   );
 });
 
@@ -227,8 +315,9 @@ const firstHeard = computed(() => {
   }
   return at;
 });
+const byName = new Intl.Collator('en', { sensitivity: 'base' });
 function bySort(a: Character, b: Character): number {
-  if (sortMode.value === 'name') return a.name.localeCompare(b.name, 'en', { sensitivity: 'base' });
+  if (sortMode.value === 'name') return byName.compare(a.name, b.name);
   if (sortMode.value === 'first') {
     const never = Number.MAX_SAFE_INTEGER;
     return (firstHeard.value.get(a.id) ?? never) - (firstHeard.value.get(b.id) ?? never);
@@ -243,7 +332,7 @@ const MINOR_LINES = 2;
 const isMinor = (c: Character) => c.role === 'character' && linesOfMember(c) <= MINOR_LINES;
 /** The minor characters folded away, if the cast is long and has major ones to show. */
 const folded = computed(() => {
-  const characters = (story.value?.cast ?? []).filter((c) => c.role === 'character');
+  const characters = cast.value.filter((c) => c.role === 'character');
   const minor = characters.filter(isMinor);
   const fold =
     characters.length > FOLD_OVER && minor.length > 1 && minor.length < characters.length;
@@ -251,7 +340,7 @@ const folded = computed(() => {
 });
 /** By role, then folded members after the rest, then by the chosen order. */
 const sorted = computed(() =>
-  [...(story.value?.cast ?? [])].sort(
+  [...cast.value].sort(
     (a, b) =>
       ROLE_ORDER[a.role] - ROLE_ORDER[b.role] ||
       Number(folded.value.has(a.id)) - Number(folded.value.has(b.id)) ||
@@ -287,13 +376,24 @@ function toggleFilter(key: FilterKey) {
 
 /** The one member whose controls are open; the others show as a row. */
 const openId = ref<string>();
+/**
+ * The members whose card has been opened. A card's controls are only built once it is first
+ * opened, then kept, so what is typed in one outlives closing it or a search.
+ */
+const opened = ref(new Set<string>());
+function open(id: string | undefined) {
+  openId.value = id;
+  // Its card shows one of the member's lines, so their text is wanted now.
+  if (id) void readParts();
+  if (id && !opened.value.has(id)) opened.value = new Set(opened.value).add(id);
+}
 function toggleOpen(c: Character) {
-  openId.value = openId.value === c.id ? undefined : c.id;
+  open(openId.value === c.id ? undefined : c.id);
 }
 const minorOpen = ref(false);
 /** Opens another member's card and brings it into view, unfolding it if need be. */
 function goToMember(c: Character) {
-  openId.value = c.id;
+  open(c.id);
   if (folded.value.has(c.id)) minorOpen.value = true;
   void nextTick(() => {
     const row = document.getElementById(`member-${c.id}`);
@@ -494,8 +594,8 @@ function dropDraft(id: string, dial: Dial) {
 // A draft goes once the cast holds what it shows, so the label never jumps back while saving.
 watch(
   () => story.value?.cast,
-  (cast) => {
-    for (const c of cast ?? []) {
+  (members) => {
+    for (const c of members ?? []) {
       for (const dial of ['pitch', 'rate'] as const) {
         if (drafts.value.get(draftKey(c, dial)) === c.voice[dial]) dropDraft(c.id, dial);
       }
@@ -538,10 +638,10 @@ async function repickVoice(character: Character) {
   if (ok) await replay(character.id);
 }
 
-const hasCharacters = computed(() => story.value?.cast.some((c) => c.role === 'character'));
+const hasCharacters = computed(() => cast.value.some((c) => c.role === 'character'));
 /** What "Match voices to traits" does, counted from the cast as it is before it. */
 const matchText = computed(() => {
-  const characters = (story.value?.cast ?? []).filter((c) => c.role === 'character');
+  const characters = cast.value.filter((c) => c.role === 'character');
   const kept = characters.filter((c) => c.voice.manual).length;
   const repicked = characters.length - kept;
   if (repicked === 0)
@@ -573,18 +673,25 @@ function speakable(raw: string): string {
 }
 /** The lines a preview of `c` can play, in story order: those of a good length, else the longest. */
 function samplesOf(c: Character): string[] {
-  const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
-  const texts = linesOf(currentAnalyses.value, c.id).flatMap((l) => {
-    const part = byId.get(l.partId);
-    return part ? [speakable(part.text.slice(l.segment.start, l.segment.end))] : [];
-  });
-  const fit = texts.filter((t) => t.length >= SAMPLE_MIN);
-  if (fit.length) return fit.slice(0, SAMPLES_KEPT);
-  const words = (t: string) => t.split(' ').length;
-  return texts
-    .filter((t) => words(t) >= 3)
-    .sort((a, b) => b.length - a.length)
-    .slice(0, 1);
+  const fit: string[] = [];
+  /** The first of the longest lines of 3 words or more, for when none is long enough. */
+  let longest = '';
+  // Stops at SAMPLES_KEPT: the narrator alone can have tens of thousands of lines.
+  outer: for (const a of currentAnalyses.value) {
+    const part = a && partsById.value.get(a.partId);
+    if (!a || !part) continue;
+    for (const segment of a.segments) {
+      if (segment.speakerId !== c.id) continue;
+      const text = speakable(part.text.slice(segment.start, segment.end));
+      if (text.length >= SAMPLE_MIN) {
+        fit.push(text);
+        if (fit.length === SAMPLES_KEPT) break outer;
+      } else if (text.length > longest.length && text.split(' ').length >= 3) {
+        longest = text;
+      }
+    }
+  }
+  return fit.length ? fit : longest ? [longest] : [];
 }
 /** Which of its samples each member plays; "Next line" moves it on. */
 const sampleAt = ref(new Map<string, number>());
@@ -594,7 +701,7 @@ function sampleOf(c: Character, samples = samplesOf(c)): string {
 }
 /** The open member's samples, worked out once per change rather than once per use. */
 const openSamples = computed(() => {
-  const c = story.value?.cast.find((m) => m.id === openId.value);
+  const c = cast.value.find((m) => m.id === openId.value);
   return c ? samplesOf(c) : [];
 });
 
@@ -605,6 +712,9 @@ async function preview(character: Character, voice: VoiceSettings = character.vo
   const run = ++previewRun;
   speaking.value = character.id;
   try {
+    // One of the member's own lines, not "Hello, I am …" because the text isn't read yet.
+    await readParts();
+    if (run !== previewRun) return;
     await player.preview(sampleOf(character), voice);
   } finally {
     // A later preview, or Stop, has taken over: what it shows stays.
@@ -620,7 +730,7 @@ async function togglePreview(character: Character) {
 
 /** The member whose voice sheet is open. */
 const sheetFor = ref<string>();
-const sheetMember = computed(() => story.value?.cast.find((c) => c.id === sheetFor.value));
+const sheetMember = computed(() => cast.value.find((c) => c.id === sheetFor.value));
 function closeSheet() {
   const id = sheetFor.value;
   sheetFor.value = undefined;
@@ -773,15 +883,16 @@ async function notACharacter(character: Character) {
   if (ok) void nextTick(() => neighbour?.querySelector<HTMLElement>('.toggle')?.focus());
 }
 const unknownName = computed(
-  () => story.value?.cast.find((c) => c.role === 'unknown')?.name ?? 'the unknown speaker',
+  () => cast.value.find((c) => c.role === 'unknown')?.name ?? 'the unknown speaker',
 );
 
 /** The merge sheet ("Same person as…") and the character it is for. */
 const mergeSheetFor = ref<string>();
-const mergeMember = computed(() => story.value?.cast.find((c) => c.id === mergeSheetFor.value));
+const mergeMember = computed(() => cast.value.find((c) => c.id === mergeSheetFor.value));
 /** What had focus when the sheet opened, to give it back on close. */
 let mergeOpener: HTMLElement | undefined;
 function openMergeSheet(c: Character) {
+  void readParts();
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
   // A menu item is hidden once its menu closes: its menu's ⋯ button takes the focus back.
   mergeOpener =
@@ -808,31 +919,39 @@ function onSheetMerge(choice: { fromId: string; intoId: string; voiceOf: string 
   mergeSheetFor.value = undefined;
   if (from) void merge(from, choice.intoId, choice.voiceOf);
 }
+/** Each member's first line, found in one pass while the merge sheet is open. */
+const firstLines = computed(() => {
+  const first = new Map<string, string>();
+  if (!mergeSheetFor.value) return first;
+  for (const a of currentAnalyses.value) {
+    const part = a && partsById.value.get(a.partId);
+    if (!a || !part) continue;
+    for (const s of a.segments) {
+      if (!first.has(s.speakerId)) first.set(s.speakerId, part.text.slice(s.start, s.end));
+    }
+  }
+  return first;
+});
 /** A member's first line, as read aloud (no quote marks), for comparing two in the merge sheet. */
 function firstLineOf(c: Character): string {
-  const line = linesOf(currentAnalyses.value, c.id)[0];
-  const part = line && (parts.value ?? []).find((p) => p.id === line.partId);
-  return line && part ? speakable(part.text.slice(line.segment.start, line.segment.end)) : '';
+  const line = firstLines.value.get(c.id);
+  return line ? speakable(line) : '';
 }
 function voiceWords(c: Character): string {
   const t = voiceTitle(c);
   return [t.title, ...t.tags].join(' · ');
 }
 
-/** Pairs the user said are not one person; kept on this device for the story. */
-const notSame = ref(new Set<string>());
-onMounted(async () => {
-  notSame.value = await getNotSame(props.id);
-});
 /** The way round chosen with "Swap", by pair: who merges (its id). */
 const chosenFrom = ref(new Map<string, string>());
 const SUGGESTIONS_SHOWN = 5;
 const allSuggestions = ref(false);
 /** Characters that may be one person (suggestMerges), each the way round it would merge. */
 const suggestions = computed(() => {
-  const cast = story.value?.cast ?? [];
-  const byId = new Map(cast.map((c) => [c.id, c]));
-  return suggestMerges(cast, usage.value ?? new Map(), notSame.value).flatMap((s) => {
+  // Worked out once all it depends on is in, rather than again as each part of it arrives.
+  if (loading.value || !usage.value) return [];
+  const byId = new Map(cast.value.map((c) => [c.id, c]));
+  return suggestMerges(cast.value, usage.value, notSame.value).flatMap((s) => {
     const key = pairKey(s.fromId, s.intoId);
     const turned = chosenFrom.value.get(key) === s.intoId;
     const [fromId, intoId] = turned ? [s.intoId, s.fromId] : [s.fromId, s.intoId];
@@ -906,9 +1025,7 @@ function toldLabel(c: Character): string {
 <template>
   <main class="page">
     <nav class="top">
-      <RouterLink :to="{ name: 'story', params: { id } }"
-        >← {{ story?.title ?? 'Story' }}</RouterLink
-      >
+      <RouterLink :to="{ name: 'story', params: { id } }">← {{ storyTitle }}</RouterLink>
       <RouterLink :to="{ name: 'reader', params: { id } }">Read &amp; listen</RouterLink>
     </nav>
     <h1>Cast</h1>
@@ -932,416 +1049,446 @@ function toldLabel(c: Character): string {
       </ul>
     </details>
 
-    <div v-if="sorted.length" class="toolbar">
-      <div class="find">
-        <CastFilter v-model="query" />
-        <label class="sort">
-          <select v-model="sortMode" aria-label="Sort by">
-            <option v-for="s in SORTS" :key="s.value" :value="s.value">{{ s.label }}</option>
-          </select>
-        </label>
+    <div v-if="loading" class="loading" role="status">
+      <span class="sr-only">Loading the cast…</span>
+      <div v-for="n in 5" :key="n" class="card skeleton" aria-hidden="true">
+        <span class="swatch" />
+        <span class="bars"><span /><span /></span>
+        <span class="ghost" />
       </div>
-      <div v-if="filterChips.length" class="chips" role="group" aria-label="Show only">
-        <button
-          v-for="f in filterChips"
-          :key="f.key"
-          type="button"
-          class="filter-chip"
-          :aria-pressed="filter === f.key"
-          @click="toggleFilter(f.key)"
-        >
-          {{ f.label }} <span class="n">{{ f.count }}</span>
-        </button>
-      </div>
-      <p v-if="filtering && shown.size" class="muted small" aria-live="polite">
-        Showing {{ shown.size }} of {{ sorted.length }}
-      </p>
     </div>
-    <p v-if="filtering && !shown.size" class="muted" role="status">
-      <template v-if="query.trim()">Nobody in the cast is called “{{ query.trim() }}”.</template>
-      <template v-else>Nobody in the cast matches this filter.</template>
+    <p v-else-if="storyMissing" class="empty card">
+      This story is no longer in your library.
+      <RouterLink :to="{ name: 'library' }">Go to your stories</RouterLink>
     </p>
-
-    <section
-      v-for="g in groups"
-      v-show="!filtering || g.shown"
-      :key="g.role"
-      class="group"
-      :aria-labelledby="`group-${g.role}`"
-    >
-      <h2 :id="`group-${g.role}`" tabindex="-1">
-        {{ g.title }}
-        <span v-if="g.role === 'character' && g.members.length" class="count">
-          {{ g.members.length }}
-        </span>
-      </h2>
-      <p class="muted small">{{ g.note }}</p>
-
-      <template v-if="g.role === 'character'">
-        <div v-if="hasCharacters" class="match">
-          <button type="button" @click="matchVoices">Match voices to traits</button>
-          <p
-            v-if="notes.get(PAGE)"
-            class="card-note small"
-            :class="{ error: notes.get(PAGE)!.error }"
-            :role="notes.get(PAGE)!.error ? 'alert' : 'status'"
-          >
-            {{ notes.get(PAGE)!.text }}
-          </p>
+    <template v-else>
+      <div v-if="sorted.length" class="toolbar">
+        <div class="find">
+          <CastFilter v-model="query" />
+          <label class="sort">
+            <select v-model="sortMode" aria-label="Sort by">
+              <option v-for="s in SORTS" :key="s.value" :value="s.value">{{ s.label }}</option>
+            </select>
+          </label>
         </div>
-        <!-- Closed at first: a long book can have many, and they wait until wanted. -->
-        <details v-if="suggestions.length && !filtering" class="dupes">
-          <summary class="chevron">
-            Possible duplicates <span class="count">{{ suggestions.length }}</span>
-          </summary>
-          <ul>
-            <li
-              v-for="(s, i) in allSuggestions
-                ? suggestions
-                : suggestions.slice(0, SUGGESTIONS_SHOWN)"
-              :key="s.key"
-              class="dupe"
-            >
-              <p class="pair">
-                <span class="who" :style="{ '--tint': speakerTint(colors, s.from.id) }"
-                  ><span class="dot" aria-hidden="true" />{{ s.from.name }}</span
-                >
-                <span aria-hidden="true">&nbsp;→&nbsp;</span>
-                <span class="sr-only">&nbsp;into&nbsp;</span>
-                <span class="who" :style="{ '--tint': speakerTint(colors, s.into.id) }"
-                  ><span class="dot" aria-hidden="true" />{{ s.into.name }}</span
-                >
-              </p>
-              <p class="muted small reason">
-                {{ s.reason }} · {{ count(linesOfMember(s.from), 'line') }} and
-                {{ count(linesOfMember(s.into), 'line') }}
-              </p>
-              <div class="dupe-actions">
-                <button
-                  type="button"
-                  :aria-label="`Merge ${s.from.name} into ${s.into.name}`"
-                  @click="merge(s.from, s.into.id)"
-                >
-                  Merge
-                </button>
-                <button
-                  type="button"
-                  :aria-label="`Swap: merge ${s.into.name} into ${s.from.name} instead`"
-                  @click="swap(s)"
-                >
-                  Swap
-                </button>
-                <button
-                  type="button"
-                  class="link"
-                  :aria-label="`${s.from.name} and ${s.into.name} are not the same person`"
-                  @click="notTheSame(s, i)"
-                >
-                  Not the same
-                </button>
-              </div>
-            </li>
-          </ul>
+        <div v-if="filterChips.length" class="chips" role="group" aria-label="Show only">
           <button
-            v-if="suggestions.length > SUGGESTIONS_SHOWN"
+            v-for="f in filterChips"
+            :key="f.key"
             type="button"
-            class="link"
-            @click="allSuggestions = !allSuggestions"
+            class="filter-chip"
+            :aria-pressed="filter === f.key"
+            @click="toggleFilter(f.key)"
           >
-            {{ allSuggestions ? 'Show fewer' : `Show all ${suggestions.length}` }}
+            {{ f.label }} <span class="n">{{ f.count }}</span>
           </button>
-        </details>
-        <p v-else-if="story && !hasCharacters" class="empty card">
-          <template v-if="analysed">No characters were found in the analysed parts.</template>
-          <template v-else>Characters appear here once a part has been analysed.</template>
-          <RouterLink :to="{ name: 'story', params: { id } }">Go to the parts</RouterLink>
+        </div>
+        <p v-if="filtering && shown.size" class="muted small" aria-live="polite">
+          Showing {{ shown.size }} of {{ sorted.length }}
         </p>
-      </template>
+      </div>
+      <p v-if="filtering && !shown.size" class="muted" role="status">
+        <template v-if="query.trim()">Nobody in the cast is called “{{ query.trim() }}”.</template>
+        <template v-else>Nobody in the cast matches this filter.</template>
+      </p>
 
-      <ul class="cast">
-        <template v-for="c in g.members" :key="c.id">
-          <li v-if="c.id === g.foldAt" v-show="!filtering" class="fold">
-            <button
-              type="button"
-              class="fold-toggle"
-              :aria-expanded="minorOpen"
-              @click="minorOpen = !minorOpen"
+      <section
+        v-for="g in groups"
+        v-show="!filtering || g.shown"
+        :key="g.role"
+        class="group"
+        :aria-labelledby="`group-${g.role}`"
+      >
+        <h2 :id="`group-${g.role}`" tabindex="-1">
+          {{ g.title }}
+          <span v-if="g.role === 'character' && g.members.length" class="count">
+            {{ g.members.length }}
+          </span>
+        </h2>
+        <p class="muted small">{{ g.note }}</p>
+
+        <template v-if="g.role === 'character'">
+          <div v-if="hasCharacters" class="match">
+            <button type="button" @click="matchVoices">Match voices to traits</button>
+            <p
+              v-if="notes.get(PAGE)"
+              class="card-note small"
+              :class="{ error: notes.get(PAGE)!.error }"
+              :role="notes.get(PAGE)!.error ? 'alert' : 'status'"
             >
-              <span class="fold-title">
-                Minor characters <span class="n">{{ g.foldNames.length }}</span
-                ><span class="sr-only">: </span>
-              </span>
-              <span class="muted small fold-names">
-                {{ g.foldNames.slice(0, 3).join(', ')
-                }}<template v-if="g.foldNames.length > 3">, +{{ g.foldNames.length - 3 }}</template>
-              </span>
-            </button>
-          </li>
-          <li
-            v-show="visible(c)"
-            :id="`member-${c.id}`"
-            class="card character"
-            :class="{ open: openId === c.id, flash: flashId === c.id }"
-            :style="{ '--tint': speakerTint(colors, c.id) }"
-          >
-            <div class="head">
-              <span class="swatch" aria-hidden="true" />
-              <div class="who">
-                <h3>
+              {{ notes.get(PAGE)!.text }}
+            </p>
+          </div>
+          <!-- Closed at first: a long book can have many, and they wait until wanted. -->
+          <details v-if="suggestions.length && !filtering" class="dupes">
+            <summary class="chevron">
+              Possible duplicates <span class="count">{{ suggestions.length }}</span>
+            </summary>
+            <ul>
+              <li
+                v-for="(s, i) in allSuggestions
+                  ? suggestions
+                  : suggestions.slice(0, SUGGESTIONS_SHOWN)"
+                :key="s.key"
+                class="dupe"
+              >
+                <p class="pair">
+                  <span class="who" :style="{ '--tint': speakerTint(colors, s.from.id) }"
+                    ><span class="dot" aria-hidden="true" />{{ s.from.name }}</span
+                  >
+                  <span aria-hidden="true">&nbsp;→&nbsp;</span>
+                  <span class="sr-only">&nbsp;into&nbsp;</span>
+                  <span class="who" :style="{ '--tint': speakerTint(colors, s.into.id) }"
+                    ><span class="dot" aria-hidden="true" />{{ s.into.name }}</span
+                  >
+                </p>
+                <p class="muted small reason">
+                  {{ s.reason }} · {{ count(linesOfMember(s.from), 'line') }} and
+                  {{ count(linesOfMember(s.into), 'line') }}
+                </p>
+                <div class="dupe-actions">
                   <button
                     type="button"
-                    class="toggle"
-                    :aria-expanded="openId === c.id"
-                    :aria-controls="`member-${c.id}-body`"
-                    :aria-describedby="`member-${c.id}-meta`"
-                    @click="toggleOpen(c)"
+                    :aria-label="`Merge ${s.from.name} into ${s.into.name}`"
+                    @click="merge(s.from, s.into.id)"
                   >
-                    {{ c.name }}
+                    Merge
                   </button>
-                </h3>
-                <div :id="`member-${c.id}-meta`">
-                  <p class="muted small meta">
-                    <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
-                    <template v-else>{{ count(usage?.get(c.id) ?? 0, 'line') }}</template>
-                    <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
-                    <template v-if="c.aliases.length">
-                      · also “{{ c.aliases.join('”, “') }}”</template
-                    >
-                  </p>
-                  <p class="muted small meta voice-sum">
-                    {{ shortVoiceName(resolved.get(c.id)?.voiceName) }}
-                    <span v-if="c.voice.manual" class="flag">· set by hand</span>
-                    <span v-if="soundAlikes.get(c.id)?.length" class="flag warn">
-                      · sounds alike</span
-                    >
-                    <span v-if="resolved.get(c.id)?.substituted" class="flag warn">
-                      · substituted</span
-                    >
-                  </p>
-                </div>
-              </div>
-              <span class="chev" aria-hidden="true" />
-              <ActionsMenu
-                class="member-menu"
-                :title="c.name"
-                noun="character"
-                :reorderable="false"
-                :removable="c.role === 'character'"
-                delete-label="Not a character"
-                :confirm-delete-label="`Tap again: their lines go to ${unknownName}`"
-                field-label="Name"
-                @rename="renameFromMenu(c, $event)"
-                @remove="notACharacter(c)"
-              >
-                <template #default="{ act }">
-                  <button role="menuitem" @click="act(() => openMergeSheet(c))">
-                    {{
-                      c.role === 'character'
-                        ? 'Same person as…'
-                        : c.role === 'narrator'
-                          ? 'Give all these lines, in every part, to…'
-                          : 'Give all these lines to…'
-                    }}
-                  </button>
-                </template>
-              </ActionsMenu>
-              <button
-                class="preview"
-                :class="{ speaking: speaking === c.id }"
-                :aria-label="`Preview ${c.name}’s voice`"
-                :aria-pressed="speaking === c.id"
-                :title="speaking === c.id ? 'Stop' : 'Preview'"
-                @click="togglePreview(c)"
-              >
-                <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
-                  <rect
-                    v-if="speaking === c.id"
-                    x="6"
-                    y="6"
-                    width="12"
-                    height="12"
-                    rx="1.5"
-                    fill="currentColor"
-                  />
-                  <path v-else d="M8 5v14l11-7z" fill="currentColor" />
-                </svg>
-              </button>
-            </div>
-
-            <div v-show="openId === c.id" :id="`member-${c.id}-body`" class="body">
-              <p
-                v-if="notes.get(c.id)"
-                class="card-note small"
-                :class="{ error: notes.get(c.id)!.error }"
-                :role="notes.get(c.id)!.error ? 'alert' : 'status'"
-              >
-                {{ notes.get(c.id)!.text }}
-              </p>
-              <div v-if="openId === c.id" class="sample" :class="{ speaking: speaking === c.id }">
-                <p class="sample-text">“{{ sampleOf(c, openSamples) }}”</p>
-                <div class="sample-actions">
                   <button
-                    v-if="openSamples.length > 1"
+                    type="button"
+                    :aria-label="`Swap: merge ${s.into.name} into ${s.from.name} instead`"
+                    @click="swap(s)"
+                  >
+                    Swap
+                  </button>
+                  <button
                     type="button"
                     class="link"
-                    @click="nextSample(c)"
+                    :aria-label="`${s.from.name} and ${s.into.name} are not the same person`"
+                    @click="notTheSame(s, i)"
                   >
-                    Next line
+                    Not the same
                   </button>
-                  <label class="auto">
-                    <input v-model="playOnChange" type="checkbox" />
-                    Play after each change
+                </div>
+              </li>
+            </ul>
+            <button
+              v-if="suggestions.length > SUGGESTIONS_SHOWN"
+              type="button"
+              class="link"
+              @click="allSuggestions = !allSuggestions"
+            >
+              {{ allSuggestions ? 'Show fewer' : `Show all ${suggestions.length}` }}
+            </button>
+          </details>
+          <p v-else-if="!hasCharacters" class="empty card">
+            <template v-if="analysed">No characters were found in the analysed parts.</template>
+            <template v-else>Characters appear here once a part has been analysed.</template>
+            <RouterLink :to="{ name: 'story', params: { id } }">Go to the parts</RouterLink>
+          </p>
+        </template>
+
+        <ul class="cast">
+          <template v-for="c in g.members" :key="c.id">
+            <li v-if="c.id === g.foldAt" v-show="!filtering" class="fold">
+              <button
+                type="button"
+                class="fold-toggle"
+                :aria-expanded="minorOpen"
+                @click="minorOpen = !minorOpen"
+              >
+                <span class="fold-title">
+                  Minor characters <span class="n">{{ g.foldNames.length }}</span
+                  ><span class="sr-only">: </span>
+                </span>
+                <span class="muted small fold-names">
+                  {{ g.foldNames.slice(0, 3).join(', ')
+                  }}<template v-if="g.foldNames.length > 3"
+                    >, +{{ g.foldNames.length - 3 }}</template
+                  >
+                </span>
+              </button>
+            </li>
+            <!-- A folded or filtered-out row is left out until shown, unless its card was opened. -->
+            <li
+              v-if="visible(c) || opened.has(c.id)"
+              v-show="visible(c)"
+              :id="`member-${c.id}`"
+              class="card character"
+              :class="{ open: openId === c.id, flash: flashId === c.id }"
+              :style="{ '--tint': speakerTint(colors, c.id) }"
+            >
+              <div class="head">
+                <span class="swatch" aria-hidden="true" />
+                <div class="who">
+                  <h3>
+                    <button
+                      type="button"
+                      class="toggle"
+                      :aria-expanded="openId === c.id"
+                      :aria-controls="opened.has(c.id) ? `member-${c.id}-body` : undefined"
+                      :aria-describedby="`member-${c.id}-meta`"
+                      @click="toggleOpen(c)"
+                    >
+                      {{ c.name }}
+                      <span class="chev" aria-hidden="true" />
+                    </button>
+                  </h3>
+                  <div :id="`member-${c.id}-meta`">
+                    <p class="muted small meta">
+                      <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
+                      <template v-else>{{ count(usage?.get(c.id) ?? 0, 'line') }}</template>
+                      <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
+                      <template v-if="c.aliases.length">
+                        · also “{{ c.aliases.join('”, “') }}”</template
+                      >
+                    </p>
+                    <p class="muted small meta voice-sum">
+                      {{
+                        shortVoiceName(
+                          voicesLoaded ? resolved.get(c.id)?.voiceName : c.voice.voiceName,
+                        )
+                      }}
+                      <span v-if="c.voice.manual" class="flag">· set by hand</span>
+                      <span v-if="soundAlikes.get(c.id)?.length" class="flag warn">
+                        · sounds alike</span
+                      >
+                      <span v-if="resolved.get(c.id)?.substituted" class="flag warn">
+                        · substituted</span
+                      >
+                    </p>
+                  </div>
+                </div>
+                <ActionsMenu
+                  class="member-menu"
+                  :title="c.name"
+                  noun="character"
+                  :reorderable="false"
+                  :removable="c.role === 'character'"
+                  delete-label="Not a character"
+                  :confirm-delete-label="`Tap again: their lines go to ${unknownName}`"
+                  field-label="Name"
+                  @rename="renameFromMenu(c, $event)"
+                  @remove="notACharacter(c)"
+                >
+                  <template #default="{ act }">
+                    <button role="menuitem" @click="act(() => openMergeSheet(c))">
+                      {{
+                        c.role === 'character'
+                          ? 'Same person as…'
+                          : c.role === 'narrator'
+                            ? 'Give all these lines, in every part, to…'
+                            : 'Give all these lines to…'
+                      }}
+                    </button>
+                  </template>
+                </ActionsMenu>
+                <button
+                  class="preview"
+                  :class="{ speaking: speaking === c.id }"
+                  :aria-label="`Preview ${c.name}’s voice`"
+                  :aria-pressed="speaking === c.id"
+                  :title="speaking === c.id ? 'Stop' : 'Preview'"
+                  @click="togglePreview(c)"
+                >
+                  <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+                    <rect
+                      v-if="speaking === c.id"
+                      x="6"
+                      y="6"
+                      width="12"
+                      height="12"
+                      rx="1.5"
+                      fill="currentColor"
+                    />
+                    <path v-else d="M8 5v14l11-7z" fill="currentColor" />
+                  </svg>
+                </button>
+              </div>
+
+              <div
+                v-if="opened.has(c.id)"
+                v-show="openId === c.id"
+                :id="`member-${c.id}-body`"
+                class="body"
+              >
+                <p
+                  v-if="notes.get(c.id)"
+                  class="card-note small"
+                  :class="{ error: notes.get(c.id)!.error }"
+                  :role="notes.get(c.id)!.error ? 'alert' : 'status'"
+                >
+                  {{ notes.get(c.id)!.text }}
+                </p>
+                <div v-if="openId === c.id" class="sample" :class="{ speaking: speaking === c.id }">
+                  <p v-if="parts" class="sample-text">“{{ sampleOf(c, openSamples) }}”</p>
+                  <p v-else class="sample-text muted">Finding one of their lines…</p>
+                  <div class="sample-actions">
+                    <button
+                      v-if="openSamples.length > 1"
+                      type="button"
+                      class="link"
+                      @click="nextSample(c)"
+                    >
+                      Next line
+                    </button>
+                    <label class="auto">
+                      <input v-model="playOnChange" type="checkbox" />
+                      Play after each change
+                    </label>
+                  </div>
+                </div>
+                <div class="voice">
+                  <div class="voice-head">
+                    <span class="voice-label">Voice</span>
+                    <span
+                      :id="`voice-mode-${c.id}`"
+                      class="chip"
+                      :class="{ manual: c.voice.manual }"
+                    >
+                      {{ c.voice.manual ? 'Set by hand' : 'Automatic' }}
+                    </span>
+                    <button
+                      v-if="c.voice.manual"
+                      type="button"
+                      class="link back"
+                      :aria-label="`Back to an automatic voice for ${c.name}`"
+                      @click="repickVoice(c)"
+                    >
+                      Back to automatic
+                    </button>
+                  </div>
+                  <button
+                    :id="`voice-${c.id}`"
+                    type="button"
+                    class="voice-button"
+                    :data-voice="c.voice.voiceName ?? ''"
+                    aria-haspopup="dialog"
+                    :aria-label="`${c.name}’s voice: ${voiceTitle(c).title}. Change`"
+                    :aria-describedby="`voice-mode-${c.id}`"
+                    @click="sheetFor = c.id"
+                  >
+                    <span class="voice-title">
+                      {{ voiceTitle(c).title }}
+                      <span v-if="voiceTitle(c).tags.length" class="voice-tags">
+                        · {{ voiceTitle(c).tags.join(' · ') }}
+                      </span>
+                    </span>
+                    <span v-if="voiceTitle(c).full" class="voice-full">{{
+                      voiceTitle(c).full
+                    }}</span>
+                    <span class="voice-change" aria-hidden="true">Change</span>
+                  </button>
+                </div>
+                <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
+                  <span class="badge">Substituted</span>
+                  This voice isn't installed here, so
+                  {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads
+                  instead, with the same pitch and speed.
+                </p>
+                <p v-if="soundAlikes.get(c.id)?.length" class="alike small">
+                  <template v-if="soundAlikes.get(c.id)!.some((o) => o.role === 'narrator')">
+                    Sounds like the narrator.
+                  </template>
+                  <template v-else>
+                    Sounds close to
+                    <template v-for="(o, i) in soundAlikes.get(c.id)!" :key="o.id"
+                      ><template v-if="i">, </template
+                      ><button
+                        type="button"
+                        class="link who"
+                        :style="{ '--tint': speakerTint(colors, o.id) }"
+                        @click="goToMember(o)"
+                      >
+                        <span class="dot" aria-hidden="true" />{{ o.name }}
+                      </button></template
+                    >.
+                  </template>
+                  <button type="button" class="link" @click="repickVoice(c)">
+                    Pick another voice
+                  </button>
+                </p>
+                <div class="sliders">
+                  <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
+                    <span class="dial-label">
+                      {{ dial === 'pitch' ? 'Pitch' : 'Speed' }}
+                      <span class="dial-value">{{ dialText(dialValue(c, dial)) }}</span>
+                    </span>
+                    <input
+                      type="range"
+                      min="0.5"
+                      max="2"
+                      step="0.05"
+                      :value="dialValue(c, dial)"
+                      :aria-valuetext="dialText(dialValue(c, dial))"
+                      @input="onDialInput(c, dial, $event)"
+                      @change="onDialChange(c, dial, $event)"
+                    />
                   </label>
                 </div>
-              </div>
-              <div class="voice">
-                <div class="voice-head">
-                  <span class="voice-label">Voice</span>
-                  <span :id="`voice-mode-${c.id}`" class="chip" :class="{ manual: c.voice.manual }">
-                    {{ c.voice.manual ? 'Set by hand' : 'Automatic' }}
-                  </span>
-                  <button
-                    v-if="c.voice.manual"
-                    type="button"
-                    class="link back"
-                    :aria-label="`Back to an automatic voice for ${c.name}`"
-                    @click="repickVoice(c)"
-                  >
-                    Back to automatic
-                  </button>
-                </div>
-                <button
-                  :id="`voice-${c.id}`"
-                  type="button"
-                  class="voice-button"
-                  :data-voice="c.voice.voiceName ?? ''"
-                  aria-haspopup="dialog"
-                  :aria-label="`${c.name}’s voice: ${voiceTitle(c).title}. Change`"
-                  :aria-describedby="`voice-mode-${c.id}`"
-                  @click="sheetFor = c.id"
-                >
-                  <span class="voice-title">
-                    {{ voiceTitle(c).title }}
-                    <span v-if="voiceTitle(c).tags.length" class="voice-tags">
-                      · {{ voiceTitle(c).tags.join(' · ') }}
-                    </span>
-                  </span>
-                  <span v-if="voiceTitle(c).full" class="voice-full">{{ voiceTitle(c).full }}</span>
-                  <span class="voice-change" aria-hidden="true">Change</span>
-                </button>
-              </div>
-              <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
-                <span class="badge">Substituted</span>
-                This voice isn't installed here, so
-                {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads
-                instead, with the same pitch and speed.
-              </p>
-              <p v-if="soundAlikes.get(c.id)?.length" class="alike small">
-                <template v-if="soundAlikes.get(c.id)!.some((o) => o.role === 'narrator')">
-                  Sounds like the narrator.
-                </template>
-                <template v-else>
-                  Sounds close to
-                  <template v-for="(o, i) in soundAlikes.get(c.id)!" :key="o.id"
-                    ><template v-if="i">, </template
-                    ><button
-                      type="button"
-                      class="link who"
-                      :style="{ '--tint': speakerTint(colors, o.id) }"
-                      @click="goToMember(o)"
-                    >
-                      <span class="dot" aria-hidden="true" />{{ o.name }}
-                    </button></template
-                  >.
-                </template>
-                <button type="button" class="link" @click="repickVoice(c)">
-                  Pick another voice
-                </button>
-              </p>
-              <div class="sliders">
-                <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
-                  <span class="dial-label">
-                    {{ dial === 'pitch' ? 'Pitch' : 'Speed' }}
-                    <span class="dial-value">{{ dialText(dialValue(c, dial)) }}</span>
-                  </span>
-                  <input
-                    type="range"
-                    min="0.5"
-                    max="2"
-                    step="0.05"
-                    :value="dialValue(c, dial)"
-                    :aria-valuetext="dialText(dialValue(c, dial))"
-                    @input="onDialInput(c, dial, $event)"
-                    @change="onDialChange(c, dial, $event)"
+
+                <details class="names">
+                  <summary class="chevron">Other names</summary>
+                  <CharacterEditor
+                    :character="c"
+                    :name-error="nameClash?.id === c.id ? clashText : undefined"
+                    @save="saveNames(c, $event)"
                   />
-                </label>
-              </div>
+                </details>
 
-              <details class="names">
-                <summary class="chevron">Other names</summary>
-                <CharacterEditor
+                <CharacterTraits
+                  v-if="c.role !== 'unknown'"
                   :character="c"
-                  :name-error="nameClash?.id === c.id ? clashText : undefined"
-                  @save="saveNames(c, $event)"
+                  :voice-kept="voiceKept.has(c.id)"
+                  @change="changeTraits(c, $event)"
+                  @repick="repickVoice(c)"
                 />
-              </details>
 
-              <CharacterTraits
-                v-if="c.role !== 'unknown'"
-                :character="c"
-                :voice-kept="voiceKept.has(c.id)"
-                @change="changeTraits(c, $event)"
-                @repick="repickVoice(c)"
-              />
-
-              <details
-                v-if="usage?.get(c.id)"
-                class="lines"
-                :open="openId === c.id && linesOfMember(c) <= SHORT_LINES"
-                @toggle="onLinesToggle(c, $event)"
-              >
-                <summary class="chevron">See {{ c.name }}’s lines</summary>
-                <template v-if="memberLines.get(c.id)">
-                  <p v-if="!memberLines.get(c.id)!.length" class="muted small">
-                    Their lines are in parts that need analysing again.
-                  </p>
-                  <ol>
-                    <li
-                      v-for="l in memberLines
-                        .get(c.id)!
-                        .slice(0, linesShown.get(c.id) ?? LINES_PAGE)"
-                      :key="l.partId + ':' + l.index"
+                <details
+                  v-if="usage?.get(c.id)"
+                  class="lines"
+                  :open="openId === c.id && linesOfMember(c) <= SHORT_LINES"
+                  @toggle="onLinesToggle(c, $event)"
+                >
+                  <summary class="chevron">See {{ c.name }}’s lines</summary>
+                  <p v-if="!parts" class="muted small">Finding their lines…</p>
+                  <template v-else-if="memberLines.get(c.id)">
+                    <p v-if="!memberLines.get(c.id)!.total" class="muted small">
+                      Their lines are in parts that need analysing again.
+                    </p>
+                    <ol>
+                      <li v-for="l in memberLines.get(c.id)!.shown" :key="l.partId + ':' + l.index">
+                        <RouterLink
+                          :to="{
+                            name: 'reader',
+                            params: { id, partId: l.partId },
+                            query: { line: String(l.index) },
+                          }"
+                        >
+                          <span class="line-part muted small">{{ l.partTitle }}</span>
+                          <span class="line-text" :data-mode="l.segment.mode">{{ l.text }}</span>
+                        </RouterLink>
+                      </li>
+                    </ol>
+                    <button
+                      v-if="memberLines.get(c.id)!.total > memberLines.get(c.id)!.shown.length"
+                      type="button"
+                      class="link"
+                      @click="showMoreLines(c)"
                     >
-                      <RouterLink
-                        :to="{
-                          name: 'reader',
-                          params: { id, partId: l.partId },
-                          query: { line: String(l.index) },
-                        }"
-                      >
-                        <span class="line-part muted small">{{ l.partTitle }}</span>
-                        <span class="line-text" :data-mode="l.segment.mode">{{ l.text }}</span>
-                      </RouterLink>
-                    </li>
-                  </ol>
-                  <button
-                    v-if="memberLines.get(c.id)!.length > (linesShown.get(c.id) ?? LINES_PAGE)"
-                    type="button"
-                    class="link"
-                    @click="showMoreLines(c)"
-                  >
-                    Show more ({{
-                      memberLines.get(c.id)!.length - (linesShown.get(c.id) ?? LINES_PAGE)
-                    }}
-                    left)
-                  </button>
-                </template>
-              </details>
-            </div>
-          </li>
-        </template>
-      </ul>
-    </section>
+                      Show more ({{
+                        memberLines.get(c.id)!.total - memberLines.get(c.id)!.shown.length
+                      }}
+                      left)
+                    </button>
+                  </template>
+                </details>
+              </div>
+            </li>
+          </template>
+        </ul>
+      </section>
+    </template>
 
     <!-- Always there, so what appears in it is announced. -->
     <div class="snack-region" aria-live="polite">
@@ -1364,7 +1511,7 @@ function toldLabel(c: Character): string {
     <MergeSheet
       v-if="mergeMember"
       :member="mergeMember"
-      :cast="story?.cast ?? []"
+      :cast="cast"
       :colors="colors"
       :lines="usage ?? new Map()"
       :first-line="firstLineOf"
@@ -1376,7 +1523,7 @@ function toldLabel(c: Character): string {
     <VoiceSheet
       v-if="sheetMember"
       :member="sheetMember"
-      :cast="story?.cast ?? []"
+      :cast="cast"
       :colors="colors"
       :voices="offeredVoices"
       :device-voices="deviceVoices"
@@ -1492,7 +1639,7 @@ function toldLabel(c: Character): string {
 .head {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
   gap: 4px 12px;
   align-items: center;
 }
@@ -1543,20 +1690,21 @@ function toldLabel(c: Character): string {
   color: var(--warn);
 }
 
-/* Turned, so painted above the row's button: taps pass through it to the button. */
+/* Right after the name, inside its button, so it costs the row no column of its own. */
 .chev {
+  flex: none;
   width: 8px;
   height: 8px;
-  margin-inline: 4px;
+  margin-inline: 8px 2px;
   border-right: 2px solid var(--muted);
   border-bottom: 2px solid var(--muted);
-  transform: rotate(45deg);
+  transform: translateY(-2px) rotate(45deg);
   transition: transform 0.15s;
   pointer-events: none;
 }
 
 .open .chev {
-  transform: rotate(-135deg);
+  transform: translateY(2px) rotate(-135deg);
 }
 
 @media (prefers-reduced-motion: reduce) {
@@ -2001,5 +2149,115 @@ function toldLabel(c: Character): string {
 
 .line-text[data-mode='thought'] {
   font-style: italic;
+}
+
+/* Stands in for the list while the cast and its line counts are read: rows the shape of a member's. */
+.loading {
+  display: grid;
+  gap: 8px;
+  margin-top: 16px;
+}
+
+.skeleton {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: center;
+  min-height: 80px;
+}
+
+.skeleton .swatch,
+.skeleton .bars > span,
+.skeleton .ghost {
+  background: var(--border);
+  animation: pulse 1.2s ease-in-out infinite alternate;
+}
+
+.skeleton .bars {
+  display: grid;
+  gap: 8px;
+}
+
+.skeleton .bars > span {
+  height: 12px;
+  width: 60%;
+  border-radius: 6px;
+}
+
+.skeleton .bars > span + span {
+  width: 40%;
+}
+
+.skeleton .ghost {
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+}
+
+@keyframes pulse {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0.45;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton .swatch,
+  .skeleton .bars > span,
+  .skeleton .ghost {
+    animation: none;
+  }
+}
+
+/*
+ * Phones: the row's controls leave the name more room. The ⋮ and play look the same; only their
+ * empty margins shrink, and each keeps a target at least 36px wide and 40px tall.
+ */
+@media (max-width: 480px) {
+  /* The card's side padding and the row button's overlay both follow it. */
+  .character {
+    --gutter: 12px;
+  }
+
+  .head {
+    column-gap: 8px;
+  }
+
+  .member-menu :deep(summary) {
+    min-width: 36px;
+  }
+
+  .preview {
+    width: 40px;
+    min-height: 40px;
+  }
+
+  /* One row of filters that scrolls sideways, so the sticky toolbar stays short. */
+  .toolbar {
+    gap: 6px;
+    padding-block: 6px;
+  }
+
+  .chips {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    margin-inline: calc(-1 * var(--gutter));
+    padding-inline: var(--gutter);
+    scrollbar-width: none;
+    overscroll-behavior-x: contain;
+  }
+
+  .chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .filter-chip {
+    flex: none;
+    min-height: 32px;
+    padding: 0 10px;
+    white-space: nowrap;
+  }
 }
 </style>

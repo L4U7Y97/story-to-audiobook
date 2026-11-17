@@ -23,7 +23,23 @@ import {
 
 vi.mock('@/ui/composables/usePlayer', () => import('../../helpers/ui').then((m) => m.playerStub()));
 
-afterEach(unmountView);
+/** Set by a test to keep the "not the same" pairs (read from the device) from being read yet. */
+const held = vi.hoisted(() => ({ notSame: undefined as Promise<void> | undefined }));
+vi.mock('@/storage/notSame', async (importOriginal) => {
+  const real = await importOriginal<typeof import('@/storage/notSame')>();
+  return {
+    ...real,
+    getNotSame: async (storyId: string) => {
+      if (held.notSame) await held.notSame;
+      return real.getNotSame(storyId);
+    },
+  };
+});
+
+afterEach(() => {
+  held.notSame = undefined;
+  unmountView();
+});
 
 // Watson told an earlier part, and the analysis made him a character there.
 const holmes: Chunk[] = [
@@ -33,18 +49,39 @@ const holmes: Chunk[] = [
   [' said Watson.', 'N', 'narration'],
 ];
 
-/** Opens the Cast view on a stored story. */
+/** The rows the list shows for a cast: every member but the minor characters folded away. */
+const rows = (host: HTMLElement) => host.querySelectorAll('li.card.character');
+
+/**
+ * Opens the Cast view on a stored story, once the list has taken the loading placeholder's place
+ * with a row for each member it shows (minor characters folded away are not on the page).
+ */
 async function openCast(story: StoredStory) {
   const host = await mountView(CastView, { id: story.storyId });
   const members = (await getStory(db, story.storyId))!.cast.length;
-  await until(() => host.querySelectorAll('li.card').length === members, 'the cards');
+  await until(() => !host.querySelector('.loading') && rows(host).length, 'the cast list');
+  // A folded fold row stands for the members it hides.
+  const folded = host.querySelector('.fold-toggle')
+    ? Number(host.querySelector('.fold-toggle .n')!.textContent)
+    : 0;
+  expect(rows(host).length + folded).toBe(members);
   return host;
 }
 
-/** Opens a member's card, as a tap on its row does, and gives it back once it shows. */
+/** The card's controls, once built and shown (they are built the first time it is opened). */
+const shownBody = (card: HTMLElement) => {
+  const body = card.querySelector<HTMLElement>('.body');
+  return body && body.style.display !== 'none' ? body : undefined;
+};
+
+/**
+ * Opens a member's card, as a tap on its row does, and gives it back once its controls show. A
+ * card already open stays open.
+ */
 async function openCard(card: HTMLElement): Promise<HTMLElement> {
-  card.querySelector<HTMLButtonElement>('h3 .toggle')!.click();
-  await until(() => card.querySelector<HTMLElement>('.body')!.style.display !== 'none', 'open');
+  const toggle = card.querySelector<HTMLButtonElement>('h3 .toggle')!;
+  if (toggle.getAttribute('aria-expanded') !== 'true') toggle.click();
+  await until(() => shownBody(card), 'the open card');
   return card;
 }
 
@@ -83,6 +120,8 @@ async function saveNames(
     submit(menu.querySelector('.rename')!);
   }
   if (name !== undefined && aliases === undefined) return;
+  // The "Other names" field is in the card, so the card is opened first.
+  await openCard(card);
   const input = card.querySelector<HTMLInputElement>('.editor .fields input')!;
   if (aliases !== undefined) typeInto(input, aliases);
   submit(card.querySelector('.editor .fields')!);
@@ -90,13 +129,13 @@ async function saveNames(
 
 /** A refused name: said in the card's editor (other names) or in the bar (a rename). */
 const clash = (card: HTMLElement) => card.querySelector('.editor .fields [role="alert"]');
+/** What a save of names earlier in a test may have left in the bar, which is not the refusal. */
+const SAVED_NOTES = ['Names saved.', 'No changes to save.'];
 const clashShown = (card: HTMLElement) =>
-  until(
-    () =>
-      clash(card)?.textContent?.trim() ||
-      document.querySelector('.snackbar .snack-text')?.textContent?.trim(),
-    'the name clash',
-  );
+  until(() => {
+    const bar = document.querySelector('.snackbar .snack-text')?.textContent?.trim();
+    return clash(card)?.textContent?.trim() || (SAVED_NOTES.includes(bar ?? '') ? '' : bar);
+  }, 'the name clash');
 
 /** Opens the merge sheet from a member's ⋯ menu ("Same person as…", "Give all these lines…"). */
 async function openMergeSheet(card: HTMLElement): Promise<HTMLElement> {
@@ -329,6 +368,7 @@ describe('the cast search', () => {
 
   it('keeps what is typed in a card’s editor while the card is searched out of view', async () => {
     const host = await openCast(await storeStory(holmes));
+    await openCard(cardOf(host, 'Watson'));
     const editor = cardOf(host, 'Watson').querySelector<HTMLDetailsElement>('details.names')!;
     editor.open = true;
     const nameInput = editor.querySelector<HTMLInputElement>('.editor .fields input')!;
@@ -350,6 +390,7 @@ describe('a member’s lines', () => {
   it('lists them, each linking to its line in the reader', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
+    await openCard(cardOf(host, 'Holmes'));
     const lines = cardOf(host, 'Holmes').querySelector<HTMLDetailsElement>('details.lines')!;
     expect(lines.querySelector('summary')!.textContent).toContain('Holmes’s lines');
     lines.open = true;
@@ -365,6 +406,7 @@ describe('a member’s lines', () => {
       `/story/${story.storyId}/read/${story.partId}?line=0`,
     );
 
+    await openCard(cardOf(host, 'Narrator'));
     const narrator = cardOf(host, 'Narrator').querySelector<HTMLDetailsElement>('details.lines')!;
     narrator.open = true;
     narrator.dispatchEvent(new Event('toggle'));
@@ -375,6 +417,7 @@ describe('a member’s lines', () => {
   it('is not offered to a member with no lines', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
+    expect(shownBody(await openCard(cardOf(host, 'Unknown speaker')))).toBeDefined();
     expect(cardOf(host, 'Unknown speaker').querySelector('details.lines')).toBeNull();
   });
 });
@@ -411,15 +454,20 @@ function traitSelect(card: HTMLElement, label: string): HTMLSelectElement {
   return found.querySelector('select')!;
 }
 
-/** Picks the option shown as `option` in a card's `label` list, as a tap on it does. */
-function chooseTrait(card: HTMLElement, label: string, option: string) {
+/** Picks the option shown as `option` in a card's `label` list, opening the card to reach it. */
+async function chooseTrait(card: HTMLElement, label: string, option: string) {
+  await openCard(card);
   const select = traitSelect(card, label);
   select.value = [...select.options].find((o) => o.textContent?.trim() === option)!.value;
   select.dispatchEvent(new Event('change'));
 }
 
-/** Picks the device voice called `name` ('' is the device default) in a card's voice sheet. */
+/**
+ * Picks the device voice called `name` ('' is the device default) in a card's voice sheet, opening
+ * the card to reach its voice button.
+ */
 async function chooseVoice(card: HTMLElement, name: string) {
+  await openCard(card);
   voiceButton(card).click();
   const row = await until(() => sheetRow(name), `the voice ${name}`);
   const use = button(row, 'Use');
@@ -449,18 +497,18 @@ describe('a member’s traits', () => {
   it('are summarised on the card: “not set”, then the ones chosen', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const card = cardOf(host, 'Holmes');
+    const card = await openCard(cardOf(host, 'Holmes'));
     expect(traitsSummary(card)).toBe('Traits: not set');
 
-    chooseTrait(card, 'Gender', 'Female');
+    await chooseTrait(card, 'Gender', 'Female');
     await until(() => traitsSummary(card) === 'Traits: female', 'the gender');
-    chooseTrait(card, 'Age', 'Child');
+    await chooseTrait(card, 'Age', 'Child');
     await until(() => traitsSummary(card) === 'Traits: female · child', 'the age');
     const saved = await storedMember(story, story.ids.Holmes!, (m) => m.age === 'child');
     expect(saved).toMatchObject({ gender: 'female', age: 'child' });
 
     // Back to "Not set" removes the trait rather than storing an empty one.
-    chooseTrait(card, 'Gender', 'Not set');
+    await chooseTrait(card, 'Gender', 'Not set');
     await until(() => traitsSummary(card) === 'Traits: child', 'the gender to go');
     const cleared = await storedMember(story, story.ids.Holmes!, (m) => m.gender === undefined);
     expect(Object.keys(cleared)).not.toContain('gender');
@@ -472,7 +520,7 @@ describe('a member’s traits', () => {
       characters: [{ name: 'Rex', age: 'elder', species: 'creature', size: 'large' }],
     });
     const host = await openCast(story);
-    const card = cardOf(host, 'Rex');
+    const card = await openCard(cardOf(host, 'Rex'));
     expect(traitsSummary(card)).toBe('Traits: elderly · fantasy · large');
     expect(traitSelect(card, 'Gender').value).toBe('');
     expect(traitSelect(card, 'Age').value).toBe('elder');
@@ -486,7 +534,7 @@ describe('a member’s traits', () => {
     stubVoices.push(david, plain, zira);
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    chooseTrait(cardOf(host, 'Holmes'), 'Gender', 'Female');
+    await chooseTrait(cardOf(host, 'Holmes'), 'Gender', 'Female');
     const saved = await storedMember(story, story.ids.Holmes!, (m) => m.gender === 'female');
     expect(saved.voice.voiceName).toBe(zira.name);
     expect(saved.voice.manual).toBeUndefined();
@@ -512,7 +560,7 @@ describe('a member’s traits', () => {
     };
     db.stories.hook('updating', failing);
     try {
-      chooseTrait(card, 'Gender', 'Female');
+      await chooseTrait(card, 'Gender', 'Female');
       const shown = await until(error, 'the error');
       expect(shown.textContent?.trim()).toBe('disk full');
       expect(shown.getAttribute('role')).toBe('alert');
@@ -526,7 +574,7 @@ describe('a member’s traits', () => {
     // The player is told of nothing: the cast is as it was.
     expect(castChanged).not.toHaveBeenCalled();
 
-    chooseTrait(card, 'Gender', 'Female');
+    await chooseTrait(card, 'Gender', 'Female');
     await storedMember(story, story.ids.Holmes!, (m) => m.gender === 'female');
     await until(() => !error(), 'the error to go');
     await playerTold(1);
@@ -541,16 +589,16 @@ describe('a member’s traits', () => {
     await storedMember(story, story.ids.Holmes!, (m) => m.voice.voiceName === david.name);
     await playerTold(1);
 
-    chooseTrait(card, 'Gender', 'Female');
+    await chooseTrait(card, 'Gender', 'Female');
     const kept = await storedMember(story, story.ids.Holmes!, (m) => m.gender === 'female');
     expect(kept.voice).toMatchObject({ voiceName: david.name, manual: true });
     const note = await until(() => keptNote(card), 'the note');
     expect(note.textContent?.trim().replace(/\s+/gu, ' ')).toBe(KEPT);
     // Nobody else's card says it.
-    expect(keptNote(cardOf(host, 'Watson'))).toBeNull();
+    expect(keptNote(await openCard(cardOf(host, 'Watson')))).toBeNull();
     await playerTold(2);
 
-    button(traitsOf(card), 'Re-pick voice')!.click();
+    button(traitsOf(await openCard(card)), 'Re-pick voice')!.click();
     const repicked = await storedMember(
       story,
       story.ids.Holmes!,
@@ -569,7 +617,7 @@ describe('a member’s traits', () => {
     const card = cardOf(host, 'Holmes');
     await chooseVoice(card, david.name);
     await storedMember(story, story.ids.Holmes!, (m) => m.voice.manual === true);
-    chooseTrait(card, 'Gender', 'Female');
+    await chooseTrait(card, 'Gender', 'Female');
     await until(() => keptNote(card), 'the note');
 
     await chooseVoice(card, zira.name);
@@ -584,14 +632,14 @@ describe('a member’s traits', () => {
     const card = cardOf(host, 'Holmes');
     await chooseVoice(card, zira.name);
     await storedMember(story, story.ids.Holmes!, (m) => m.voice.manual === true);
-    chooseTrait(card, 'Gender', 'Male');
+    await chooseTrait(card, 'Gender', 'Male');
     // Saves run one after another, so once Watson's shows, Holmes's is over.
-    chooseTrait(cardOf(host, 'Watson'), 'Gender', 'Male');
+    await chooseTrait(cardOf(host, 'Watson'), 'Gender', 'Male');
     await until(() => traitsSummary(cardOf(host, 'Watson')) === 'Traits: male', 'Watson’s save');
     expect(keptNote(card)).toBeNull();
 
     // A trait that does change brings the note.
-    chooseTrait(card, 'Size', 'Small');
+    await chooseTrait(card, 'Size', 'Small');
     await until(() => keptNote(card), 'the note for the size');
     const saved = await storedMember(story, story.ids.Holmes!, (m) => m.size === 'small');
     expect(saved).toMatchObject({ gender: 'male', voice: { voiceName: zira.name, manual: true } });
@@ -602,20 +650,24 @@ describe('a member’s traits', () => {
     stubVoices.push(david, zira);
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    chooseTrait(cardOf(host, 'Narrator'), 'Gender', 'Female');
+    await chooseTrait(cardOf(host, 'Narrator'), 'Gender', 'Female');
     const saved = await storedMember(story, story.ids.N!, (m) => m.gender === 'female');
     expect(saved.voice.voiceName).toBe(zira.name);
   });
 
   it('are not offered for the unknown speaker', async () => {
     const host = await openCast(await storeStory(holmes));
-    expect(cardOf(host, 'Unknown speaker').querySelector('details.traits')).toBeNull();
-    expect(cardOf(host, 'Narrator').querySelector('details.traits')).not.toBeNull();
+    const unknown = await openCard(cardOf(host, 'Unknown speaker'));
+    expect(shownBody(unknown)!.querySelector('details.names')).not.toBeNull();
+    expect(unknown.querySelector('details.traits')).toBeNull();
+    const narrator = await openCard(cardOf(host, 'Narrator'));
+    expect(narrator.querySelector('details.traits')).not.toBeNull();
   });
 
   it('come after the names editor in the card', async () => {
     const host = await openCast(await storeStory(holmes));
-    const blocks = [...cardOf(host, 'Holmes').querySelectorAll('.body details')];
+    const card = await openCard(cardOf(host, 'Holmes'));
+    const blocks = [...card.querySelectorAll('.body details')];
     expect(blocks.map((d) => d.querySelector('summary')!.textContent?.trim())).toEqual([
       'Other names',
       'Traits: not set',
@@ -636,7 +688,7 @@ describe('a change made before the device has listed its voices', () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
     const before = await castOf(story);
-    chooseTrait(cardOf(host, 'Holmes'), 'Gender', 'Female');
+    await chooseTrait(cardOf(host, 'Holmes'), 'Gender', 'Female');
     await pause();
     expect(await castOf(story)).toEqual(before);
 
@@ -651,7 +703,7 @@ describe('a change made before the device has listed its voices', () => {
     const story = await storeStory(holmes, woman);
     const host = await openCast(story);
     const before = await castOf(story);
-    button(traitsOf(cardOf(host, 'Holmes')), 'Re-pick voice')!.click();
+    button(traitsOf(await openCard(cardOf(host, 'Holmes'))), 'Re-pick voice')!.click();
     await pause();
     expect(await castOf(story)).toEqual(before);
 
@@ -680,7 +732,7 @@ describe('the voice picker', () => {
   it('tells the gender a voice’s name gives away, its accent, and which are online', async () => {
     stubVoices.push(zira, david, plain, { name: 'en-cloud', lang: 'en-GB', network: true });
     const host = await openCast(await storeStory(holmes));
-    voiceButton(cardOf(host, 'Holmes')).click();
+    voiceButton(await openCard(cardOf(host, 'Holmes'))).click();
     await until(() => sheetRow('en-cloud'), 'the voices');
     const titles = [...sheet()!.querySelectorAll('li .title')].map((t) =>
       t.textContent?.replace(/\s+/gu, ' ').trim(),
@@ -721,9 +773,9 @@ describe('the voice picker', () => {
   it('marks a voice whose pitch or speed was moved by hand as manual', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const [pitch, speed] = cardOf(host, 'Watson').querySelectorAll<HTMLInputElement>(
-      '.sliders input[type="range"]',
-    );
+    const [pitch, speed] = (
+      await openCard(cardOf(host, 'Watson'))
+    ).querySelectorAll<HTMLInputElement>('.sliders input[type="range"]');
     pitch!.value = '1.3';
     pitch!.dispatchEvent(new Event('change'));
     const pitched = await storedMember(story, story.ids.Watson!, (m) => m.voice.pitch === 1.3);
@@ -769,6 +821,7 @@ describe('“Match voices to traits”', () => {
     const saved = await storedMember(story, story.ids['the old man']!, (m) => m.age === 'elder');
     expect(saved).toMatchObject({ gender: 'male', age: 'elder', voice: { voiceName: david.name } });
     await playerTold(2);
+    await openCard(cardOf(host, 'the old man'));
     await until(
       () => traitsSummary(cardOf(host, 'the old man')) === 'Traits: male · elderly',
       'the old man’s traits',
@@ -877,7 +930,7 @@ describe('a card', () => {
   it('shows a pitch as it is dragged, and saves it only on release', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const card = cardOf(host, 'Watson');
+    const card = await openCard(cardOf(host, 'Watson'));
     const pitch = card.querySelector<HTMLInputElement>('.sliders input[type="range"]')!;
     const label = () => pitch.closest('label')!.querySelector('.dial-value')!.textContent?.trim();
     expect(label()).toBe('Normal');
@@ -907,7 +960,7 @@ describe('the voice rules', () => {
     stubVoices.push(zira, david);
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const card = cardOf(host, 'Holmes');
+    const card = await openCard(cardOf(host, 'Holmes'));
     expect(chip(card)).toBe('Automatic');
     expect(back(card)).toBeUndefined();
     // The picker is described by the chip, so a screen reader hears it with the voice.
@@ -961,9 +1014,8 @@ describe('the voice rules', () => {
 });
 
 describe('the compact list', () => {
-  const body = (card: HTMLElement) => card.querySelector<HTMLElement>('.body')!;
   const toggle = (card: HTMLElement) => card.querySelector<HTMLButtonElement>('h3 .toggle')!;
-  const isOpen = (card: HTMLElement) => body(card).style.display !== 'none';
+  const isOpen = (card: HTMLElement) => !!shownBody(card);
   const characterNames = (host: HTMLElement) =>
     [...host.querySelectorAll<HTMLElement>('section.group')[1]!.querySelectorAll('li.card')]
       .filter((li) => (li as HTMLElement).style.display !== 'none')
@@ -1076,6 +1128,25 @@ describe('the compact list', () => {
       await until(() => characterNames(host).join() === 'Gus', 'Gus');
       expect(fold(host).closest('li')!.style.display).toBe('none');
     });
+
+    it('leaves a folded row off the page until the fold opens; an opened card stays', async () => {
+      const story = await storeStory(chunks);
+      const host = await openCast(story);
+      const row = (name: string) => host.querySelector<HTMLElement>(`#member-${story.ids[name]}`);
+      expect(minor.map(row)).toEqual(minor.map(() => null));
+
+      fold(host).click();
+      const dee = await until(() => row('Dee'), 'Dee’s row');
+      expect(dee.style.display).toBe('');
+      await openCard(row('Eve')!);
+
+      // Folded again, a row never opened leaves the page; Eve's stays, hidden, with her controls.
+      fold(host).click();
+      await until(() => !row('Dee'), 'Dee’s row to go');
+      expect(row('Eve')!.style.display).toBe('none');
+      expect(row('Eve')!.querySelector('.body .editor')).not.toBeNull();
+      expect(characterNames(host)).toEqual(major);
+    });
   });
 });
 
@@ -1117,7 +1188,9 @@ describe('auditions', () => {
     const card = cardOf(host, 'Holmes');
     await open(card);
     const text = () => card.querySelector('.sample-text')!.textContent?.trim();
-    expect(text()).toBe(`“${LONG_1}”`);
+    // Shown once the parts' text is read; never the greeting meanwhile.
+    expect(text()).not.toContain('Hello, I am');
+    await until(() => text() === `“${LONG_1}”`, 'the line');
     button(card, 'Next line')!.click();
     await until(() => text() === `“${LONG_2}.”`, 'the next line');
     await until(() => spoken().includes(`${LONG_2}.`), 'the next line spoken');
@@ -1133,6 +1206,8 @@ describe('auditions', () => {
     const play = playButton(cardOf(host, 'Holmes'));
     play.click();
     await until(() => play.getAttribute('aria-pressed') === 'true', 'speaking');
+    // The line is spoken once the parts' text is read.
+    await until(() => previewed.mock.calls.length === 1, 'the preview');
     play.click();
     await until(() => play.getAttribute('aria-pressed') === 'false', 'stopped');
     expect(stopped).toHaveBeenCalledTimes(1);
@@ -1168,7 +1243,7 @@ describe('the voice sheet', () => {
   it('opens from the voice button, closes on Esc, and gives focus back to the button', async () => {
     stubVoices.push(zira, david);
     const host = await openCast(await storeStory(holmes));
-    const picker = voiceButton(cardOf(host, 'Holmes'));
+    const picker = voiceButton(await openCard(cardOf(host, 'Holmes')));
     expect(picker.textContent).toContain('Device default');
     picker.click();
     const dialog = await until(sheet, 'the sheet');
@@ -1191,7 +1266,7 @@ describe('the voice sheet', () => {
     await storedMember(story, story.ids.Watson!, (m) => m.voice.voiceName === david.name);
     previewed.mockClear();
 
-    voiceButton(cardOf(host, 'Holmes')).click();
+    voiceButton(await openCard(cardOf(host, 'Holmes'))).click();
     const row = await until(() => sheetRow(david.name), 'David’s row');
     expect(row.querySelector('.users')!.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
       'Also Watson',
@@ -1217,19 +1292,22 @@ describe('voices that sound alike', () => {
   }
   const note = (card: HTMLElement) =>
     card.querySelector('.alike')?.textContent?.replace(/\s+/gu, ' ').trim();
+  /** The note in a member's card, which is opened to show it. */
+  const noteOf = async (host: HTMLElement, name: string) =>
+    note(await openCard(cardOf(host, name)));
 
   it('warn about a character who sounds like the narrator, until another is picked', async () => {
     const story = await storeStory(holmes);
     await voices(story, { Narrator: 1, 'Unknown speaker': 1.3, Holmes: 1, Watson: 0.8 });
     const host = await openCast(story);
-    expect(note(cardOf(host, 'Holmes'))).toBe('Sounds like the narrator. Pick another voice');
-    expect(note(cardOf(host, 'Watson'))).toBeUndefined();
-    expect(note(cardOf(host, 'Narrator'))).toBeUndefined();
+    expect(await noteOf(host, 'Holmes')).toBe('Sounds like the narrator. Pick another voice');
+    expect(await noteOf(host, 'Watson')).toBeUndefined();
+    expect(await noteOf(host, 'Narrator')).toBeUndefined();
     expect(cardOf(host, 'Holmes').querySelector('.voice-sum')!.textContent).toContain(
       'sounds alike',
     );
 
-    button(cardOf(host, 'Holmes'), 'Pick another voice')!.click();
+    button(await openCard(cardOf(host, 'Holmes')), 'Pick another voice')!.click();
     await until(() => !note(cardOf(host, 'Holmes')), 'the warning to go');
   });
 
@@ -1237,7 +1315,7 @@ describe('voices that sound alike', () => {
     const story = await storeStory(holmes);
     await voices(story, { Narrator: 1, 'Unknown speaker': 1.3, Holmes: 1.2, Watson: 1.2 });
     const host = await openCast(story);
-    expect(note(cardOf(host, 'Holmes'))).toBe('Sounds close to Watson. Pick another voice');
+    expect(await noteOf(host, 'Holmes')).toBe('Sounds close to Watson. Pick another voice');
     const chips = [...host.querySelectorAll<HTMLButtonElement>('.filter-chip')];
     expect(chips.find((b) => b.textContent?.includes('Sound alike'))!.textContent).toContain('2');
 
@@ -1293,7 +1371,7 @@ describe('undo and feedback', () => {
     const host = await openCast(story);
     await mergeInto(cardOf(host, 'Watson'), 'Holmes');
     const bar = await until(snackbar, 'the bar');
-    chooseTrait(cardOf(host, 'Holmes'), 'Gender', 'Male');
+    await chooseTrait(cardOf(host, 'Holmes'), 'Gender', 'Male');
     await storedMember(story, story.ids.Holmes!, (m) => m.gender === 'male');
 
     button(bar, 'Undo')!.click();
@@ -1391,7 +1469,7 @@ describe('notifications', () => {
     };
     db.stories.hook('updating', failing);
     try {
-      chooseTrait(card, 'Gender', 'Male');
+      await chooseTrait(card, 'Gender', 'Male');
       await until(() => noteIn()?.textContent?.includes('disk full'), 'the failure');
     } finally {
       db.stories.hook('updating').unsubscribe(failing);
@@ -1550,12 +1628,18 @@ describe('duplicate cleanup', () => {
 
   it('shows a member’s few lines open in its card, and only in the open one', async () => {
     const host = await openCast(await storeStory(bob));
-    const lines = cardOf(host, 'Bob').querySelector<HTMLDetailsElement>('details.lines')!;
-    expect(lines.open).toBe(false);
+    // Closed, the card has no lines to show: they are built with its controls when it opens.
+    expect(cardOf(host, 'Bob').querySelector('details.lines')).toBeNull();
     await openCard(cardOf(host, 'Bob'));
+    const lines = cardOf(host, 'Bob').querySelector<HTMLDetailsElement>('details.lines')!;
     await until(() => lines.open && lines.querySelectorAll('ol a').length === 1, 'the line');
     // Robert's three lines are worked out only once his card opens.
     expect(cardOf(host, 'Robert').querySelectorAll('details.lines ol a')).toHaveLength(0);
+    await openCard(cardOf(host, 'Robert'));
+    const robert = cardOf(host, 'Robert').querySelector<HTMLDetailsElement>('details.lines')!;
+    await until(() => robert.open && robert.querySelectorAll('ol a').length === 3, 'his lines');
+    // Bob's card, closed again, no longer shows his open.
+    await until(() => !lines.open, 'Bob’s lines closed');
   });
 
   it('takes back a “Not the same” with Undo, and names the pair for screen readers', async () => {
@@ -1615,5 +1699,77 @@ describe('duplicate cleanup', () => {
       [...dialog.querySelectorAll('input[type="radio"]')].map((r) => r.getAttribute('name')),
     );
     expect(groups.size).toBe(2);
+  });
+});
+
+describe('while the cast is read', () => {
+  it('shows a “Loading the cast…” placeholder, then the list', async () => {
+    let release = () => {};
+    held.notSame = new Promise<void>((resolve) => (release = resolve));
+    const story = await storeStory(holmes);
+    const host = await mountView(CastView, { id: story.storyId });
+    const status = await until(
+      () => host.querySelector<HTMLElement>('.loading[role="status"]'),
+      'the placeholder',
+    );
+    expect(status.textContent?.trim()).toBe('Loading the cast…');
+    expect(status.querySelectorAll('.card.skeleton')).toHaveLength(5);
+    // The story and its analyses are read meanwhile; the list waits for all it needs.
+    await pause();
+    expect(host.querySelector('.loading')).not.toBeNull();
+    for (const missing of ['li.card', '.toolbar', 'section.group']) {
+      expect(host.querySelector(missing)).toBeNull();
+    }
+
+    release();
+    await until(() => !host.querySelector('.loading'), 'the placeholder to go');
+    expect([...rows(host)].map((li) => li.querySelector('h3')?.textContent?.trim())).toEqual([
+      'Narrator',
+      'Holmes',
+      'Watson',
+      'Unknown speaker',
+    ]);
+    expect(host.querySelector('.toolbar')).not.toBeNull();
+    expect(host.querySelector('.card.skeleton')).toBeNull();
+  });
+});
+
+describe('a story that is gone', () => {
+  it('says so, with a way back to the library, instead of loading for good', async () => {
+    const host = await mountView(CastView, { id: 'no-such-story' });
+    const gone = await until(() => host.querySelector<HTMLElement>('.empty.card'), 'the message');
+    expect(gone.textContent).toContain('This story is no longer in your library.');
+    expect(gone.querySelector('a')?.textContent?.trim()).toBe('Go to your stories');
+    expect(host.querySelector('.loading')).toBeNull();
+    expect(host.querySelector('section.group')).toBeNull();
+  });
+});
+
+describe('a card’s controls', () => {
+  it('are built when the card is first opened, and kept, with what is typed, once closed', async () => {
+    const host = await openCast(await storeStory(holmes));
+    // No card has them before it is opened.
+    expect(host.querySelector('li.card .body')).toBeNull();
+    const card = cardOf(host, 'Watson');
+    const toggle = card.querySelector<HTMLButtonElement>('h3 .toggle')!;
+    expect(toggle.hasAttribute('aria-controls')).toBe(false);
+
+    await openCard(card);
+    expect(toggle.getAttribute('aria-controls')).toBe(shownBody(card)!.id);
+    expect(card.querySelector('.voice-button')).not.toBeNull();
+    const input = card.querySelector<HTMLInputElement>('.editor .fields input')!;
+    typeInto(input, 'John');
+
+    toggle.click();
+    await until(() => !shownBody(card), 'the card to close');
+    // Hidden, not taken down: the same field, with what was typed in it.
+    expect(card.querySelector('.body')).not.toBeNull();
+    expect(card.querySelector('.editor .fields input')).toBe(input);
+    expect(input.value).toBe('John');
+    // Only the card opened has them.
+    expect(cardOf(host, 'Holmes').querySelector('.body')).toBeNull();
+
+    await openCard(card);
+    expect(card.querySelector<HTMLInputElement>('.editor .fields input')!.value).toBe('John');
   });
 });

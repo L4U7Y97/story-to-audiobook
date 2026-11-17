@@ -99,6 +99,49 @@ describe('suggestMerges', () => {
     ]);
   });
 
+  it('reads a name met again under other members the same way each time', () => {
+    // The same names come back as names and other names across the cast; each pair is judged
+    // as it was before names were read once per call.
+    const cast = [
+      member('Elizabeth Bennet', ['Lizzy', 'Miss Bennet', 'Eliza']),
+      member('Lizzy', ['Eliza']),
+      member('Mr. Darcy', ['Darcy', 'Fitzwilliam Darcy']),
+      member('Darcy', ['Mr. Darcy']),
+      member('Bennet'),
+      member('Jane Bennet', ['Jane', 'Miss Bennet']),
+      member('Jane', ['Jane Bennet']),
+      member('Mr. Bennet', ['Bennet']),
+      member('Fitzwilliam', ['Darcy']),
+      member('Eliza'),
+    ];
+    const lines = {
+      'Elizabeth Bennet': 30,
+      Lizzy: 2,
+      'Mr. Darcy': 20,
+      Darcy: 1,
+      Bennet: 3,
+      'Jane Bennet': 5,
+      Jane: 1,
+      'Mr. Bennet': 4,
+      Fitzwilliam: 2,
+      Eliza: 1,
+    };
+    const expected = [
+      'Lizzy → Elizabeth Bennet: “Lizzy” can be short for “Elizabeth Bennet”',
+      'Jane Bennet → Elizabeth Bennet: Both are called “Miss Bennet”',
+      'Eliza → Elizabeth Bennet: “Eliza” can be short for “Elizabeth Bennet”',
+      'Darcy → Mr. Darcy: “Mr. Darcy” and “Darcy” differ only by a title',
+      'Fitzwilliam → Mr. Darcy: “Mr. Darcy” and “Darcy” differ only by a title',
+      'Jane → Jane Bennet: “Jane” may be “Jane Bennet”',
+      'Bennet → Mr. Bennet: “Bennet” and “Mr. Bennet” differ only by a title',
+      'Eliza → Lizzy: Both are called “Eliza”',
+      'Darcy → Fitzwilliam: Both are called “Darcy”',
+    ];
+    expect(suggested(cast, lines)).toEqual(expected);
+    // A second call over the same cast says the same.
+    expect(suggested(cast, lines)).toEqual(expected);
+  });
+
   it('lists the pairs of the most heard characters first', () => {
     expect(
       suggested(['Robert', 'Bob', 'Mr. Darcy', 'Darcy'], { Robert: 2, 'Mr. Darcy': 20 }),

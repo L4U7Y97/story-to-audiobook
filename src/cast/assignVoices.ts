@@ -110,10 +110,22 @@ export function clashesWithNarrator(
 ): boolean {
   const name = spokenVoiceName(voice, deviceVoices);
   if (name !== spokenVoiceName(narratorVoice, deviceVoices)) return false;
-  const apart = Math.abs(hundredths(voice.pitch) - hundredths(narratorVoice.pitch));
+  return clashesInVoice(voice, narratorVoice, name);
+}
+
+/**
+ * clashesWithNarrator for two voices already known to be spoken with the same voice, `name`
+ * (spokenVoiceName of both): for checking a whole cast without resolving each voice again.
+ */
+export function clashesInVoice(
+  voice: VoiceSettings,
+  other: VoiceSettings,
+  name: string | undefined,
+): boolean {
+  const apart = Math.abs(hundredths(voice.pitch) - hundredths(other.pitch));
   // Without a voice name there is no saying the two share a voice, so only a twin clashes.
   if (name !== undefined && apart <= NARRATOR_GAP) return true;
-  return apart === 0 && hundredths(voice.rate) === hundredths(narratorVoice.rate);
+  return apart === 0 && hundredths(voice.rate) === hundredths(other.rate);
 }
 
 function pickVoice(

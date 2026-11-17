@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { AGE_GROUPS, GENDERS, SIZES, SPECIES } from '@/format/types';
 import type { Character, Traits, VoiceSettings } from '@/format/types';
-import { assignVoice, assignVoices, repickVoice } from '@/cast/assignVoices';
+import {
+  assignVoice,
+  assignVoices,
+  clashesInVoice,
+  clashesWithNarrator,
+  repickVoice,
+  spokenVoiceName,
+} from '@/cast/assignVoices';
 import { resolveVoice } from '@/cast/resolveVoice';
 import { cleanTraits } from '@/cast/traits';
 import type { DeviceVoice } from '@/playback/engine';
@@ -867,5 +874,89 @@ describe('repickVoice', () => {
       pitch: 1,
       rate: 1,
     });
+  });
+});
+
+describe('clashesInVoice', () => {
+  const zira = { name: 'Microsoft Zira - English (United States)', lang: 'en-US' };
+  const david = { name: 'Microsoft David - English (United States)', lang: 'en-US' };
+  const plain = { name: 'en-plain', lang: 'en-US' };
+  const jenny = 'Microsoft Jenny - English (United States)';
+  const mark = 'Microsoft Mark - English (United States)';
+  const kinds: Array<Pick<VoiceSettings, 'voiceName' | 'lang'>> = [
+    // The device's default voice.
+    { lang: 'en-US' },
+    { voiceName: zira.name, lang: 'en-US' },
+    { voiceName: david.name, lang: 'en-US' },
+    { voiceName: plain.name, lang: 'en-US' },
+    // Not installed: another voice reads instead (a woman's for a woman's).
+    { voiceName: jenny, lang: 'en-US' },
+    { voiceName: mark, lang: 'en-US' },
+    // Nothing installed in the language: no voice to name, or only the one stored.
+    { lang: 'de-DE' },
+    { voiceName: 'Thomas', lang: 'fr-FR' },
+  ];
+  const cast: VoiceSettings[] = [
+    ...kinds.flatMap((kind) =>
+      [1, 1.04, 1.05, 1.2].flatMap((pitch) => [1, 1.1].map((rate) => ({ ...kind, pitch, rate }))),
+    ),
+    // Twins with no voice name.
+    { lang: 'de-DE', pitch: 1, rate: 1 },
+  ];
+
+  /** Whom each voice clashes with, by index, checking every pair (clashesWithNarrator). */
+  const everyPair = (device: DeviceVoice[]) =>
+    cast.map((v, i) =>
+      cast.flatMap((o, j) => (i !== j && clashesWithNarrator(v, o, device) ? [j] : [])),
+    );
+  /**
+   * The same as the Cast page works it out: each voice resolved once, and only voices spoken
+   * with the same voice compared.
+   */
+  const bucketed = (device: DeviceVoice[]) => {
+    const spoken = cast.map((v) => resolveVoice(v, device).voiceName ?? v.voiceName);
+    const byVoice = new Map<string | undefined, number[]>();
+    spoken.forEach((name, i) => byVoice.set(name, [...(byVoice.get(name) ?? []), i]));
+    return cast.map((v, i) =>
+      byVoice.get(spoken[i])!.filter((j) => j !== i && clashesInVoice(v, cast[j]!, spoken[i])),
+    );
+  };
+  const at = (kind: Pick<VoiceSettings, 'voiceName' | 'lang'>, pitch: number, rate = 1) =>
+    cast.findIndex(
+      (v) =>
+        v.voiceName === kind.voiceName &&
+        v.lang === kind.lang &&
+        v.pitch === pitch &&
+        v.rate === rate,
+    );
+
+  it.each([
+    ['installed voices', [zira, david, plain]],
+    ['no voices listed', []],
+  ])('flags the same pairs as clashesWithNarrator, with %s', (_, device) => {
+    const expected = everyPair(device);
+    expect(bucketed(device)).toEqual(expected);
+    expect(expected.some((others) => others.length)).toBe(true);
+  });
+
+  it('flags a voice read in place of a missing one, and nameless twins only', () => {
+    const device = [zira, david, plain];
+    const flagged = bucketed(device);
+    const clashes = (a: number, b: number) => flagged[a]!.includes(b);
+    // Jenny is not installed, so Zira reads her: the two are a pitch step apart.
+    expect(spokenVoiceName({ voiceName: jenny, lang: 'en-US', pitch: 1, rate: 1 }, device)).toBe(
+      zira.name,
+    );
+    expect(clashes(at({ voiceName: jenny, lang: 'en-US' }, 1), at(kinds[1]!, 1.05))).toBe(true);
+    expect(clashes(at({ voiceName: jenny, lang: 'en-US' }, 1), at(kinds[1]!, 1.2))).toBe(false);
+    expect(clashes(at({ voiceName: mark, lang: 'en-US' }, 1.2), at(kinds[2]!, 1.2, 1.1))).toBe(
+      true,
+    );
+    // A stored name nobody can read here still names one voice.
+    expect(clashes(at(kinds[7]!, 1), at(kinds[7]!, 1.04, 1.1))).toBe(true);
+    // Without a name, only the very same pitch and speed.
+    const german = at(kinds[6]!, 1);
+    expect(flagged[german]).toEqual([cast.length - 1]);
+    expect(clashes(german, at(kinds[6]!, 1.04))).toBe(false);
   });
 });

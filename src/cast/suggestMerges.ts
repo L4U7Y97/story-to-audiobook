@@ -102,11 +102,31 @@ interface Why {
   lone?: { word: string; name: string };
 }
 
+/** A name as the rules read it, worked out once per call: parsing is the costly part. */
+interface Parsed {
+  norm: string;
+  words: Words;
+}
+type Parse = (name: string) => Parsed;
+
+function parser(): Parse {
+  const cache = new Map<string, Parsed>();
+  return (name) => {
+    let parsed = cache.get(name);
+    if (!parsed) {
+      parsed = { norm: normaliseName(name), words: split(name) };
+      cache.set(name, parsed);
+    }
+    return parsed;
+  };
+}
+
 /** Why names `a` and `b` (each as written) may name one person, or undefined. */
-function why(a: string, b: string): Why | undefined {
-  const [x, y]: [Words, Words] = [split(a), split(b)];
+function why(a: string, b: string, parse: Parse): Why | undefined {
+  const [pa, pb] = [parse(a), parse(b)];
+  const [x, y]: [Words, Words] = [pa.words, pb.words];
   const same = (p: string[], q: string[]) => p.join(' ') === q.join(' ');
-  if (normaliseName(a) === normaliseName(b)) return { reason: `Both are called ${quote(a)}` };
+  if (pa.norm === pb.norm) return { reason: `Both are called ${quote(a)}` };
 
   // The same name, one with a title ("Darcy", "Mr. Darcy"); two titles are two people. A
   // female title before a single name is a family name: "Miss Bingley" may be his sister.
@@ -163,10 +183,11 @@ function loneHolds(
   word: string,
   fullName: string,
   characters: readonly Character[],
+  parse: Parse,
 ): boolean {
-  const full = split(fullName).words.join(' ');
+  const full = parse(fullName).words.words.join(' ');
   for (const n of [loneMember.name, ...loneMember.aliases]) {
-    const w = split(n);
+    const w = parse(n).words;
     if (w.title) return false;
     if (w.words.length > 1 && w.words.join(' ') !== full) return false;
   }
@@ -174,7 +195,7 @@ function loneHolds(
     (c) =>
       c.id !== loneMember.id &&
       [c.name, ...c.aliases].some((n) => {
-        const w = split(n);
+        const w = parse(n).words;
         return !w.title && w.words.length > 1 && (w.words[0] === word || w.words.at(-1) === word);
       }),
   );
@@ -194,6 +215,7 @@ export function suggestMerges(
 ): MergeSuggestion[] {
   const characters = cast.filter((c) => c.role === 'character');
   const count = (c: Character) => lines.get(c.id) ?? 0;
+  const parse = parser();
   const found: Array<MergeSuggestion & { weight: number }> = [];
   characters.forEach((a, i) => {
     for (const b of characters.slice(i + 1)) {
@@ -201,12 +223,12 @@ export function suggestMerges(
       let reason: string | undefined;
       for (const na of [a.name, ...a.aliases]) {
         for (const nb of [b.name, ...b.aliases]) {
-          const found = reason ? undefined : why(na, nb);
+          const found = reason ? undefined : why(na, nb, parse);
           if (!found) continue;
           if (found.lone) {
             const lone = found.lone.name === na ? a : b;
             const fullName = found.lone.name === na ? nb : na;
-            if (!loneHolds(lone, found.lone.word, fullName, characters)) continue;
+            if (!loneHolds(lone, found.lone.word, fullName, characters, parse)) continue;
           }
           reason = found.reason;
         }

@@ -12,6 +12,7 @@ import {
   mergeCharacters,
   parseAliases,
   partsToldBy,
+  partsToldByAll,
   renameCharacter,
   repickMember,
   setAliases,
@@ -1130,6 +1131,39 @@ describe('partsToldBy', () => {
     });
     expect(partsToldBy([{ ...before, segments }], 'amy', 'narrator')).toBe(1);
     expect(partsToldBy([{ ...before, segments }], 'narrator', 'narrator')).toBe(0);
+  });
+
+  it('counts everyone at once as partsToldBy counts each (partsToldByAll)', () => {
+    const analyses = [
+      narrated('p1', [
+        ['amy', 10],
+        ['narrator', 5],
+      ]),
+      narrated('p2', [['narrator', 8]]),
+      narrated('p3', [
+        ['amy', 4],
+        ['narrator', 4],
+      ]),
+      narrated('p4', [
+        ['bob', 3],
+        ['amy', 2],
+        ['bob', 3],
+      ]),
+      narrated('p5', [
+        ['narrator', 1],
+        ['bob', 9],
+      ]),
+      analysis('p6', ['amy', 'amy']),
+      undefined,
+    ];
+    const told = partsToldByAll(analyses, 'narrator');
+    for (const id of ['amy', 'bob', 'narrator', 'nick']) {
+      expect(told.get(id) ?? 0, id).toBe(partsToldBy(analyses, id, 'narrator'));
+    }
+    expect(Object.fromEntries(told)).toEqual({ amy: 1, bob: 2, narrator: 3 });
+    // Every analysed part has one teller; a part not analysed has none.
+    expect([...told.values()].reduce((a, b) => a + b)).toBe(6);
+    expect(partsToldByAll([undefined], 'narrator').size).toBe(0);
   });
 });
 

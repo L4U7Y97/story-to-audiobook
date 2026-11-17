@@ -74,6 +74,29 @@ describe('mergeCharacters', () => {
     character('b', 'Miss Bennet', ['Eliza', 'lizzy']),
   ];
 
+  it('gives the lines of a name that was never anyone to the unknown speaker, for good', () => {
+    const result = mergeCharacters(cast, [analysis('p1', ['b', 'a'])], 'b', 'unknown', {
+      notACharacter: true,
+    });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.cast.map((c) => c.id)).toEqual(['narrator', 'unknown', 'a']);
+    // Its names go to the unknown speaker, so later parts give them to it too.
+    expect(result.value.cast[1]!.aliases).toEqual(['Miss Bennet', 'Eliza', 'lizzy']);
+    const [moved, kept] = result.value.analyses[0]!.segments;
+    expect(moved).toMatchObject({ speakerId: 'unknown', source: 'user' });
+    expect(kept).toMatchObject({ speakerId: 'a', source: 'heuristic' });
+  });
+
+  it('sets the voice the one left speaks with, when given, as chosen by hand', () => {
+    const voice = { voiceName: 'v', lang: 'en-GB', pitch: 1.2, rate: 0.9 };
+    const result = mergeCharacters(cast, [], 'b', 'a', { voice });
+    expect(result.ok && result.value.cast.find((c) => c.id === 'a')!.voice).toEqual({
+      ...voice,
+      manual: true,
+    });
+  });
+
   it('moves every line and folds names into aliases', () => {
     const result = mergeCharacters(
       cast,

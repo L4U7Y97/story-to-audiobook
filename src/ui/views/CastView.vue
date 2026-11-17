@@ -32,6 +32,10 @@ import { cleanTraits, TRAIT_KEYS, withTraits } from '@/cast/traits';
 import { voiceProfile } from '@/cast/voiceProfile';
 import CastFilter from '../components/CastFilter.vue';
 import VoiceSheet from '../components/VoiceSheet.vue';
+import MergeSheet from '../components/MergeSheet.vue';
+import ActionsMenu from '../components/ActionsMenu.vue';
+import { pairKey, suggestMerges } from '@/cast/suggestMerges';
+import { addNotSame, getNotSame, removeNotSame } from '@/storage/notSame';
 import CharacterEditor from '../components/CharacterEditor.vue';
 import CharacterTraits from '../components/CharacterTraits.vue';
 import { useLiveQuery } from '../composables/useLiveQuery';
@@ -62,6 +66,8 @@ const linesOpen = ref(new Set<string>());
 /** How many of a member's lines are listed; "Show more" raises it. */
 const linesShown = ref(new Map<string, number>());
 const LINES_PAGE = 50;
+/** A member with this many lines or fewer shows them open in its card: they decide a merge. */
+const SHORT_LINES = 3;
 function onLinesToggle(c: Character, event: Event) {
   const next = new Set(linesOpen.value);
   if ((event.target as HTMLDetailsElement).open) next.add(c.id);
@@ -77,13 +83,19 @@ function showMoreLines(c: Character) {
  * Each open member's lines with their part's title and text. Lines of a part whose analysis is
  * out of date are left out: the reader doesn't show them, so a link would lead nowhere.
  */
+/** The analyses that still fit their part's text: an edited part's old one is left out. */
+const currentAnalyses = computed(() => {
+  const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
+  return (analyses.value ?? []).filter((a) => a && byId.get(a.partId)?.textHash === a.textHash);
+});
 const memberLines = computed(() => {
   const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
-  const current = (analyses.value ?? []).filter(
-    (a) => a && byId.get(a.partId)?.textHash === a.textHash,
-  );
+  const current = currentAnalyses.value;
+  // A member with a few lines shows them open in its card, so they are worked out when it is.
+  const ids = new Set(linesOpen.value);
+  if (openId.value && (usage.value?.get(openId.value) ?? 0) <= SHORT_LINES) ids.add(openId.value);
   return new Map(
-    [...linesOpen.value].map((id) => [
+    [...ids].map((id) => [
       id,
       linesOf(current, id).map((l) => {
         const part = byId.get(l.partId)!;
@@ -113,6 +125,11 @@ const notes = ref(new Map<string, Note>());
 const NOTE_MS = 4000;
 const noteTimers = new Map<string, ReturnType<typeof setTimeout>>();
 function note(at: string, text?: string, error = false) {
+  // A change made from a row, the ⋯ menu or the duplicates panel: the card isn't open to say it.
+  if (text && at !== PAGE && openId.value !== at) {
+    note(at);
+    return showSnack({ text });
+  }
   const next = new Map(notes.value);
   if (text) next.set(at, { text, error });
   else next.delete(at);
@@ -356,7 +373,11 @@ async function changeCast(change: () => Promise<void>, at: string): Promise<bool
  * The last change that can be undone, and what the bar at the bottom says of it. Shallow: the
  * undo is written back to IndexedDB as it is, and a reactive proxy of it can't be stored.
  */
-const snack = shallowRef<{ text: string; undo?: CastUndo }>();
+const snack = shallowRef<Snack>();
+interface Snack {
+  text: string;
+  undo?: () => Promise<void>;
+}
 /**
  * A change that can be undone: saved as changeCast does, then offered in the bar with `text`.
  * Tells whether it was saved, and whether it changed anything.
@@ -370,14 +391,24 @@ async function withUndo(
   const ok = await changeCast(async () => {
     undo = await recordCastChange(db, props.id, change);
   }, at);
-  if (ok && undo) showSnack({ text, undo });
-  return { ok, changed: !!undo };
+  const recorded = undo;
+  if (ok && recorded) {
+    showSnack({
+      text,
+      undo: async () => {
+        await undoCastChange(db, recorded);
+        nameClash.value = undefined;
+        player.castChanged();
+      },
+    });
+  }
+  return { ok, changed: !!recorded };
 }
 /** How long the bar stays; pointing at it or focusing it holds it, so Undo can't slip away. */
 const SNACK_MS = 5000;
 let snackTimer: ReturnType<typeof setTimeout> | undefined;
 let snackHeld = false;
-function showSnack(next?: { text: string; undo?: CastUndo }) {
+function showSnack(next?: Snack) {
   snack.value = next;
   armSnack();
 }
@@ -398,10 +429,8 @@ async function undoLast() {
   const undo = snack.value?.undo;
   if (!undo) return;
   try {
-    await undoCastChange(db, undo);
+    await undo();
     showSnack({ text: 'Undone.' });
-    nameClash.value = undefined;
-    player.castChanged();
   } catch (e) {
     showSnack({ text: e instanceof Error ? e.message : String(e) });
   }
@@ -545,7 +574,7 @@ function speakable(raw: string): string {
 /** The lines a preview of `c` can play, in story order: those of a good length, else the longest. */
 function samplesOf(c: Character): string[] {
   const byId = new Map((parts.value ?? []).map((p) => [p.id, p]));
-  const texts = linesOf(analyses.value ?? [], c.id).flatMap((l) => {
+  const texts = linesOf(currentAnalyses.value, c.id).flatMap((l) => {
     const part = byId.get(l.partId);
     return part ? [speakable(part.text.slice(l.segment.start, l.segment.end))] : [];
   });
@@ -644,48 +673,194 @@ async function replay(id: string) {
   if (member) await preview(member);
 }
 
-async function saveNames(character: Character, changes: { name: string; aliases: string[] }) {
+/** Saves a member's names; tells whether they were saved (or had nothing to save). */
+async function saveNames(
+  character: Character,
+  changes: { name: string; aliases: string[] },
+): Promise<boolean> {
   const s = story.value;
-  if (!s) return;
+  if (!s) return false;
   const same = (a: string[], b: string[]) => a.length === b.length && a.every((x, i) => x === b[i]);
   if (changes.name.trim() === character.name && same(changes.aliases, character.aliases)) {
     nameClash.value = undefined;
-    return note(character.id, 'No changes to save.');
+    note(character.id, 'No changes to save.');
+    return true;
   }
   // A name, or one of the other names, that someone else already has is refused.
   const clash = findNameClash(s.cast, character.id, changes, s.narratorId);
-  if (clash) return void (nameClash.value = { id: character.id, name: clash.name });
+  if (clash) {
+    nameClash.value = { id: character.id, name: clash.name };
+    return false;
+  }
   nameClash.value = undefined;
   const renamed = renameCharacter(s.cast, character.id, changes.name);
-  if (!renamed.ok) return note(character.id, renamed.reason, true);
+  if (!renamed.ok) {
+    note(character.id, renamed.reason, true);
+    return false;
+  }
   // Keep the alias renameCharacter adds for the old name alongside the edited list.
   const added = renamed.value
     .find((c) => c.id === character.id)!
     .aliases.filter((a) => !character.aliases.includes(a));
   const aliases = [...new Set([...changes.aliases, ...added])];
   const result = setAliases(renamed.value, character.id, aliases);
-  if (!result.ok) return note(character.id, result.reason, true);
+  if (!result.ok) {
+    note(character.id, result.reason, true);
+    return false;
+  }
   const saved = await changeCast(() => updateStory(db, s.id, { cast: result.value }), character.id);
   if (saved) note(character.id, 'Names saved.');
+  return saved;
 }
 
-async function merge(character: Character, intoId: string) {
+/** "Rename" in a member's ⋯ menu; a refused name opens its card, where the editor says why. */
+async function renameFromMenu(character: Character, name: string) {
+  const saved = await saveNames(character, { name, aliases: character.aliases });
+  // A refused name is explained in the bar: the card, where the editor would say it, is closed.
+  if (!saved && nameClash.value?.id === character.id) {
+    const why = clashText.value;
+    nameClash.value = undefined;
+    if (why) showSnack({ text: why });
+  }
+  await nextTick();
+  document.querySelector<HTMLElement>(`#member-${character.id} .member-menu summary`)?.focus();
+}
+
+/**
+ * Merges `character` into `intoId`. With `voiceOf` its own id, the one left speaks with the
+ * voice of the one removed (chosen in the merge sheet); both are undone together.
+ */
+async function merge(character: Character, intoId: string, voiceOf = intoId) {
   const into = story.value?.cast.find((c) => c.id === intoId);
   if (!into) return;
   const lines = linesOfMember(character);
   const moved = lines ? ` · ${count(lines, 'line')} moved` : '';
+  const keepsVoice = voiceOf === character.id;
+  const withVoice = keepsVoice ? `, with ${character.name}’s voice` : '';
   const text =
     character.role === 'character'
-      ? `${character.name} merged into ${into.name}${moved}.`
+      ? `${character.name} merged into ${into.name}${withVoice}${moved}.`
       : `${character.name}’s lines given to ${into.name}${moved}.`;
+  const { voiceName, lang, pitch, rate } = character.voice;
+  const voice: VoiceSettings = { lang, pitch, rate, ...(voiceName ? { voiceName } : {}) };
   const { ok } = await withUndo(text, character.id, () =>
-    mergeCharactersInStory(db, props.id, character.id, intoId),
+    mergeCharactersInStory(db, props.id, character.id, intoId, keepsVoice ? { voice } : {}),
   );
   if (!ok) return;
   // A refused name's message described the cast before this merge, often the merge it suggested.
   nameClash.value = undefined;
   flash(into.id);
   goToMember(into);
+}
+
+/** "Not a character" (⋯ menu): its lines go to the unknown speaker, its names to nobody. */
+async function notACharacter(character: Character) {
+  const unknown = story.value?.cast.find((c) => c.role === 'unknown');
+  if (!unknown) return;
+  const lines = linesOfMember(character);
+  const moved = lines ? ` · ${count(lines, 'line')} now read by ${unknown.name}` : '';
+  // Its row goes: focus moves to the row after it, or before it.
+  const rows = [...document.querySelectorAll<HTMLElement>('li.card.character')].filter(
+    (r) => r.offsetParent !== null || r.id === `member-${character.id}`,
+  );
+  const at = rows.findIndex((r) => r.id === `member-${character.id}`);
+  const neighbour = rows[at + 1] ?? rows[at - 1];
+  const { ok } = await withUndo(
+    `${character.name} taken out of the cast${moved}.`,
+    character.id,
+    () => mergeCharactersInStory(db, props.id, character.id, unknown.id, { notACharacter: true }),
+  );
+  if (ok) void nextTick(() => neighbour?.querySelector<HTMLElement>('.toggle')?.focus());
+}
+const unknownName = computed(
+  () => story.value?.cast.find((c) => c.role === 'unknown')?.name ?? 'the unknown speaker',
+);
+
+/** The merge sheet ("Same person as…") and the character it is for. */
+const mergeSheetFor = ref<string>();
+const mergeMember = computed(() => story.value?.cast.find((c) => c.id === mergeSheetFor.value));
+/** What had focus when the sheet opened, to give it back on close. */
+let mergeOpener: HTMLElement | undefined;
+function openMergeSheet(c: Character) {
+  const active = document.activeElement instanceof HTMLElement ? document.activeElement : undefined;
+  // A menu item is hidden once its menu closes: its menu's ⋯ button takes the focus back.
+  mergeOpener =
+    active?.closest('.member-menu')?.querySelector<HTMLElement>('summary') ?? active ?? undefined;
+  mergeSheetFor.value = c.id;
+}
+function closeMergeSheet() {
+  const id = mergeSheetFor.value;
+  mergeSheetFor.value = undefined;
+  // Back to what opened it; from the ⋯ menu, which has closed, to the menu's button.
+  void nextTick(() => {
+    const shown =
+      mergeOpener?.isConnected &&
+      !mergeOpener.closest('details:not([open]) > :not(summary)') &&
+      mergeOpener.offsetParent !== null;
+    const target = shown
+      ? mergeOpener
+      : document.querySelector<HTMLElement>(`#member-${id} .member-menu summary`);
+    target?.focus();
+  });
+}
+function onSheetMerge(choice: { fromId: string; intoId: string; voiceOf: string }) {
+  const from = story.value?.cast.find((c) => c.id === choice.fromId);
+  mergeSheetFor.value = undefined;
+  if (from) void merge(from, choice.intoId, choice.voiceOf);
+}
+/** A member's first line, as read aloud (no quote marks), for comparing two in the merge sheet. */
+function firstLineOf(c: Character): string {
+  const line = linesOf(currentAnalyses.value, c.id)[0];
+  const part = line && (parts.value ?? []).find((p) => p.id === line.partId);
+  return line && part ? speakable(part.text.slice(line.segment.start, line.segment.end)) : '';
+}
+function voiceWords(c: Character): string {
+  const t = voiceTitle(c);
+  return [t.title, ...t.tags].join(' · ');
+}
+
+/** Pairs the user said are not one person; kept on this device for the story. */
+const notSame = ref(new Set<string>());
+onMounted(async () => {
+  notSame.value = await getNotSame(props.id);
+});
+/** The way round chosen with "Swap", by pair: who merges (its id). */
+const chosenFrom = ref(new Map<string, string>());
+const SUGGESTIONS_SHOWN = 5;
+const allSuggestions = ref(false);
+/** Characters that may be one person (suggestMerges), each the way round it would merge. */
+const suggestions = computed(() => {
+  const cast = story.value?.cast ?? [];
+  const byId = new Map(cast.map((c) => [c.id, c]));
+  return suggestMerges(cast, usage.value ?? new Map(), notSame.value).flatMap((s) => {
+    const key = pairKey(s.fromId, s.intoId);
+    const turned = chosenFrom.value.get(key) === s.intoId;
+    const [fromId, intoId] = turned ? [s.intoId, s.fromId] : [s.fromId, s.intoId];
+    const [from, into] = [byId.get(fromId), byId.get(intoId)];
+    return from && into ? [{ key, from, into, reason: s.reason }] : [];
+  });
+});
+type Suggestion = (typeof suggestions.value)[number];
+function swap(s: Suggestion) {
+  const next = new Map(chosenFrom.value);
+  next.set(s.key, s.into.id);
+  chosenFrom.value = next;
+}
+/** "Not the same": not suggested again (Undo takes it back); focus moves to the next one. */
+async function notTheSame(s: Suggestion, index: number) {
+  notSame.value = await addNotSame(props.id, s.key);
+  showSnack({
+    text: `${s.from.name} and ${s.into.name} won’t be suggested again.`,
+    undo: async () => {
+      notSame.value = await removeNotSame(props.id, s.key);
+    },
+  });
+  await nextTick();
+  const rows = document.querySelectorAll<HTMLElement>('.dupes .dupe');
+  const next = rows[index] ?? rows[index - 1];
+  (
+    next?.querySelector<HTMLElement>('button') ?? document.getElementById('group-character')
+  )?.focus();
 }
 
 /**
@@ -699,17 +874,21 @@ function clashMessage(name: string, editing: Character, owner: Character): strin
   const who = ownName ? '' : ` as “${owner.name}”`;
   const taken = `“${name.trim()}” is already in the cast${who}.`;
   if (owner.role === 'unknown') {
-    const free = ownName ? 'change its name' : 'remove it from “Other names”';
-    return `${taken} To give it to ${editing.name}, open ${owner.name}’s card and ${free} first.`;
+    const free = ownName
+      ? `rename ${owner.name} (⋯ menu)`
+      : `remove it from ${owner.name}’s other names`;
+    return `${taken} To give it to ${editing.name}, first ${free}.`;
   }
-  if (editing.role === 'character') return `${taken} Use “Same person as…” to merge them.`;
+  if (editing.role === 'character') {
+    return `${taken} Use “Same person as…” in the ⋯ menu to merge them.`;
+  }
   if (editing.role === 'unknown') {
-    return `${taken} To have ${owner.name} read these lines, use “Give all these lines to…”.`;
+    return `${taken} To have ${owner.name} read these lines, use “Give all these lines to…” in the ⋯ menu.`;
   }
   if (owner.role !== 'character') return taken;
   return (
-    `${taken} If ${owner.name} tells the whole story, open ${owner.name}’s card and use ` +
-    `“Same person as… ${editing.name}” to merge them.`
+    `${taken} If ${owner.name} tells the whole story, use “Same person as…” in ` +
+    `${owner.name}’s ⋯ menu and choose ${editing.name}.`
   );
 }
 
@@ -790,7 +969,7 @@ function toldLabel(c: Character): string {
       class="group"
       :aria-labelledby="`group-${g.role}`"
     >
-      <h2 :id="`group-${g.role}`">
+      <h2 :id="`group-${g.role}`" tabindex="-1">
         {{ g.title }}
         <span v-if="g.role === 'character' && g.members.length" class="count">
           {{ g.members.length }}
@@ -810,7 +989,69 @@ function toldLabel(c: Character): string {
             {{ notes.get(PAGE)!.text }}
           </p>
         </div>
-        <p v-else-if="story" class="empty card">
+        <!-- Closed at first: a long book can have many, and they wait until wanted. -->
+        <details v-if="suggestions.length && !filtering" class="dupes">
+          <summary class="chevron">
+            Possible duplicates <span class="count">{{ suggestions.length }}</span>
+          </summary>
+          <ul>
+            <li
+              v-for="(s, i) in allSuggestions
+                ? suggestions
+                : suggestions.slice(0, SUGGESTIONS_SHOWN)"
+              :key="s.key"
+              class="dupe"
+            >
+              <p class="pair">
+                <span class="who" :style="{ '--tint': speakerTint(colors, s.from.id) }"
+                  ><span class="dot" aria-hidden="true" />{{ s.from.name }}</span
+                >
+                <span aria-hidden="true">&nbsp;→&nbsp;</span>
+                <span class="sr-only">&nbsp;into&nbsp;</span>
+                <span class="who" :style="{ '--tint': speakerTint(colors, s.into.id) }"
+                  ><span class="dot" aria-hidden="true" />{{ s.into.name }}</span
+                >
+              </p>
+              <p class="muted small reason">
+                {{ s.reason }} · {{ count(linesOfMember(s.from), 'line') }} and
+                {{ count(linesOfMember(s.into), 'line') }}
+              </p>
+              <div class="dupe-actions">
+                <button
+                  type="button"
+                  :aria-label="`Merge ${s.from.name} into ${s.into.name}`"
+                  @click="merge(s.from, s.into.id)"
+                >
+                  Merge
+                </button>
+                <button
+                  type="button"
+                  :aria-label="`Swap: merge ${s.into.name} into ${s.from.name} instead`"
+                  @click="swap(s)"
+                >
+                  Swap
+                </button>
+                <button
+                  type="button"
+                  class="link"
+                  :aria-label="`${s.from.name} and ${s.into.name} are not the same person`"
+                  @click="notTheSame(s, i)"
+                >
+                  Not the same
+                </button>
+              </div>
+            </li>
+          </ul>
+          <button
+            v-if="suggestions.length > SUGGESTIONS_SHOWN"
+            type="button"
+            class="link"
+            @click="allSuggestions = !allSuggestions"
+          >
+            {{ allSuggestions ? 'Show fewer' : `Show all ${suggestions.length}` }}
+          </button>
+        </details>
+        <p v-else-if="story && !hasCharacters" class="empty card">
           <template v-if="analysed">No characters were found in the analysed parts.</template>
           <template v-else>Characters appear here once a part has been analysed.</template>
           <RouterLink :to="{ name: 'story', params: { id } }">Go to the parts</RouterLink>
@@ -880,6 +1121,30 @@ function toldLabel(c: Character): string {
                 </div>
               </div>
               <span class="chev" aria-hidden="true" />
+              <ActionsMenu
+                class="member-menu"
+                :title="c.name"
+                noun="character"
+                :reorderable="false"
+                :removable="c.role === 'character'"
+                delete-label="Not a character"
+                :confirm-delete-label="`Tap again: their lines go to ${unknownName}`"
+                field-label="Name"
+                @rename="renameFromMenu(c, $event)"
+                @remove="notACharacter(c)"
+              >
+                <template #default="{ act }">
+                  <button role="menuitem" @click="act(() => openMergeSheet(c))">
+                    {{
+                      c.role === 'character'
+                        ? 'Same person as…'
+                        : c.role === 'narrator'
+                          ? 'Give all these lines, in every part, to…'
+                          : 'Give all these lines to…'
+                    }}
+                  </button>
+                </template>
+              </ActionsMenu>
               <button
                 class="preview"
                 :class="{ speaking: speaking === c.id }"
@@ -1013,13 +1278,11 @@ function toldLabel(c: Character): string {
               </div>
 
               <details class="names">
-                <summary class="chevron">Edit names or merge</summary>
+                <summary class="chevron">Other names</summary>
                 <CharacterEditor
                   :character="c"
-                  :cast="story?.cast ?? []"
                   :name-error="nameClash?.id === c.id ? clashText : undefined"
                   @save="saveNames(c, $event)"
-                  @merge="merge(c, $event)"
                 />
               </details>
 
@@ -1031,7 +1294,12 @@ function toldLabel(c: Character): string {
                 @repick="repickVoice(c)"
               />
 
-              <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
+              <details
+                v-if="usage?.get(c.id)"
+                class="lines"
+                :open="openId === c.id && linesOfMember(c) <= SHORT_LINES"
+                @toggle="onLinesToggle(c, $event)"
+              >
                 <summary class="chevron">See {{ c.name }}’s lines</summary>
                 <template v-if="memberLines.get(c.id)">
                   <p v-if="!memberLines.get(c.id)!.length" class="muted small">
@@ -1092,6 +1360,18 @@ function toldLabel(c: Character): string {
         </button>
       </div>
     </div>
+
+    <MergeSheet
+      v-if="mergeMember"
+      :member="mergeMember"
+      :cast="story?.cast ?? []"
+      :colors="colors"
+      :lines="usage ?? new Map()"
+      :first-line="firstLineOf"
+      :voice-of="voiceWords"
+      @merge="onSheetMerge"
+      @close="closeMergeSheet"
+    />
 
     <VoiceSheet
       v-if="sheetMember"
@@ -1212,7 +1492,7 @@ function toldLabel(c: Character): string {
 .head {
   position: relative;
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   gap: 4px 12px;
   align-items: center;
 }
@@ -1533,6 +1813,75 @@ function toldLabel(c: Character): string {
   padding: 0;
   border: 0;
   background: none;
+}
+
+/* Above the row's button, which covers the rest of the row; open, above the rows after it. */
+.member-menu {
+  z-index: 1;
+}
+
+.member-menu[open] {
+  z-index: 5;
+}
+
+.dupes {
+  margin-top: 12px;
+  padding: 0 var(--gutter);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius);
+}
+
+.dupes[open] {
+  padding-bottom: 12px;
+}
+
+.dupes > summary {
+  color: var(--fg);
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.dupes > ul {
+  margin-bottom: 8px;
+}
+
+.dupes ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 12px;
+}
+
+.dupe {
+  display: grid;
+  gap: 4px;
+}
+
+.pair {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-weight: 600;
+}
+
+.pair .who {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.reason {
+  margin: 0;
+}
+
+.dupe-actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
 }
 
 .card-note {

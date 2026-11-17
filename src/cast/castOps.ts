@@ -1,4 +1,4 @@
-import type { Analysis, Character, Segment, Traits } from '@/format/types';
+import type { Analysis, Character, Segment, Traits, VoiceSettings } from '@/format/types';
 import { isDefaultName, NARRATOR_NAME, normaliseName } from '@/analysis/castMatch';
 import { tellerOf } from '@/analysis/reassign';
 import { clashesWithNarrator, repickVoice, spokenVoiceName } from '@/cast/assignVoices';
@@ -15,12 +15,19 @@ export type CastOpResult<T> = { ok: true; value: T } | { ok: false; reason: stri
  * them moves their lines as user corrections, so a re-analysis keeps the move. The narrator also
  * hands the names it was given to `into` and goes back to its default name (NARRATOR_NAME); the
  * unknown speaker keeps its names.
+ *
+ * `notACharacter` is for a name that was never anyone ("the footman" read as a speaker, a place),
+ * merged into the unknown speaker: the moved lines count as user corrections, and the names go to
+ * the unknown speaker as usual, so the analysers give them to it in later parts instead of making
+ * the character again. `voice` is the voice `into` speaks with afterwards (the one removed's,
+ * chosen in the merge sheet), set in the same change so the two can't come apart.
  */
 export function mergeCharacters(
   cast: readonly Character[],
   analyses: readonly Analysis[],
   fromId: string,
   intoId: string,
+  { notACharacter = false, voice }: { notACharacter?: boolean; voice?: VoiceSettings } = {},
 ): CastOpResult<{ cast: Character[]; analyses: Analysis[] }> {
   if (fromId === intoId) return { ok: false, reason: 'cannot merge a character into itself' };
   const from = cast.find((c) => c.id === fromId);
@@ -38,7 +45,8 @@ export function mergeCharacters(
   };
   // The unknown speaker has no traits to give or to take.
   const traitless = into.role === 'unknown' || from.role === 'unknown';
-  const merged = traitless ? renamed : fillTraits(renamed, from);
+  const filled = traitless ? renamed : fillTraits(renamed, from);
+  const merged = voice ? { ...filled, voice: { ...voice, manual: true as const } } : filled;
   const remaining = from.role === 'narrator' ? { ...from, name: NARRATOR_NAME, aliases: [] } : from;
   const updatedCast = cast
     .filter((c) => keepFrom || c.id !== fromId)
@@ -50,7 +58,7 @@ export function mergeCharacters(
           ...a,
           segments: a.segments.map((s) =>
             s.speakerId === fromId
-              ? { ...s, speakerId: intoId, source: keepFrom ? 'user' : s.source }
+              ? { ...s, speakerId: intoId, source: keepFrom || notACharacter ? 'user' : s.source }
               : s,
           ),
         }

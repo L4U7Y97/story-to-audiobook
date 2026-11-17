@@ -97,6 +97,7 @@ export async function mergeCharactersInStory(
   storyId: string,
   fromId: string,
   intoId: string,
+  options: { notACharacter?: boolean; voice?: VoiceSettings } = {},
 ): Promise<void> {
   await db.transaction('rw', db.stories, db.parts, db.analyses, async () => {
     const story = await db.stories.get(storyId);
@@ -105,7 +106,7 @@ export async function mergeCharactersInStory(
       (a): a is Analysis => a !== undefined,
     );
 
-    const result = mergeCharacters(story.cast, analyses, fromId, intoId);
+    const result = mergeCharacters(story.cast, analyses, fromId, intoId, options);
     if (!result.ok) throw new Error(result.reason);
     const { cast, analyses: updated } = result.value;
 

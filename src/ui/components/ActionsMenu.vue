@@ -12,11 +12,23 @@ const props = withDefaults(
     title: string;
     /** What the item is, in lower case ("book", "part"). */
     noun: string;
+    /** The rename field's label, when it is not "<Noun> title". */
+    fieldLabel?: string;
+    /** The delete action's label, when it is not "Delete <noun>". */
+    deleteLabel?: string;
     /** The second-tap delete label, when deleting removes more than the item. */
     confirmDeleteLabel?: string;
     reorderable?: boolean;
+    /** Whether the item can be deleted; when not, the menu has no Delete. */
+    removable?: boolean;
   }>(),
-  { confirmDeleteLabel: 'Tap again to delete', reorderable: true },
+  {
+    fieldLabel: '',
+    deleteLabel: '',
+    confirmDeleteLabel: 'Tap again to delete',
+    reorderable: true,
+    removable: true,
+  },
 );
 
 const emit = defineEmits<{
@@ -38,7 +50,9 @@ const label = computed(
     `Actions for ${props.title}` +
     (props.reorderable ? '; use arrow keys or hold and drag to reorder' : ''),
 );
-const titleLabel = computed(() => `${props.noun[0]!.toUpperCase()}${props.noun.slice(1)} title`);
+const titleLabel = computed(
+  () => props.fieldLabel || `${props.noun[0]!.toUpperCase()}${props.noun.slice(1)} title`,
+);
 
 function onToggle() {
   confirmDelete.value = false;
@@ -114,8 +128,8 @@ function remove() {
       </form>
       <button v-else role="menuitem" @click="startRename">Rename</button>
       <slot :act="act" />
-      <button role="menuitem" :class="{ danger: confirmDelete }" @click="remove">
-        {{ confirmDelete ? confirmDeleteLabel : `Delete ${noun}` }}
+      <button v-if="removable" role="menuitem" :class="{ danger: confirmDelete }" @click="remove">
+        {{ confirmDelete ? confirmDeleteLabel : deleteLabel || `Delete ${noun}` }}
       </button>
     </div>
   </details>

@@ -41,6 +41,13 @@ async function openCast(story: StoredStory) {
   return host;
 }
 
+/** Opens a member's card, as a tap on its row does, and gives it back once it shows. */
+async function openCard(card: HTMLElement): Promise<HTMLElement> {
+  card.querySelector<HTMLButtonElement>('h3 .toggle')!.click();
+  await until(() => card.querySelector<HTMLElement>('.body')!.style.display !== 'none', 'open');
+  return card;
+}
+
 function cardOf(host: HTMLElement, name: string): HTMLElement {
   const card = [...host.querySelectorAll<HTMLElement>('li.card')].find(
     (li) => li.querySelector('h3')?.textContent?.trim() === name,
@@ -49,27 +56,62 @@ function cardOf(host: HTMLElement, name: string): HTMLElement {
   return card;
 }
 
-/** Fills in a card's names and presses "Save names". */
-function saveNames(card: HTMLElement, { name, aliases }: { name?: string; aliases?: string }) {
-  const [nameInput, aliasesInput] =
-    card.querySelectorAll<HTMLInputElement>('.editor .fields input');
-  if (name !== undefined) typeInto(nameInput!, name);
-  if (aliases !== undefined) typeInto(aliasesInput!, aliases);
+/** Opens a member's ⋯ menu, as a tap on it does. */
+function openMenu(card: HTMLElement): HTMLDetailsElement {
+  const menu = card.querySelector<HTMLDetailsElement>('.member-menu')!;
+  menu.open = true;
+  menu.dispatchEvent(new Event('toggle'));
+  return menu;
+}
+
+/**
+ * Saves a card's names as the user does: a new name with Rename in its ⋯ menu, other names in
+ * the card's "Other names" field.
+ */
+async function saveNames(
+  card: HTMLElement,
+  { name, aliases }: { name?: string; aliases?: string },
+) {
+  if (name !== undefined) {
+    const menu = openMenu(card);
+    button(menu, 'Rename')!.click();
+    const input = await until(
+      () => menu.querySelector<HTMLInputElement>('.rename input'),
+      'Rename',
+    );
+    typeInto(input, name);
+    submit(menu.querySelector('.rename')!);
+  }
+  if (name !== undefined && aliases === undefined) return;
+  const input = card.querySelector<HTMLInputElement>('.editor .fields input')!;
+  if (aliases !== undefined) typeInto(input, aliases);
   submit(card.querySelector('.editor .fields')!);
 }
 
+/** A refused name: said in the card's editor (other names) or in the bar (a rename). */
 const clash = (card: HTMLElement) => card.querySelector('.editor .fields [role="alert"]');
 const clashShown = (card: HTMLElement) =>
-  until(() => clash(card)?.textContent?.trim(), 'the name clash');
+  until(
+    () =>
+      clash(card)?.textContent?.trim() ||
+      document.querySelector('.snackbar .snack-text')?.textContent?.trim(),
+    'the name clash',
+  );
 
-/** Chooses `target` in a card's merge list, then presses Merge. */
+/** Opens the merge sheet from a member's ⋯ menu ("Same person as…", "Give all these lines…"). */
+async function openMergeSheet(card: HTMLElement): Promise<HTMLElement> {
+  const menu = openMenu(card);
+  button(menu, /Same person as…|Give all these lines/u)!.click();
+  return until(() => document.querySelector<HTMLElement>('[role="dialog"]'), 'the merge sheet');
+}
+
+/** Merges the card's member into `target` through its ⋯ menu and the merge sheet. */
 async function mergeInto(card: HTMLElement, target: string) {
-  const select = card.querySelector<HTMLSelectElement>('.editor .merge select')!;
-  select.value = [...select.options].find((o) => o.textContent?.trim() === target)!.value;
-  select.dispatchEvent(new Event('change'));
-  const merge = () => card.querySelector<HTMLButtonElement>('.editor .merge button')!;
-  await until(() => !merge().disabled, 'Merge');
-  merge().click();
+  const sheet = await openMergeSheet(card);
+  button(sheet, target)!.click();
+  await until(() => !button(sheet, 'Merge')!.disabled, 'Merge');
+  button(sheet, 'Merge')!.click();
+  await until(() => !document.querySelector('[role="dialog"]'), 'the sheet to close');
 }
 
 describe('a name another member has', () => {
@@ -81,9 +123,9 @@ describe('a name another member has', () => {
       [' said Jane.', 'N', 'narration'],
     ]);
     const host = await openCast(story);
-    saveNames(cardOf(host, 'Elizabeth'), { aliases: 'Lizzy, Jane' });
+    await saveNames(cardOf(host, 'Elizabeth'), { aliases: 'Lizzy, Jane' });
     expect(await clashShown(cardOf(host, 'Elizabeth'))).toBe(
-      '“Jane” is already in the cast. Use “Same person as…” to merge them.',
+      '“Jane” is already in the cast. Use “Same person as…” in the ⋯ menu to merge them.',
     );
     const cast = (await getStory(db, story.storyId))!.cast;
     expect(cast.find((c) => c.id === story.ids.Elizabeth)!.aliases).toEqual([]);
@@ -92,20 +134,20 @@ describe('a name another member has', () => {
   it('sends the narrator’s editor to the other member’s card to merge', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    saveNames(cardOf(host, 'Narrator'), { aliases: 'Watson' });
+    await saveNames(cardOf(host, 'Narrator'), { aliases: 'Watson' });
     expect(await clashShown(cardOf(host, 'Narrator'))).toBe(
-      '“Watson” is already in the cast. If Watson tells the whole story, open Watson’s card and ' +
-        'use “Same person as… Narrator” to merge them.',
+      '“Watson” is already in the cast. If Watson tells the whole story, use “Same person as…” ' +
+        'in Watson’s ⋯ menu and choose Narrator.',
     );
     expect((await getStory(db, story.storyId))!.cast[0]!.aliases).toEqual([]);
   });
 
   it('points the unknown speaker’s editor to giving its lines away', async () => {
     const host = await openCast(await storeStory(holmes));
-    saveNames(cardOf(host, 'Unknown speaker'), { name: 'Holmes' });
+    await saveNames(cardOf(host, 'Unknown speaker'), { name: 'Holmes' });
     expect(await clashShown(cardOf(host, 'Unknown speaker'))).toBe(
       '“Holmes” is already in the cast. To have Holmes read these lines, use “Give all these ' +
-        'lines to…”.',
+        'lines to…” in the ⋯ menu.',
     );
   });
 
@@ -119,20 +161,20 @@ describe('a name another member has', () => {
     const host = await openCast(story);
     await mergeInto(cardOf(host, 'a voice'), 'Unknown speaker');
     await until(() => cardOf(host, 'Unknown speaker').textContent?.includes('“a voice”'), 'merge');
-    saveNames(cardOf(host, 'Holmes'), { aliases: 'a voice' });
+    await saveNames(cardOf(host, 'Holmes'), { aliases: 'a voice' });
     expect(await clashShown(cardOf(host, 'Holmes'))).toBe(
-      '“a voice” is already in the cast as “Unknown speaker”. To give it to Holmes, open Unknown ' +
-        'speaker’s card and remove it from “Other names” first.',
+      '“a voice” is already in the cast as “Unknown speaker”. To give it to Holmes, first remove ' +
+        'it from Unknown speaker’s other names.',
     );
-    saveNames(cardOf(host, 'Narrator'), { aliases: 'a voice' });
+    await saveNames(cardOf(host, 'Narrator'), { aliases: 'a voice' });
     expect(await clashShown(cardOf(host, 'Narrator'))).toBe(
-      '“a voice” is already in the cast as “Unknown speaker”. To give it to Narrator, open ' +
-        'Unknown speaker’s card and remove it from “Other names” first.',
+      '“a voice” is already in the cast as “Unknown speaker”. To give it to Narrator, first ' +
+        'remove it from Unknown speaker’s other names.',
     );
     // Doing so frees the name.
-    saveNames(cardOf(host, 'Unknown speaker'), { aliases: '' });
+    await saveNames(cardOf(host, 'Unknown speaker'), { aliases: '' });
     await until(() => !cardOf(host, 'Unknown speaker').textContent?.includes('“a voice”'), 'save');
-    saveNames(cardOf(host, 'Holmes'), { aliases: 'a voice' });
+    await saveNames(cardOf(host, 'Holmes'), { aliases: 'a voice' });
     await until(() => cardOf(host, 'Holmes').textContent?.includes('also “a voice”'), 'the save');
     const cast = (await getStory(db, story.storyId))!.cast;
     expect(cast.map((c) => [c.name, c.aliases])).toEqual([
@@ -146,12 +188,11 @@ describe('a name another member has', () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
     const names = () => [...host.querySelectorAll('li.card h3')].map((h) => h.textContent?.trim());
-    saveNames(cardOf(host, 'Unknown speaker'), { name: 'Crowd' });
+    await saveNames(cardOf(host, 'Unknown speaker'), { name: 'Crowd' });
     await until(() => names().includes('Crowd'), 'the rename');
-    saveNames(cardOf(host, 'Holmes'), { name: 'crowd' });
+    await saveNames(cardOf(host, 'Holmes'), { name: 'crowd' });
     expect(await clashShown(cardOf(host, 'Holmes'))).toBe(
-      '“crowd” is already in the cast. To give it to Holmes, open Crowd’s card and change its ' +
-        'name first.',
+      '“crowd” is already in the cast. To give it to Holmes, first rename Crowd (⋯ menu).',
     );
     const cast = (await getStory(db, story.storyId))!.cast;
     expect(cast.map((c) => c.name)).toEqual(['Narrator', 'Crowd', 'Holmes', 'Watson']);
@@ -160,9 +201,9 @@ describe('a name another member has', () => {
   it('includes “Narrator” typed as a character’s name', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    saveNames(cardOf(host, 'Holmes'), { name: 'Narrator' });
+    await saveNames(cardOf(host, 'Holmes'), { name: 'Narrator' });
     expect(await clashShown(cardOf(host, 'Holmes'))).toBe(
-      '“Narrator” is already in the cast. Use “Same person as…” to merge them.',
+      '“Narrator” is already in the cast. Use “Same person as…” in the ⋯ menu to merge them.',
     );
     const cast = (await getStory(db, story.storyId))!.cast;
     expect(cast.map((c) => c.name)).toEqual(['Narrator', 'Unknown speaker', 'Holmes', 'Watson']);
@@ -176,10 +217,10 @@ describe('a name another member has', () => {
       cast: cast.map((c) => (c.id === story.ids.N ? { ...c, aliases: ['Watson'] } : c)),
     });
     const host = await openCast(story);
-    saveNames(cardOf(host, 'Narrator'), { name: 'Watson' });
+    await saveNames(cardOf(host, 'Narrator'), { name: 'Watson' });
     expect(await clashShown(cardOf(host, 'Narrator'))).toBe(
-      '“Watson” is already in the cast. If Watson tells the whole story, open Watson’s card and ' +
-        'use “Same person as… Narrator” to merge them.',
+      '“Watson” is already in the cast. If Watson tells the whole story, use “Same person as…” ' +
+        'in Watson’s ⋯ menu and choose Narrator.',
     );
     const saved = (await getStory(db, story.storyId))!.cast;
     expect(saved.map((c) => c.name)).toEqual(['Narrator', 'Unknown speaker', 'Holmes', 'Watson']);
@@ -188,11 +229,11 @@ describe('a name another member has', () => {
   it('includes “Narrator” saved as a character’s other name, then typed as its name', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    saveNames(cardOf(host, 'Holmes'), { aliases: 'Narrator' });
+    await saveNames(cardOf(host, 'Holmes'), { aliases: 'Narrator' });
     await until(() => cardOf(host, 'Holmes').textContent?.includes('also “Narrator”'), 'the save');
-    saveNames(cardOf(host, 'Holmes'), { name: 'Narrator' });
+    await saveNames(cardOf(host, 'Holmes'), { name: 'Narrator' });
     expect(await clashShown(cardOf(host, 'Holmes'))).toBe(
-      '“Narrator” is already in the cast. Use “Same person as…” to merge them.',
+      '“Narrator” is already in the cast. Use “Same person as…” in the ⋯ menu to merge them.',
     );
     const cast = (await getStory(db, story.storyId))!.cast;
     expect(cast.map((c) => c.name)).toEqual(['Narrator', 'Unknown speaker', 'Holmes', 'Watson']);
@@ -201,7 +242,7 @@ describe('a name another member has', () => {
   it('stops being shown once the merge it suggests is done, also after later merges', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    saveNames(cardOf(host, 'Narrator'), { name: 'Watson' });
+    await saveNames(cardOf(host, 'Narrator'), { aliases: 'Watson' });
     await clashShown(cardOf(host, 'Narrator'));
     await mergeInto(cardOf(host, 'Watson'), 'Narrator');
     await until(() => cardOf(host, 'Narrator').textContent?.includes('also “Watson”'), 'merge');
@@ -221,7 +262,7 @@ describe('renaming', () => {
       cast: cast.map((c) => (c.id === story.ids.N ? { ...c, name: 'Nick' } : c)),
     });
     const host = await openCast(story);
-    saveNames(cardOf(host, 'Nick'), { name: 'Narrator' });
+    await saveNames(cardOf(host, 'Nick'), { name: 'Narrator' });
     const narrator = await until(async () => {
       const n = (await getStory(db, story.storyId))!.cast[0];
       return n?.name === 'Narrator' ? n : undefined;
@@ -461,7 +502,7 @@ describe('a member’s traits', () => {
   it('say why a change was not saved, until the next change is', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const card = cardOf(host, 'Holmes');
+    const card = await openCard(cardOf(host, 'Holmes'));
     // Said in the card the change was made in.
     const error = () => card.querySelector('.card-note.error');
     expect(error()).toBeNull();
@@ -574,9 +615,9 @@ describe('a member’s traits', () => {
 
   it('come after the names editor in the card', async () => {
     const host = await openCast(await storeStory(holmes));
-    const blocks = [...cardOf(host, 'Holmes').querySelectorAll('details')];
+    const blocks = [...cardOf(host, 'Holmes').querySelectorAll('.body details')];
     expect(blocks.map((d) => d.querySelector('summary')!.textContent?.trim())).toEqual([
-      'Edit names or merge',
+      'Other names',
       'Traits: not set',
       'See Holmes’s lines',
     ]);
@@ -773,40 +814,45 @@ describe('“Match voices to traits”', () => {
   });
 });
 
-describe('the merge list of a long cast', () => {
+describe('the narrator’s “Give all these lines to…”', () => {
   const names = ['Elizabeth', 'Jane', 'Lydia', 'Kitty', 'Mary', 'Darcy', 'Bingley'];
   const story = () => storeStory(names.map((n): Chunk => [`“Hello,” said ${n}. `, n, 'speech']));
-  const filterOf = (card: HTMLElement) =>
-    card.querySelector<HTMLInputElement>('.editor .merge input[type="search"]');
-  const shown = (card: HTMLElement) =>
-    [...card.querySelectorAll<HTMLOptionElement>('.editor .merge select option')]
-      .filter((o) => o.value)
-      .map((o) => o.textContent?.trim());
+  const shown = (sheet: HTMLElement) =>
+    [...sheet.querySelectorAll('.people button')].map((b) => b.textContent?.trim());
 
-  it('filters by name and picks the only match', async () => {
+  it('is in the ⋯ menu, and finds who to give the lines to by name', async () => {
     const host = await openCast(await story());
-    const card = cardOf(host, 'Elizabeth');
-    typeInto(filterOf(card)!, 'y');
-    await until(() => shown(card).length === 5, 'the filtered list');
-    expect(shown(card)).toEqual(['Lydia', 'Kitty', 'Mary', 'Darcy', 'Bingley']);
-    typeInto(filterOf(card)!, 'dar');
-    await until(() => shown(card).length === 1, 'one match');
-    const select = card.querySelector<HTMLSelectElement>('.editor .merge select')!;
-    expect(select.selectedOptions[0]!.textContent?.trim()).toBe('Darcy');
-    // The chosen character stays listed when the filter no longer matches it.
-    typeInto(filterOf(card)!, 'zzz');
-    await until(
-      () =>
-        shown(card).length === 1 &&
-        select.options[0]!.textContent?.trim() === 'No character matches',
-      'no match',
+    const sheet = await openMergeSheet(cardOf(host, 'Narrator'));
+    expect(sheet.querySelector('h2')!.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
+      'Give all of Narrator’s lines, in every part, to…',
     );
-    expect(shown(card)).toEqual(['Darcy']);
+    typeInto(sheet.querySelector<HTMLInputElement>('input[type="search"]')!, 'y');
+    await until(() => shown(sheet).length === 5, 'the filtered list');
+    expect(shown(sheet)).toEqual(['Lydia', 'Kitty', 'Mary', 'Darcy', 'Bingley']);
   });
 
-  it('is not offered on a short cast', async () => {
+  it('says what giving them does, without a name or voice to choose, once someone is chosen', async () => {
     const host = await openCast(await storeStory(holmes));
-    expect(filterOf(cardOf(host, 'Holmes'))).toBeNull();
+    const sheet = await openMergeSheet(cardOf(host, 'Narrator'));
+    expect(button(sheet, 'Merge')!.disabled).toBe(true);
+    button(sheet, 'Watson')!.click();
+    await until(() => !button(sheet, 'Merge')!.disabled, 'Merge');
+    expect(sheet.querySelectorAll('fieldset')).toHaveLength(0);
+    expect(
+      [...sheet.querySelectorAll('p.note')].at(-1)!.textContent?.replace(/\s+/gu, ' ').trim(),
+    ).toBe(
+      'All of these lines will be read by “Watson”. If Watson tells the whole story, use “Same ' +
+        'person as…” in Watson’s ⋯ menu and choose Narrator instead. You can undo this.',
+    );
+  });
+
+  it('has no “Not a character” for the narrator or the unknown speaker', async () => {
+    const host = await openCast(await storeStory(holmes));
+    for (const name of ['Narrator', 'Unknown speaker']) {
+      const menu = openMenu(cardOf(host, name));
+      expect(button(menu, 'Not a character')).toBeUndefined();
+      expect(button(menu, 'Rename')).toBeDefined();
+    }
   });
 });
 
@@ -850,25 +896,6 @@ describe('a card', () => {
     pitch.dispatchEvent(new Event('change'));
     await storedMember(story, story.ids.Watson!, (m) => m.voice.pitch === 1.25);
     expect(label()).toBe('1.25×');
-  });
-
-  it('says why Merge cannot be pressed until a character is chosen', async () => {
-    const host = await openCast(await storeStory(holmes));
-    const card = cardOf(host, 'Holmes');
-    const merge = card.querySelector<HTMLButtonElement>('.editor .merge button')!;
-    const hint = () => card.querySelector(`#${merge.getAttribute('aria-describedby')}`);
-    expect(merge.disabled).toBe(true);
-    expect(hint()?.textContent?.trim()).toBe('Choose a character first.');
-
-    const select = card.querySelector<HTMLSelectElement>('.editor .merge select')!;
-    select.value = [...select.options].find((o) => o.textContent?.trim() === 'Watson')!.value;
-    select.dispatchEvent(new Event('change'));
-    await until(() => !merge.disabled, 'Merge');
-    // It now says what a merge does instead.
-    expect(hint()?.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
-      '“Holmes” will be removed and all their lines read by “Watson”. You can undo this.',
-    );
-    expect(card.textContent).not.toContain('Choose a character first.');
   });
 });
 
@@ -1296,20 +1323,18 @@ describe('undo and feedback', () => {
   it('says in the card that names were saved, or that nothing changed, keeping focus', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const card = cardOf(host, 'Watson');
+    const card = await openCard(cardOf(host, 'Watson'));
     const save = card.querySelector<HTMLButtonElement>('.editor .fields button[type="submit"]')!;
     save.focus();
-    saveNames(card, {});
+    await saveNames(card, {});
     await until(() => noteIn(card) === 'No changes to save.', 'nothing to save');
 
-    saveNames(card, { name: 'John Watson' });
+    await saveNames(card, { aliases: 'John, Dr. Watson' });
     await until(() => noteIn(card) === 'Names saved.', 'saved');
-    await storedMember(story, story.ids.Watson!, (m) => m.name === 'John Watson');
+    await storedMember(story, story.ids.Watson!, (m) => m.aliases.length === 2);
     // The editor shows the saved names and keeps focus: it is not rebuilt.
-    const [nameInput, aliasesInput] =
-      card.querySelectorAll<HTMLInputElement>('.editor .fields input');
-    await until(() => aliasesInput!.value === 'Watson', 'the old name kept as another name');
-    expect(nameInput!.value).toBe('John Watson');
+    const aliasesInput = card.querySelector<HTMLInputElement>('.editor .fields input')!;
+    expect(aliasesInput.value).toBe('John, Dr. Watson');
     expect(card.querySelector('.editor .fields button[type="submit"]')).toBe(save);
     expect(document.activeElement).toBe(save);
   });
@@ -1324,7 +1349,7 @@ describe('notifications', () => {
     vi.useRealTimers();
   });
 
-  it('close the undo bar after 8 seconds, but not while it is pointed at or focused', async () => {
+  it('close the undo bar after 5 seconds, but not while it is pointed at or focused', async () => {
     const host = await openCast(await storeStory(holmes));
     fakeTime();
     await mergeInto(cardOf(host, 'Watson'), 'Holmes');
@@ -1335,7 +1360,7 @@ describe('notifications', () => {
     await pause();
     expect(snackbar()).not.toBeNull();
     bar.dispatchEvent(new MouseEvent('mouseleave'));
-    vi.advanceTimersByTime(7_000);
+    vi.advanceTimersByTime(4_000);
     await pause();
     expect(snackbar()).not.toBeNull();
     vi.advanceTimersByTime(1_000);
@@ -1353,10 +1378,10 @@ describe('notifications', () => {
   it('let “Names saved.” go after 4 seconds, while a failure stays', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const card = cardOf(host, 'Watson');
+    const card = await openCard(cardOf(host, 'Watson'));
     const noteIn = () => card.querySelector('.card-note');
     fakeTime();
-    saveNames(card, { name: 'John Watson' });
+    await saveNames(card, { name: 'John Watson' });
     await until(() => noteIn()?.textContent?.includes('Names saved.'), 'saved');
     vi.advanceTimersByTime(4_000);
     await until(() => !noteIn(), 'the note to go');
@@ -1374,5 +1399,221 @@ describe('notifications', () => {
     vi.advanceTimersByTime(60_000);
     await pause();
     expect(noteIn()?.textContent).toContain('disk full');
+  });
+});
+
+describe('duplicate cleanup', () => {
+  const snackbar = () => document.querySelector<HTMLElement>('.snackbar');
+  const names = async (story: StoredStory) =>
+    (await getStory(db, story.storyId))!.cast.map((c) => c.name);
+  // Robert has three lines, Bob one: Bob may be Robert.
+  const bob: Chunk[] = [
+    ['“One,”', 'Robert', 'speech'],
+    [' said Robert. ', 'N', 'narration'],
+    ['“Two,”', 'Robert', 'speech'],
+    [' said Robert. ', 'N', 'narration'],
+    ['“Three,”', 'Robert', 'speech'],
+    [' said Robert. ', 'N', 'narration'],
+    ['“Hi there, everyone,”', 'Bob', 'speech'],
+    [' said Bob.', 'N', 'narration'],
+  ];
+  const dupes = (host: HTMLElement) => host.querySelector<HTMLElement>('.dupes');
+  const pairs = (host: HTMLElement) =>
+    [...(dupes(host)?.querySelectorAll('.pair') ?? [])].map((p) =>
+      p.textContent?.replace(/\s+/gu, ' ').trim(),
+    );
+
+  it('keeps the possible duplicates folded until opened', async () => {
+    const host = await openCast(await storeStory(bob));
+    const panel = dupes(host) as HTMLDetailsElement;
+    expect(panel.tagName).toBe('DETAILS');
+    expect(panel.open).toBe(false);
+    expect(panel.querySelector('summary')!.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
+      'Possible duplicates 1',
+    );
+  });
+
+  it('suggests possible duplicates, and merges one in a tap, the less heard into the more', async () => {
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    expect(pairs(host)).toEqual(['Bob → into Robert']);
+    expect(dupes(host)!.querySelector('.reason')!.textContent?.replace(/\s+/gu, ' ').trim()).toBe(
+      '“Bob” can be short for “Robert” · 1 line and 3 lines',
+    );
+    button(dupes(host)!, 'Merge')!.click();
+    await until(async () => !(await names(story)).includes('Bob'), 'Bob merged');
+    expect(
+      (await getStory(db, story.storyId))!.cast.find((c) => c.name === 'Robert')!.aliases,
+    ).toEqual(['Bob']);
+    await until(() => !dupes(host), 'no more suggestions');
+    expect((await until(snackbar, 'the bar')).textContent).toContain('Bob merged into Robert');
+  });
+
+  it('turns a suggestion round with Swap', async () => {
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    button(dupes(host)!, 'Swap')!.click();
+    await until(() => pairs(host)[0] === 'Robert → into Bob', 'swapped');
+    button(dupes(host)!, 'Merge')!.click();
+    await until(
+      async () => (await names(story)).join() === 'Narrator,Unknown speaker,Bob',
+      'merged',
+    );
+  });
+
+  it('stops suggesting a pair said to be “Not the same”, also on the next visit', async () => {
+    const story = await storeStory(bob);
+    let host = await openCast(story);
+    button(dupes(host)!, 'Not the same')!.click();
+    await until(() => !dupes(host), 'the suggestion gone');
+    unmountView();
+    host = await openCast(story);
+    await pause();
+    expect(dupes(host)).toBeNull();
+    expect(await names(story)).toContain('Bob');
+  });
+
+  it('compares the two in the merge sheet, keeping the name and the voice chosen', async () => {
+    stubVoices.push(zira, david);
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    await chooseVoice(cardOf(host, 'Bob'), david.name);
+    await storedMember(story, story.ids.Bob!, (m) => m.voice.voiceName === david.name);
+
+    const dialog = await openMergeSheet(cardOf(host, 'Bob'));
+    button(dialog, 'Robert')!.click();
+    const sides = await until(() => {
+      const found = [...dialog.querySelectorAll('.side')];
+      return found.length === 2 ? found : undefined;
+    }, 'the comparison');
+    expect(sides.map((s) => s.querySelector('q')?.textContent)).toEqual([
+      'Hi there, everyone',
+      'One',
+    ]);
+    // Keep Bob's name: Robert is the one merged, into Bob; the voice follows the name kept.
+    const radio = (legend: string, value: string) =>
+      [...dialog.querySelectorAll('fieldset')]
+        .find((f) => f.querySelector('legend')!.textContent === legend)!
+        .querySelector<HTMLInputElement>(`input[value="${value}"]`)!;
+    radio('Keep the name', 'member').click();
+    await until(() => radio('Keep the voice', 'member').checked, 'Bob’s voice chosen');
+    // ...unless another is chosen.
+    radio('Keep the voice', 'target').click();
+    button(dialog, 'Merge')!.click();
+    const kept = await storedMember(story, story.ids.Bob!, (m) => m.aliases.includes('Robert'));
+    expect(kept.voice.voiceName).not.toBe(david.name);
+    expect(await names(story)).not.toContain('Robert');
+    await until(
+      () => snackbar()?.textContent?.includes('Robert merged into Bob, with Robert’s voice'),
+      'the merge in the bar',
+    );
+    // Undo puts both back, voice and all.
+    button(snackbar()!, 'Undo')!.click();
+    const back = await storedMember(story, story.ids.Bob!, (m) => m.voice.voiceName === david.name);
+    expect(back.aliases).toEqual([]);
+    expect(await names(story)).toContain('Robert');
+  });
+
+  it('takes a name that was never anyone out of the cast from its ⋯ menu', async () => {
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    const menu = cardOf(host, 'Bob').querySelector<HTMLDetailsElement>('.member-menu')!;
+    menu.open = true;
+    menu.dispatchEvent(new Event('toggle'));
+    button(menu, 'Not a character')!.click();
+    await until(() => button(menu, 'Tap again: their lines go to Unknown speaker'), 'second tap');
+    button(menu, 'Tap again: their lines go to Unknown speaker')!.click();
+    await until(async () => !(await names(story)).includes('Bob'), 'Bob gone');
+    const unknown = (await getStory(db, story.storyId))!.cast.find((c) => c.role === 'unknown')!;
+    // Bob's line goes to the unknown speaker, and so does the name, so later parts give it there.
+    expect(unknown.aliases).toEqual(['Bob']);
+    const { partIds } = (await getStory(db, story.storyId))!;
+    const segments = (await db.analyses.get(partIds[0]!))!.segments;
+    expect(segments.some((s) => s.speakerId === unknown.id && s.source === 'user')).toBe(true);
+    expect((await until(snackbar, 'the bar')).textContent).toContain(
+      'Bob taken out of the cast · 1 line now read by Unknown speaker.',
+    );
+  });
+
+  it('renames from the ⋯ menu', async () => {
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    const menu = cardOf(host, 'Bob').querySelector<HTMLDetailsElement>('.member-menu')!;
+    menu.open = true;
+    menu.dispatchEvent(new Event('toggle'));
+    button(menu, 'Rename')!.click();
+    const input = await until(() => menu.querySelector<HTMLInputElement>('.rename input'), 'input');
+    typeInto(input, 'Bobby');
+    submit(menu.querySelector('.rename')!);
+    await storedMember(story, story.ids.Bob!, (m) => m.name === 'Bobby');
+  });
+
+  it('shows a member’s few lines open in its card, and only in the open one', async () => {
+    const host = await openCast(await storeStory(bob));
+    const lines = cardOf(host, 'Bob').querySelector<HTMLDetailsElement>('details.lines')!;
+    expect(lines.open).toBe(false);
+    await openCard(cardOf(host, 'Bob'));
+    await until(() => lines.open && lines.querySelectorAll('ol a').length === 1, 'the line');
+    // Robert's three lines are worked out only once his card opens.
+    expect(cardOf(host, 'Robert').querySelectorAll('details.lines ol a')).toHaveLength(0);
+  });
+
+  it('takes back a “Not the same” with Undo, and names the pair for screen readers', async () => {
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    const notSame = button(dupes(host)!, 'Not the same')!;
+    expect(notSame.getAttribute('aria-label')).toBe('Bob and Robert are not the same person');
+    notSame.click();
+    await until(() => !dupes(host), 'the suggestion gone');
+    const bar = await until(snackbar, 'the bar');
+    expect(bar.textContent).toContain('Bob and Robert won’t be suggested again.');
+    // Focus doesn't drop to the page: the Characters heading takes it.
+    expect(document.activeElement?.id).toBe('group-character');
+    button(bar, 'Undo')!.click();
+    await until(() => dupes(host), 'the suggestion back');
+  });
+
+  it('turns a suggestion round with each Swap', async () => {
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    button(dupes(host)!, 'Swap')!.click();
+    await until(() => pairs(host)[0] === 'Robert → into Bob', 'swapped');
+    // The way chosen is kept as who merges, so it holds whatever the line counts do; a second
+    // Swap turns it back.
+    button(dupes(host)!, 'Swap')!.click();
+    await until(() => pairs(host)[0] === 'Bob → into Robert', 'turned back');
+  });
+
+  it('explains a refused rename from the ⋯ menu in the bar', async () => {
+    const story = await storeStory(bob);
+    const host = await openCast(story);
+    const menu = cardOf(host, 'Bob').querySelector<HTMLDetailsElement>('.member-menu')!;
+    menu.open = true;
+    menu.dispatchEvent(new Event('toggle'));
+    button(menu, 'Rename')!.click();
+    const input = await until(() => menu.querySelector<HTMLInputElement>('.rename input'), 'input');
+    expect(input.getAttribute('aria-label')).toBe('Name');
+    typeInto(input, 'Robert');
+    submit(menu.querySelector('.rename')!);
+    await until(
+      () => snackbar()?.textContent?.includes('“Robert” is already in the cast.'),
+      'the refusal',
+    );
+    expect(await names(story)).toContain('Bob');
+  });
+
+  it('offers no voice choice when merging into the narrator, who keeps its own', async () => {
+    const host = await openCast(await storeStory(bob));
+    const dialog = await openMergeSheet(cardOf(host, 'Bob'));
+    button(dialog, 'Narrator')!.click();
+    await until(() => dialog.querySelector('.compare'), 'the comparison');
+    expect(dialog.querySelectorAll('fieldset')).toHaveLength(0);
+    button(dialog, 'Robert')!.click();
+    await until(() => dialog.querySelectorAll('fieldset').length === 2, 'both choices');
+    // Each pair of radios is one group.
+    const groups = new Set(
+      [...dialog.querySelectorAll('input[type="radio"]')].map((r) => r.getAttribute('name')),
+    );
+    expect(groups.size).toBe(2);
   });
 });

@@ -39,6 +39,17 @@ const partId = computed(
     story.value?.partIds[0],
 );
 const part = computed(() => parts.value?.find((p) => p.id === partId.value));
+
+/** Back goes to the shown part's book when the story has books, else to the story. */
+const book = computed(() =>
+  part.value?.bookId ? story.value?.books?.find((b) => b.id === part.value!.bookId) : undefined,
+);
+const backTo = computed(() =>
+  book.value
+    ? { name: 'book', params: { id: props.id, bookId: book.value.id } }
+    : { name: 'story', params: { id: props.id } },
+);
+const backTitle = computed(() => book.value?.title ?? story.value?.title ?? 'Story');
 const { data: analysis } = useLiveQuery(
   async () => (partId.value ? getAnalysis(db, partId.value) : undefined),
   [partId],
@@ -347,8 +358,9 @@ function selectPart(event: Event) {
   <main class="page reader">
     <header class="reader-head">
       <nav class="top">
-        <RouterLink :to="{ name: 'story', params: { id } }"
-          >← {{ story?.title ?? 'Story' }}</RouterLink
+        <!-- On a phone only the arrow shows; the title is still read out. -->
+        <RouterLink :to="backTo" class="back" :title="backTitle"
+          >←<span class="phone-hidden">{{ ` ${backTitle}` }}</span></RouterLink
         >
         <div v-if="parts?.length" class="part-nav">
           <button
@@ -396,7 +408,10 @@ function selectPart(event: Event) {
             :aria-pressed="editing"
             @click="toggleEditing"
           >
-            {{ editing ? 'Done' : 'Fix speakers' }}
+            <template v-if="editing">Done</template>
+            <template v-else
+              >Fix<span class="phone-hidden">{{ ' speakers' }}</span></template
+            >
           </button>
           <RouterLink :to="{ name: 'cast', params: { id } }">Cast</RouterLink>
         </span>
@@ -613,6 +628,60 @@ function selectPart(event: Event) {
 @media (prefers-reduced-motion: reduce) {
   .segment {
     transition: none;
+  }
+}
+
+/*
+ * Phones: one short row, however long the title. The back link is its arrow and "Fix speakers"
+ * is "Fix", their full words kept for screen readers, so the part's name has room.
+ */
+@media (max-width: 480px) {
+  .reader-head {
+    padding-block: 8px;
+  }
+
+  .top {
+    gap: 8px;
+    margin-bottom: 0;
+  }
+
+  .back {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 32px;
+    min-height: 44px;
+    font-size: 1.25rem;
+    text-decoration: none;
+  }
+
+  .phone-hidden {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .part-nav {
+    flex: 1;
+    min-width: 0;
+    gap: 4px;
+  }
+
+  .part-step {
+    width: 36px;
+  }
+
+  .top-actions {
+    flex: none;
+    gap: 12px;
+  }
+
+  .banner {
+    margin: 8px 0 0;
   }
 }
 </style>

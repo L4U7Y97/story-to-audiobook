@@ -78,6 +78,8 @@ export async function replacePart(
     }
     const part: Part = {
       id: partId,
+      // It stays in its book.
+      ...(existing.bookId ? { bookId: existing.bookId } : {}),
       storyId,
       title: input.title,
       source: input.source,

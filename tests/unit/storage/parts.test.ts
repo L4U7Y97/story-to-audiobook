@@ -7,6 +7,7 @@ import { openStoryDb, type StoryDb } from '@/storage/db';
 import { createStory, getStory, updateStory } from '@/storage/stories';
 import { addPart, deletePart, getPart, listParts, replacePart } from '@/storage/parts';
 import { getAnalysis } from '@/storage/analyses';
+import { addBook } from '@/storage/books';
 
 let db: StoryDb;
 let count = 0;
@@ -52,6 +53,15 @@ describe('replacePart', () => {
     expect(afterReanalysis.find((c) => c.name === 'Anne')!.voice).toEqual(
       castBefore.find((c) => c.name === 'Anne')!.voice,
     );
+  });
+
+  it('keeps the part in its book', async () => {
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    await addBook(db, story.id, 'One');
+    const two = await addBook(db, story.id, 'Two');
+    const part = await addPart(db, story.id, { ...paste('x'), bookId: two.id });
+    await replacePart(db, story.id, part.id, paste('y'));
+    expect((await getPart(db, part.id))!.bookId).toBe(two.id);
   });
 
   it('refuses parts from another story', async () => {

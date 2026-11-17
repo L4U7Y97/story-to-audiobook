@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { Segment } from '@/format/types';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
+import { addBook, renameBook } from '@/storage/books';
 import { addPart } from '@/storage/parts';
 import { getStory } from '@/storage/stories';
 import ReaderView from '@/ui/views/ReaderView.vue';
@@ -557,5 +558,54 @@ describe('a line linked from the cast', () => {
     } finally {
       scroll.mockRestore();
     }
+  });
+});
+
+describe('the back link', () => {
+  const back = (host: HTMLElement) => host.querySelector<HTMLAnchorElement>('nav.top a')!;
+  /** Opens the reader on `partId` once its lines show; gives the back link's target and text. */
+  async function backFrom(story: StoredStory, partId: string, count: number) {
+    const host = await mountView(ReaderView, { id: story.storyId, partId });
+    await until(() => lines(host).length === count, 'the lines');
+    return { href: back(host).getAttribute('href'), text: back(host).textContent?.trim() };
+  }
+
+  it('goes to the story when it has no books', async () => {
+    const story = await storeStory(frame);
+    expect(await backFrom(story, story.partId, frame.length)).toEqual({
+      href: `/story/${story.storyId}`,
+      text: '← Story',
+    });
+  });
+
+  it('goes to the shown part’s book, named, when the story has books', async () => {
+    const story = await storeStory(frame);
+    // The story's part becomes the first book's; a second book gets a part of its own.
+    const second = await addBook(db, story.storyId, 'The Heights');
+    const first = (await getStory(db, story.storyId))!.books![0]!;
+    await renameBook(db, story.storyId, first.id, 'The Grange');
+    const later = await addPart(db, story.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'Years later.',
+      bookId: second.id,
+    });
+    await saveAnalysis(db, {
+      partId: later.id,
+      textHash: later.textHash,
+      analyzer: { kind: 'heuristic', version: 2 },
+      createdAt: new Date().toISOString(),
+      segments: [{ start: 0, end: 12, speakerId: story.ids.N!, mode: 'narration', source: 'user' }],
+    });
+
+    expect(await backFrom(story, story.partId, frame.length)).toEqual({
+      href: `/story/${story.storyId}/book/${first.id}`,
+      text: '← The Grange',
+    });
+    unmountView();
+    expect(await backFrom(story, later.id, 1)).toEqual({
+      href: `/story/${story.storyId}/book/${second.id}`,
+      text: '← The Heights',
+    });
   });
 });

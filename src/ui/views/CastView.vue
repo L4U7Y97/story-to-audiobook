@@ -12,7 +12,7 @@ import {
   setTraitsInStory,
   setVoiceInStory,
 } from '@/storage/cast';
-import { isDefaultName, normaliseName } from '@/analysis/castMatch';
+import { normaliseName } from '@/analysis/castMatch';
 import {
   castUsage,
   filterCast,
@@ -133,9 +133,32 @@ const sorted = computed(() =>
       (usage.value?.get(b.id) ?? 0) - (usage.value?.get(a.id) ?? 0),
   ),
 );
+/** The page's sections, one per role, each saying what its members do. */
+const GROUPS = [
+  {
+    role: 'narrator',
+    title: 'Narrator',
+    note: 'Reads the story, unless a part or passage is told by a character.',
+  },
+  { role: 'character', title: 'Characters', note: 'Each reads their own lines.' },
+  {
+    role: 'unknown',
+    title: 'Unattributed',
+    note: 'Reads the lines nobody was found to say. Fix them in the reader, or give them all to someone under “Edit names or merge”.',
+  },
+] as const;
+/** Some part has been analysed, so an empty cast means none were found rather than not yet. */
+const analysed = computed(() => (analyses.value ?? []).some(Boolean));
+
 const query = ref('');
 /** Hidden, not removed, so a card's open editor and what is typed in it outlive a search. */
 const shown = computed(() => new Set(filterCast(sorted.value, query.value).map((c) => c.id)));
+const groups = computed(() =>
+  GROUPS.map((g) => {
+    const members = sorted.value.filter((c) => c.role === g.role);
+    return { ...g, members, shown: members.filter((c) => shown.value.has(c.id)).length };
+  }),
+);
 
 /** How each character's voice plays on this device (a missing voice is substituted). */
 const resolved = computed(
@@ -342,12 +365,6 @@ function clashMessage(name: string, editing: Character, owner: Character): strin
   );
 }
 
-/** The role, said only when the name doesn't already say it ("Watson · Narrator"). */
-function roleLabel(c: Character): string {
-  if (c.role === 'narrator') return isDefaultName(c.name, 'narrator') ? '' : 'Narrator';
-  return c.role === 'unknown' ? 'Unattributed lines' : '';
-}
-
 /** "1 line", "4 lines". */
 function count(n: number, noun: string): string {
   return `${n} ${n === 1 ? noun : `${noun}s`}`;
@@ -369,6 +386,24 @@ function toldLabel(c: Character): string {
     </nav>
     <h1>Cast</h1>
     <p class="muted">Voices apply from the next line that is read.</p>
+    <details class="tips">
+      <summary class="chevron">How voices work</summary>
+      <ul>
+        <li>
+          Each voice is picked to suit its member’s traits (gender, age, species, size), which you
+          can set under “Traits”.
+        </li>
+        <li>
+          Choosing a voice, pitch or speed yourself marks it <strong>Set by hand</strong>: trait
+          changes and “Match voices to traits” then leave it alone. “Back to automatic” picks one
+          from the traits again.
+        </li>
+        <li>
+          The same person listed twice, like “Bob” and “Robert”? Merge them under “Edit names or
+          merge”.
+        </li>
+      </ul>
+    </details>
     <p v-if="error" class="error" role="alert">{{ error }}</p>
 
     <CastFilter v-if="sorted.length" v-model="query" />
@@ -376,135 +411,180 @@ function toldLabel(c: Character): string {
       Nobody in the cast is called “{{ query.trim() }}”.
     </p>
 
-    <div v-if="hasCharacters" class="match">
-      <button type="button" :class="{ danger: matching }" @click="matchVoices" @blur="leaveMatch">
-        {{ matching ? 'Confirm match' : 'Match voices to traits' }}
-      </button>
-      <p v-if="matching" class="warning" role="status">{{ matchText }}</p>
-      <p v-if="matched" class="muted small done" role="status">Voices matched to traits.</p>
-    </div>
+    <section
+      v-for="g in groups"
+      v-show="!query.trim() || g.shown"
+      :key="g.role"
+      class="group"
+      :aria-labelledby="`group-${g.role}`"
+    >
+      <h2 :id="`group-${g.role}`">
+        {{ g.title }}
+        <span v-if="g.role === 'character' && g.members.length" class="count">
+          {{ g.members.length }}
+        </span>
+      </h2>
+      <p class="muted small">{{ g.note }}</p>
 
-    <ul class="cast">
-      <li
-        v-for="c in sorted"
-        v-show="shown.has(c.id)"
-        :key="c.id"
-        class="card character"
-        :style="{ '--tint': speakerTint(colors, c.id) }"
-      >
-        <div class="head">
-          <span class="swatch" aria-hidden="true" />
-          <div>
-            <h2>{{ c.name }}</h2>
-            <p class="muted small">
-              <template v-if="roleLabel(c)">{{ roleLabel(c) }} · </template>
-              <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
-              <template v-else>{{ count(usage?.get(c.id) ?? 0, 'line') }}</template>
-              <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
-              <template v-if="c.aliases.length"> · also “{{ c.aliases.join('”, “') }}”</template>
-            </p>
-          </div>
-          <button class="preview" :aria-label="`Preview ${c.name}’s voice`" @click="preview(c)">
-            Preview
-          </button>
-        </div>
-
-        <label>
-          Voice
-          <select
-            :value="c.voice.voiceName ?? ''"
-            @change="onVoicePicked(c, ($event.target as HTMLSelectElement).value)"
+      <template v-if="g.role === 'character'">
+        <div v-if="hasCharacters" class="match">
+          <button
+            type="button"
+            :class="{ danger: matching }"
+            @click="matchVoices"
+            @blur="leaveMatch"
           >
-            <option value="">Device default ({{ c.voice.lang }})</option>
-            <option v-if="resolved.get(c.id)?.substituted" :value="c.voice.voiceName">
-              {{ c.voice.voiceName }} (not on this device)
-            </option>
-            <option v-for="v in voiceChoices" :key="v.name" :value="v.name">
-              {{ v.label }}
-            </option>
-          </select>
-        </label>
-        <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
-          <span class="badge">Substituted</span>
-          This voice isn't installed here, so
-          {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads instead,
-          with the same pitch and speed.
-        </p>
-        <div class="sliders">
-          <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
-            <span class="dial-label">
-              {{ dial === 'pitch' ? 'Pitch' : 'Speed' }}
-              <span class="dial-value">{{ dialText(dialValue(c, dial)) }}</span>
-            </span>
-            <input
-              type="range"
-              min="0.5"
-              max="2"
-              step="0.05"
-              :value="dialValue(c, dial)"
-              :aria-valuetext="dialText(dialValue(c, dial))"
-              @input="onDialInput(c, dial, $event)"
-              @change="onDialChange(c, dial, $event)"
-            />
-          </label>
+            {{ matching ? 'Confirm match' : 'Match voices to traits' }}
+          </button>
+          <p v-if="matching" class="warning" role="status">{{ matchText }}</p>
+          <p v-if="matched" class="muted small done" role="status">Voices matched to traits.</p>
         </div>
+        <p v-else-if="story" class="empty card">
+          <template v-if="analysed">No characters were found in the analysed parts.</template>
+          <template v-else>Characters appear here once a part has been analysed.</template>
+          <RouterLink :to="{ name: 'story', params: { id } }">Go to the parts</RouterLink>
+        </p>
+      </template>
 
-        <details>
-          <summary class="chevron">Edit names or merge</summary>
-          <CharacterEditor
-            :key="c.name + c.aliases.join()"
-            :character="c"
-            :cast="story?.cast ?? []"
-            :name-error="nameClash?.id === c.id ? clashText : undefined"
-            @save="saveNames(c, $event)"
-            @merge="merge(c, $event)"
-          />
-        </details>
-
-        <CharacterTraits
-          v-if="c.role !== 'unknown'"
-          :character="c"
-          :voice-kept="voiceKept.has(c.id)"
-          @change="changeTraits(c, $event)"
-          @repick="repickVoice(c)"
-        />
-
-        <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
-          <summary class="chevron">See {{ c.name }}’s lines</summary>
-          <template v-if="memberLines.get(c.id)">
-            <p v-if="!memberLines.get(c.id)!.length" class="muted small">
-              Their lines are in parts that need analysing again.
-            </p>
-            <ol>
-              <li
-                v-for="l in memberLines.get(c.id)!.slice(0, linesShown.get(c.id) ?? LINES_PAGE)"
-                :key="l.partId + ':' + l.index"
-              >
-                <RouterLink
-                  :to="{
-                    name: 'reader',
-                    params: { id, partId: l.partId },
-                    query: { line: String(l.index) },
-                  }"
-                >
-                  <span class="line-part muted small">{{ l.partTitle }}</span>
-                  <span class="line-text" :data-mode="l.segment.mode">{{ l.text }}</span>
-                </RouterLink>
-              </li>
-            </ol>
-            <button
-              v-if="memberLines.get(c.id)!.length > (linesShown.get(c.id) ?? LINES_PAGE)"
-              type="button"
-              class="link"
-              @click="showMoreLines(c)"
-            >
-              Show more ({{ memberLines.get(c.id)!.length - (linesShown.get(c.id) ?? LINES_PAGE) }}
-              left)
+      <ul class="cast">
+        <li
+          v-for="c in g.members"
+          v-show="shown.has(c.id)"
+          :key="c.id"
+          class="card character"
+          :style="{ '--tint': speakerTint(colors, c.id) }"
+        >
+          <div class="head">
+            <span class="swatch" aria-hidden="true" />
+            <div>
+              <h3>{{ c.name }}</h3>
+              <p class="muted small">
+                <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
+                <template v-else>{{ count(usage?.get(c.id) ?? 0, 'line') }}</template>
+                <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
+                <template v-if="c.aliases.length"> · also “{{ c.aliases.join('”, “') }}”</template>
+              </p>
+            </div>
+            <button class="preview" :aria-label="`Preview ${c.name}’s voice`" @click="preview(c)">
+              Preview
             </button>
-          </template>
-        </details>
-      </li>
-    </ul>
+          </div>
+
+          <div class="voice">
+            <div class="voice-head">
+              <label :for="`voice-${c.id}`">Voice</label>
+              <span :id="`voice-mode-${c.id}`" class="chip" :class="{ manual: c.voice.manual }">
+                {{ c.voice.manual ? 'Set by hand' : 'Automatic' }}
+              </span>
+              <button
+                v-if="c.voice.manual"
+                type="button"
+                class="link back"
+                :aria-label="`Back to an automatic voice for ${c.name}`"
+                @click="repickVoice(c)"
+              >
+                Back to automatic
+              </button>
+            </div>
+            <select
+              :id="`voice-${c.id}`"
+              :aria-describedby="`voice-mode-${c.id}`"
+              :value="c.voice.voiceName ?? ''"
+              @change="onVoicePicked(c, ($event.target as HTMLSelectElement).value)"
+            >
+              <option value="">Device default ({{ c.voice.lang }})</option>
+              <option v-if="resolved.get(c.id)?.substituted" :value="c.voice.voiceName">
+                {{ c.voice.voiceName }} (not on this device)
+              </option>
+              <option v-for="v in voiceChoices" :key="v.name" :value="v.name">
+                {{ v.label }}
+              </option>
+            </select>
+          </div>
+          <p v-if="resolved.get(c.id)?.substituted" class="substituted small">
+            <span class="badge">Substituted</span>
+            This voice isn't installed here, so
+            {{ resolved.get(c.id)!.voiceName ?? `the default ${c.voice.lang} voice` }} reads
+            instead, with the same pitch and speed.
+          </p>
+          <div class="sliders">
+            <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
+              <span class="dial-label">
+                {{ dial === 'pitch' ? 'Pitch' : 'Speed' }}
+                <span class="dial-value">{{ dialText(dialValue(c, dial)) }}</span>
+              </span>
+              <input
+                type="range"
+                min="0.5"
+                max="2"
+                step="0.05"
+                :value="dialValue(c, dial)"
+                :aria-valuetext="dialText(dialValue(c, dial))"
+                @input="onDialInput(c, dial, $event)"
+                @change="onDialChange(c, dial, $event)"
+              />
+            </label>
+          </div>
+
+          <details>
+            <summary class="chevron">Edit names or merge</summary>
+            <CharacterEditor
+              :key="c.name + c.aliases.join()"
+              :character="c"
+              :cast="story?.cast ?? []"
+              :name-error="nameClash?.id === c.id ? clashText : undefined"
+              @save="saveNames(c, $event)"
+              @merge="merge(c, $event)"
+            />
+          </details>
+
+          <CharacterTraits
+            v-if="c.role !== 'unknown'"
+            :character="c"
+            :voice-kept="voiceKept.has(c.id)"
+            @change="changeTraits(c, $event)"
+            @repick="repickVoice(c)"
+          />
+
+          <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
+            <summary class="chevron">See {{ c.name }}’s lines</summary>
+            <template v-if="memberLines.get(c.id)">
+              <p v-if="!memberLines.get(c.id)!.length" class="muted small">
+                Their lines are in parts that need analysing again.
+              </p>
+              <ol>
+                <li
+                  v-for="l in memberLines.get(c.id)!.slice(0, linesShown.get(c.id) ?? LINES_PAGE)"
+                  :key="l.partId + ':' + l.index"
+                >
+                  <RouterLink
+                    :to="{
+                      name: 'reader',
+                      params: { id, partId: l.partId },
+                      query: { line: String(l.index) },
+                    }"
+                  >
+                    <span class="line-part muted small">{{ l.partTitle }}</span>
+                    <span class="line-text" :data-mode="l.segment.mode">{{ l.text }}</span>
+                  </RouterLink>
+                </li>
+              </ol>
+              <button
+                v-if="memberLines.get(c.id)!.length > (linesShown.get(c.id) ?? LINES_PAGE)"
+                type="button"
+                class="link"
+                @click="showMoreLines(c)"
+              >
+                Show more ({{
+                  memberLines.get(c.id)!.length - (linesShown.get(c.id) ?? LINES_PAGE)
+                }}
+                left)
+              </button>
+            </template>
+          </details>
+        </li>
+      </ul>
+    </section>
   </main>
 </template>
 
@@ -570,9 +650,83 @@ function toldLabel(c: Character): string {
   align-items: center;
 }
 
-.head h2 {
+.head h3 {
   font-size: 1.05rem;
   margin: 0;
+}
+
+.tips {
+  margin: 8px 0 12px;
+}
+
+.tips ul {
+  margin: 0;
+  padding-inline-start: 20px;
+  display: grid;
+  gap: 6px;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.group {
+  margin-top: 24px;
+}
+
+.group > h2 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 1.15rem;
+  margin: 0;
+}
+
+.group > .small {
+  margin: 2px 0 0;
+}
+
+.count {
+  padding: 0 8px;
+  border-radius: 999px;
+  background: var(--border);
+  font-size: 0.8rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.empty {
+  display: grid;
+  gap: 4px;
+  margin: 12px 0 0;
+}
+
+.voice {
+  display: grid;
+  gap: 4px;
+}
+
+.voice-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+}
+
+.chip {
+  padding: 1px 8px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.chip.manual {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.link.back {
+  margin-inline-start: auto;
+  font-size: 0.85rem;
 }
 
 .small {

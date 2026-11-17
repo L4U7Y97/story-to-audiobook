@@ -83,10 +83,9 @@ function merge() {
         />
       </label>
       <p v-if="narrator" :id="hintId" class="hint">
-        The narrator reads the story unless a part or passage is told by a character. If one person
-        tells the whole story, add the names others call them (e.g. Watson). If several characters
-        take turns, leave the narrator unnamed (named “Narrator”, with no other names) and use “Told
-        by” in the reader. Don’t use the author’s or reader’s name.
+        If one person tells the whole story, add the names others call them (e.g. Watson). If
+        several characters take turns, leave the narrator unnamed (named “Narrator”, with no other
+        names) and use “Told by” in the reader. Don’t use the author’s or reader’s name.
       </p>
       <p v-if="nameError" class="warning" role="alert">{{ nameError }}</p>
       <button type="submit">Save names</button>

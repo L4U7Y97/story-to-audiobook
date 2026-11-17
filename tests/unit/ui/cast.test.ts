@@ -41,7 +41,7 @@ async function openCast(story: StoredStory) {
 
 function cardOf(host: HTMLElement, name: string): HTMLElement {
   const card = [...host.querySelectorAll<HTMLElement>('li.card')].find(
-    (li) => li.querySelector('h2')?.textContent?.trim() === name,
+    (li) => li.querySelector('h3')?.textContent?.trim() === name,
   );
   if (!card) throw new Error(`no card for ${name}`);
   return card;
@@ -145,7 +145,7 @@ describe('a name another member has', () => {
   it('sends the editor to rename the unknown speaker when it is called that', async () => {
     const story = await storeStory(holmes);
     const host = await openCast(story);
-    const names = () => [...host.querySelectorAll('li.card h2')].map((h) => h.textContent?.trim());
+    const names = () => [...host.querySelectorAll('li.card h3')].map((h) => h.textContent?.trim());
     saveNames(cardOf(host, 'Unknown speaker'), { name: 'Crowd' });
     await until(() => names().includes('Crowd'), 'the rename');
     saveNames(cardOf(host, 'Holmes'), { name: 'crowd' });
@@ -242,7 +242,7 @@ describe('the cast search', () => {
   const shownNames = (host: HTMLElement) =>
     [...host.querySelectorAll<HTMLElement>('li.card')]
       .filter((li) => li.style.display !== 'none')
-      .map((li) => li.querySelector('h2')?.textContent?.trim());
+      .map((li) => li.querySelector('h3')?.textContent?.trim());
   const search = (host: HTMLElement) => host.querySelector<HTMLInputElement>('.cast-filter input')!;
 
   it('shows only the members whose name or other names match', async () => {
@@ -818,15 +818,12 @@ describe('a card', () => {
   const meta = (card: HTMLElement) =>
     card.querySelector('.head p')!.textContent?.replace(/\s+/gu, ' ').trim();
 
-  it('counts lines as “1 line” or “2 lines”, and names the narrator’s role once', async () => {
+  it('counts lines as “1 line” or “2 lines”, without repeating the role', async () => {
     const host = await openCast(await storeStory(holmes));
     expect(meta(cardOf(host, 'Holmes'))).toBe('1 line');
-    // "Narrator" is not said twice; a narrator given a name is still called the narrator.
+    // The role is the section's heading, so the card doesn't repeat it.
     expect(meta(cardOf(host, 'Narrator'))).toBe('2 lines');
-    saveNames(cardOf(host, 'Narrator'), { name: 'John' });
-    const john = () => host.querySelector('li.card h2')?.textContent?.trim() === 'John';
-    await until(john, 'the new name');
-    expect(meta(cardOf(host, 'John'))).toBe('Narrator · 2 lines');
+    expect(meta(cardOf(host, 'Unknown speaker'))).toBe('not in any part yet');
   });
 
   it('names whose voice its Preview button plays', async () => {
@@ -873,5 +870,66 @@ describe('a card', () => {
     await until(() => !merge.disabled, 'Merge');
     expect(merge.hasAttribute('aria-describedby')).toBe(false);
     expect(card.textContent).not.toContain('Choose a character first.');
+  });
+});
+
+describe('the voice rules', () => {
+  const chip = (card: HTMLElement) => card.querySelector('.voice .chip')!.textContent?.trim();
+  const back = (card: HTMLElement) => button(card, 'Back to automatic');
+
+  it('show whether a voice is automatic or set by hand, and put it back to automatic', async () => {
+    stubVoices.push(zira, david);
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const card = cardOf(host, 'Holmes');
+    expect(chip(card)).toBe('Automatic');
+    expect(back(card)).toBeUndefined();
+    // The picker is described by the chip, so a screen reader hears it with the voice.
+    const select = voiceSelect(card);
+    expect(
+      host.querySelector(`#${select.getAttribute('aria-describedby')}`)?.textContent?.trim(),
+    ).toBe('Automatic');
+
+    await chooseVoice(card, david.name);
+    await until(() => chip(card) === 'Set by hand', 'the hand-set chip');
+    back(card)!.click();
+    const automatic = await storedMember(story, story.ids.Holmes!, (m) => !m.voice.manual);
+    expect('manual' in automatic.voice).toBe(false);
+    await until(() => chip(card) === 'Automatic', 'the automatic chip');
+    expect(back(card)).toBeUndefined();
+    await playerTold(2);
+  });
+
+  it('group the cast under Narrator, Characters and Unattributed, each saying what it does', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const sections = [...host.querySelectorAll<HTMLElement>('section.group')];
+    const titles = sections.map((s) =>
+      s.querySelector('h2')!.textContent?.replace(/\s+/gu, ' ').trim(),
+    );
+    expect(titles).toEqual(['Narrator', 'Characters 2', 'Unattributed']);
+    const names = (s: HTMLElement) =>
+      [...s.querySelectorAll('li.card h3')].map((h) => h.textContent?.trim());
+    expect(sections.map(names)).toEqual([['Narrator'], ['Holmes', 'Watson'], ['Unknown speaker']]);
+    expect(sections[1]!.querySelector('.match button')).not.toBeNull();
+
+    // A search hides the sections it leaves empty.
+    typeInto(host.querySelector<HTMLInputElement>('input[type="search"]')!, 'holm');
+    await until(() => sections[0]!.style.display === 'none', 'the narrator section to hide');
+    expect(sections[1]!.style.display).toBe('');
+    expect(sections[2]!.style.display).toBe('none');
+  });
+
+  it('say when the analysed parts found no characters', async () => {
+    const host = await openCast(await storeStory([['Once upon a time.', 'N', 'narration']]));
+    const empty = await until(() => host.querySelector('section.group .empty'), 'the empty note');
+    expect(empty.textContent).toContain('No characters were found in the analysed parts.');
+    expect(empty.querySelector('a')?.textContent?.trim()).toBe('Go to the parts');
+  });
+
+  it('are explained in “How voices work”, closed until opened', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const tips = host.querySelector<HTMLDetailsElement>('details.tips')!;
+    expect(tips.querySelector('summary')!.textContent?.trim()).toBe('How voices work');
+    expect(tips.open).toBe(false);
   });
 });

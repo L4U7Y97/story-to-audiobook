@@ -75,7 +75,7 @@ function pick(key: TraitKey, event: Event) {
 
 <template>
   <details class="traits">
-    <summary>Traits: {{ summary }}</summary>
+    <summary class="chevron">Traits: {{ summary }}</summary>
     <div class="body">
       <fieldset :aria-describedby="hintId">
         <legend class="sr-only">Traits of {{ character.name }}</legend>
@@ -93,7 +93,7 @@ function pick(key: TraitKey, event: Event) {
         The voice, its pitch and its speed are picked to suit these. Changing one picks them again,
         unless you set the voice by hand.
       </p>
-      <p v-if="voiceKept" class="warning" role="alert">
+      <p v-if="voiceKept" class="warning" role="status">
         Traits changed; the voice you set by hand was kept. Use “Re-pick voice” to choose one that
         matches.
       </p>
@@ -103,15 +103,6 @@ function pick(key: TraitKey, event: Event) {
 </template>
 
 <style scoped>
-summary {
-  cursor: pointer;
-  color: var(--accent);
-  font-size: 0.9rem;
-  min-height: 44px;
-  display: flex;
-  align-items: center;
-}
-
 .body {
   display: grid;
   gap: 8px;

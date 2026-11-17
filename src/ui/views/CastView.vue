@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { Character, VoiceSettings } from '@/format/types';
 import { voicesForLang, type DeviceVoice } from '@/playback/engine';
 import { getAppDb } from '@/storage/db';
@@ -12,7 +12,7 @@ import {
   setTraitsInStory,
   setVoiceInStory,
 } from '@/storage/cast';
-import { normaliseName } from '@/analysis/castMatch';
+import { isDefaultName, normaliseName } from '@/analysis/castMatch';
 import {
   castUsage,
   filterCast,
@@ -178,6 +178,45 @@ async function setVoice(
   });
 }
 
+type Dial = 'pitch' | 'rate';
+/** A pitch or speed being dragged, shown in its label before it is saved on release. */
+const drafts = ref(new Map<string, number>());
+const draftKey = (c: Character, dial: Dial) => `${c.id}:${dial}`;
+function dialValue(c: Character, dial: Dial): number {
+  return drafts.value.get(draftKey(c, dial)) ?? c.voice[dial];
+}
+function onDialInput(c: Character, dial: Dial, event: Event) {
+  const next = new Map(drafts.value);
+  next.set(draftKey(c, dial), Number((event.target as HTMLInputElement).value));
+  drafts.value = next;
+}
+async function onDialChange(c: Character, dial: Dial, event: Event) {
+  const value = Number((event.target as HTMLInputElement).value);
+  await setVoice(c, { [dial]: value });
+  // A refused save leaves the stored value, which the label then shows again.
+  if (error.value) dropDraft(c.id, dial);
+}
+function dropDraft(id: string, dial: Dial) {
+  const next = new Map(drafts.value);
+  next.delete(`${id}:${dial}`);
+  drafts.value = next;
+}
+// A draft goes once the cast holds what it shows, so the label never jumps back while saving.
+watch(
+  () => story.value?.cast,
+  (cast) => {
+    for (const c of cast ?? []) {
+      for (const dial of ['pitch', 'rate'] as const) {
+        if (drafts.value.get(draftKey(c, dial)) === c.voice[dial]) dropDraft(c.id, dial);
+      }
+    }
+  },
+);
+/** "Normal" at 1, else the factor: "1.10×". */
+function dialText(value: number): string {
+  return Math.abs(value - 1) < 0.001 ? 'Normal' : `${value.toFixed(2)}×`;
+}
+
 function onVoicePicked(character: Character, name: string) {
   const voice = deviceVoices.value.find((v) => v.name === name);
   void setVoice(
@@ -209,6 +248,21 @@ async function repickVoice(character: Character) {
 }
 
 const hasCharacters = computed(() => story.value?.cast.some((c) => c.role === 'character'));
+/** What "Match voices to traits" would do, counted from the cast as it is now. */
+const matchText = computed(() => {
+  const characters = (story.value?.cast ?? []).filter((c) => c.role === 'character');
+  const kept = characters.filter((c) => c.voice.manual).length;
+  const repicked = characters.length - kept;
+  const stay =
+    kept === 0
+      ? ''
+      : `; the ${count(kept, 'voice')} you set by hand ${kept === 1 ? 'stays' : 'stay'}`;
+  const pick =
+    repicked === 0
+      ? 'Guesses missing traits from names; every voice was set by hand, so none changes'
+      : `Picks ${count(repicked, 'voice')} again to suit traits guessed from names${stay}`;
+  return `${pick}. Press again to confirm.`;
+});
 /** "Match voices to traits" was pressed once: the next press does it. */
 const matching = ref(false);
 const matched = ref(false);
@@ -288,17 +342,20 @@ function clashMessage(name: string, editing: Character, owner: Character): strin
   );
 }
 
+/** The role, said only when the name doesn't already say it ("Watson · Narrator"). */
 function roleLabel(c: Character): string {
-  return c.role === 'narrator'
-    ? 'Narrator · reads the story unless a part or passage is told by a character'
-    : c.role === 'unknown'
-      ? 'Unattributed lines'
-      : '';
+  if (c.role === 'narrator') return isDefaultName(c.name, 'narrator') ? '' : 'Narrator';
+  return c.role === 'unknown' ? 'Unattributed lines' : '';
+}
+
+/** "1 line", "4 lines". */
+function count(n: number, noun: string): string {
+  return `${n} ${n === 1 ? noun : `${noun}s`}`;
 }
 
 function toldLabel(c: Character): string {
   const parts = c.role === 'narrator' ? 0 : (told.value.get(c.id) ?? 0);
-  return parts === 0 ? '' : `tells ${parts} ${parts === 1 ? 'part' : 'parts'}`;
+  return parts === 0 ? '' : `tells ${count(parts, 'part')}`;
 }
 </script>
 
@@ -323,12 +380,8 @@ function toldLabel(c: Character): string {
       <button type="button" :class="{ danger: matching }" @click="matchVoices" @blur="leaveMatch">
         {{ matching ? 'Confirm match' : 'Match voices to traits' }}
       </button>
-      <p v-if="matching" class="warning" role="alert">
-        Traits missing from a character are guessed from its names, then every voice not marked as
-        set by hand is picked again. A voice you chose before this update has no mark, so it is
-        picked again too. Press again to confirm.
-      </p>
-      <p v-if="matched" class="muted small" role="status">Voices matched to traits.</p>
+      <p v-if="matching" class="warning" role="status">{{ matchText }}</p>
+      <p v-if="matched" class="muted small done" role="status">Voices matched to traits.</p>
     </div>
 
     <ul class="cast">
@@ -346,12 +399,14 @@ function toldLabel(c: Character): string {
             <p class="muted small">
               <template v-if="roleLabel(c)">{{ roleLabel(c) }} · </template>
               <template v-if="usage && !usage.get(c.id)">not in any part yet</template>
-              <template v-else>{{ usage?.get(c.id) ?? 0 }} lines</template>
+              <template v-else>{{ count(usage?.get(c.id) ?? 0, 'line') }}</template>
               <template v-if="toldLabel(c)"> · {{ toldLabel(c) }}</template>
               <template v-if="c.aliases.length"> · also “{{ c.aliases.join('”, “') }}”</template>
             </p>
           </div>
-          <button class="preview" @click="preview(c)">Preview</button>
+          <button class="preview" :aria-label="`Preview ${c.name}’s voice`" @click="preview(c)">
+            Preview
+          </button>
         </div>
 
         <label>
@@ -376,32 +431,26 @@ function toldLabel(c: Character): string {
           with the same pitch and speed.
         </p>
         <div class="sliders">
-          <label>
-            Pitch {{ c.voice.pitch.toFixed(2) }}
+          <label v-for="dial in ['pitch', 'rate'] as const" :key="dial">
+            <span class="dial-label">
+              {{ dial === 'pitch' ? 'Pitch' : 'Speed' }}
+              <span class="dial-value">{{ dialText(dialValue(c, dial)) }}</span>
+            </span>
             <input
               type="range"
               min="0.5"
               max="2"
               step="0.05"
-              :value="c.voice.pitch"
-              @change="setVoice(c, { pitch: Number(($event.target as HTMLInputElement).value) })"
-            />
-          </label>
-          <label>
-            Speed {{ c.voice.rate.toFixed(2) }}
-            <input
-              type="range"
-              min="0.5"
-              max="2"
-              step="0.05"
-              :value="c.voice.rate"
-              @change="setVoice(c, { rate: Number(($event.target as HTMLInputElement).value) })"
+              :value="dialValue(c, dial)"
+              :aria-valuetext="dialText(dialValue(c, dial))"
+              @input="onDialInput(c, dial, $event)"
+              @change="onDialChange(c, dial, $event)"
             />
           </label>
         </div>
 
         <details>
-          <summary>Edit names or merge</summary>
+          <summary class="chevron">Edit names or merge</summary>
           <CharacterEditor
             :key="c.name + c.aliases.join()"
             :character="c"
@@ -421,7 +470,7 @@ function toldLabel(c: Character): string {
         />
 
         <details v-if="usage?.get(c.id)" class="lines" @toggle="onLinesToggle(c, $event)">
-          <summary>See {{ c.name }}’s lines</summary>
+          <summary class="chevron">See {{ c.name }}’s lines</summary>
           <template v-if="memberLines.get(c.id)">
             <p v-if="!memberLines.get(c.id)!.length" class="muted small">
               Their lines are in parts that need analysing again.
@@ -538,19 +587,29 @@ function toldLabel(c: Character): string {
   background: var(--tint, var(--muted));
 }
 
+/* Side by side when the card has room for two sliders a thumb can still be set on, else stacked. */
 .sliders {
   display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 4px 16px;
 }
 
-summary {
-  cursor: pointer;
-  color: var(--accent);
-  font-size: 0.9rem;
-  min-height: 32px;
+.dial-label {
   display: flex;
-  align-items: center;
+  justify-content: space-between;
+}
+
+.dial-value {
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+}
+
+/* A range input's thumb is small: a taller box gives the finger more to land on. */
+.sliders input {
+  min-height: 30px;
+  padding: 0;
+  border: 0;
+  background: none;
 }
 
 .error {
@@ -593,11 +652,5 @@ summary {
 
 .line-text[data-mode='thought'] {
   font-style: italic;
-}
-
-.sliders input {
-  padding: 0;
-  border: 0;
-  background: none;
 }
 </style>

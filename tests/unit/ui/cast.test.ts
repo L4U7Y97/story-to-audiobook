@@ -349,7 +349,7 @@ const KEPT =
 const traitsOf = (card: HTMLElement) => card.querySelector<HTMLDetailsElement>('details.traits')!;
 const traitsSummary = (card: HTMLElement) =>
   traitsOf(card).querySelector('summary')!.textContent?.trim();
-const keptNote = (card: HTMLElement) => traitsOf(card).querySelector('[role="alert"]');
+const keptNote = (card: HTMLElement) => traitsOf(card).querySelector('.warning');
 /** The card's voice picker: the first list in it. */
 const voiceSelect = (card: HTMLElement) => card.querySelector<HTMLSelectElement>('select')!;
 const optionLabels = (select: HTMLSelectElement) =>
@@ -688,17 +688,17 @@ describe('the voice picker', () => {
 
 describe('“Match voices to traits”', () => {
   // Truthful about a story from before voices were marked: its hand-picked voices have no mark.
+  // Counted from the cast: Holmes's voice is set by hand, Watson's and the old man's are not.
   const WARNING =
-    'Traits missing from a character are guessed from its names, then every voice not marked ' +
-    'as set by hand is picked again. A voice you chose before this update has no mark, so it is ' +
-    'picked again too. Press again to confirm.';
+    'Picks 2 voices again to suit traits guessed from names; the 1 voice you set by hand stays. ' +
+    'Press again to confirm.';
   const oldMan: Chunk[] = [
     ...holmes,
     ['\n\n“Who goes there?”', 'the old man', 'speech'],
     [' asked the old man.', 'N', 'narration'],
   ];
   const matchButton = (host: HTMLElement) => host.querySelector<HTMLButtonElement>('.match button');
-  const warning = (host: HTMLElement) => host.querySelector('.match [role="alert"]');
+  const warning = (host: HTMLElement) => host.querySelector('.match .warning');
 
   it('needs two presses, then guesses traits from names and picks the voices again', async () => {
     // The narrator reads with the device's first voice, Zira. Watson, picked first, takes the
@@ -742,11 +742,11 @@ describe('“Match voices to traits”', () => {
     await until(() => !warning(host), 'the warning to go');
     expect(match.classList.contains('danger')).toBe(false);
     expect(match.textContent?.trim()).toBe('Match voices to traits');
-    const done = await until(() => host.querySelector('.match [role="status"]'), 'the result');
+    const done = await until(() => host.querySelector('.match .done'), 'the result');
     expect(done.textContent?.trim()).toBe('Voices matched to traits.');
     // What it did is said until focus moves on.
     match.dispatchEvent(new Event('blur'));
-    await until(() => !host.querySelector('.match [role="status"]'), 'the result to go');
+    await until(() => !host.querySelector('.match .done'), 'the result to go');
   });
 
   it('is disarmed when focus leaves the button', async () => {
@@ -811,5 +811,67 @@ describe('the merge list of a long cast', () => {
   it('is not offered on a short cast', async () => {
     const host = await openCast(await storeStory(holmes));
     expect(filterOf(cardOf(host, 'Holmes'))).toBeNull();
+  });
+});
+
+describe('a card', () => {
+  const meta = (card: HTMLElement) =>
+    card.querySelector('.head p')!.textContent?.replace(/\s+/gu, ' ').trim();
+
+  it('counts lines as “1 line” or “2 lines”, and names the narrator’s role once', async () => {
+    const host = await openCast(await storeStory(holmes));
+    expect(meta(cardOf(host, 'Holmes'))).toBe('1 line');
+    // "Narrator" is not said twice; a narrator given a name is still called the narrator.
+    expect(meta(cardOf(host, 'Narrator'))).toBe('2 lines');
+    saveNames(cardOf(host, 'Narrator'), { name: 'John' });
+    const john = () => host.querySelector('li.card h2')?.textContent?.trim() === 'John';
+    await until(john, 'the new name');
+    expect(meta(cardOf(host, 'John'))).toBe('Narrator · 2 lines');
+  });
+
+  it('names whose voice its Preview button plays', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const preview = cardOf(host, 'Holmes').querySelector('button.preview')!;
+    expect(preview.getAttribute('aria-label')).toBe('Preview Holmes’s voice');
+  });
+
+  it('shows a pitch as it is dragged, and saves it only on release', async () => {
+    const story = await storeStory(holmes);
+    const host = await openCast(story);
+    const card = cardOf(host, 'Watson');
+    const pitch = card.querySelector<HTMLInputElement>('.sliders input[type="range"]')!;
+    const label = () => pitch.closest('label')!.querySelector('.dial-value')!.textContent?.trim();
+    expect(label()).toBe('Normal');
+    expect(pitch.getAttribute('aria-valuetext')).toBe('Normal');
+
+    pitch.value = '1.25';
+    pitch.dispatchEvent(new Event('input'));
+    await until(() => label() === '1.25×', 'the dragged value');
+    expect(pitch.getAttribute('aria-valuetext')).toBe('1.25×');
+    await pause();
+    const unsaved = (await getStory(db, story.storyId))!.cast.find(
+      (c) => c.id === story.ids.Watson,
+    );
+    expect(unsaved!.voice.pitch).toBe(1);
+
+    pitch.dispatchEvent(new Event('change'));
+    await storedMember(story, story.ids.Watson!, (m) => m.voice.pitch === 1.25);
+    expect(label()).toBe('1.25×');
+  });
+
+  it('says why Merge cannot be pressed until a character is chosen', async () => {
+    const host = await openCast(await storeStory(holmes));
+    const card = cardOf(host, 'Holmes');
+    const merge = card.querySelector<HTMLButtonElement>('.editor .merge button')!;
+    const hint = () => card.querySelector(`#${merge.getAttribute('aria-describedby')}`);
+    expect(merge.disabled).toBe(true);
+    expect(hint()?.textContent?.trim()).toBe('Choose a character first.');
+
+    const select = card.querySelector<HTMLSelectElement>('.editor .merge select')!;
+    select.value = [...select.options].find((o) => o.textContent?.trim() === 'Watson')!.value;
+    select.dispatchEvent(new Event('change'));
+    await until(() => !merge.disabled, 'Merge');
+    expect(merge.hasAttribute('aria-describedby')).toBe(false);
+    expect(card.textContent).not.toContain('Choose a character first.');
   });
 });

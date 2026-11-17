@@ -159,6 +159,43 @@ label {
   color: var(--muted);
 }
 
+/* A disclosure row in a card: full width, a finger tall, with a chevron that turns when open. */
+summary.chevron {
+  cursor: pointer;
+  color: var(--accent);
+  font-size: 0.9rem;
+  min-height: 44px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  list-style: none;
+}
+
+summary.chevron::-webkit-details-marker {
+  display: none;
+}
+
+summary.chevron::before {
+  content: '';
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-right: 2px solid currentColor;
+  border-bottom: 2px solid currentColor;
+  transform: rotate(-45deg);
+  transition: transform 0.15s;
+}
+
+details[open] > summary.chevron::before {
+  transform: rotate(45deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  summary.chevron::before {
+    transition: none;
+  }
+}
+
 .sr-only {
   position: absolute;
   width: 1px;
@@ -228,7 +265,7 @@ nav.top a {
 }
 
 input[type='range'] {
-  height: 44px;
+  height: 30px;
   padding: 0;
   border: none;
   background: none;

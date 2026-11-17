@@ -50,6 +50,7 @@ const namesMove = computed(
     (props.character.aliases.length > 0 || !isDefaultName(props.character.name, 'narrator')),
 );
 const hintId = computed(() => `names-hint-${props.character.id}`);
+const mergeHintId = computed(() => `merge-hint-${props.character.id}`);
 
 function save() {
   emit('save', { name: name.value, aliases: parseAliases(aliases.value, name.value) });
@@ -82,9 +83,10 @@ function merge() {
         />
       </label>
       <p v-if="narrator" :id="hintId" class="hint">
-        If one person tells the whole story, add the names others call them (e.g. Watson). If
-        several characters take turns, leave the narrator unnamed (named “Narrator”, with no other
-        names) and use “Told by” in the reader. Don’t use the author’s or reader’s name.
+        The narrator reads the story unless a part or passage is told by a character. If one person
+        tells the whole story, add the names others call them (e.g. Watson). If several characters
+        take turns, leave the narrator unnamed (named “Narrator”, with no other names) and use “Told
+        by” in the reader. Don’t use the author’s or reader’s name.
       </p>
       <p v-if="nameError" class="warning" role="alert">{{ nameError }}</p>
       <button type="submit">Save names</button>
@@ -121,7 +123,7 @@ function merge() {
         If {{ target.name }} tells the whole story, open {{ target.name }}’s card and use “Same
         person as… {{ character.name }}” instead.
       </p>
-      <p v-if="confirming && target" class="warning" role="alert">
+      <p v-if="confirming && target" class="warning" role="status">
         <template v-if="removable">
           “{{ character.name }}” will be removed and all their lines read by “{{ target.name }}”.
         </template>
@@ -129,9 +131,15 @@ function merge() {
         <template v-if="namesMove"> The narrator’s names move to “{{ target.name }}”.</template>
         Press again to confirm.
       </p>
-      <button :disabled="!mergeInto" :class="{ danger: confirming }" @click="merge">
+      <button
+        :disabled="!mergeInto"
+        :class="{ danger: confirming }"
+        :aria-describedby="mergeInto ? undefined : mergeHintId"
+        @click="merge"
+      >
         {{ confirming ? 'Confirm merge' : 'Merge' }}
       </button>
+      <p v-if="!mergeInto" :id="mergeHintId" class="hint">Choose a character first.</p>
     </div>
   </div>
 </template>

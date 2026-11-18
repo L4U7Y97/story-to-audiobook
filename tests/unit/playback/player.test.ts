@@ -278,6 +278,21 @@ describe.each(['fake engine', 'native engine'] as const)('Player with the %s', (
     expect(saved.at(-1)).toEqual({ partId: 'p1', segmentIndex: 2 });
   });
 
+  // The reader relies on this after a speaker fix: the paused queue is out of date, so Done plays
+  // the place again (play) rather than resuming it (resume does nothing when idle).
+  it('drops a paused queue on a jump and waits, idle, at the new place', async () => {
+    const { player, saved } = setup(parts, kind);
+    await player.play();
+    await flush();
+    await player.pause();
+    await player.jump({ partId: 'p1', segmentIndex: 2 });
+    expect(player.state).toMatchObject({
+      state: 'idle',
+      position: { partId: 'p1', segmentIndex: 2 },
+    });
+    expect(saved.at(-1)).toEqual({ partId: 'p1', segmentIndex: 2 });
+  });
+
   it('restarts at the current segment when the speed changes', async () => {
     const { engine, player } = setup(parts, kind);
     await player.play();

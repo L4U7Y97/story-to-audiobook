@@ -5,13 +5,17 @@ import type { Segment } from '@/format/types';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { addBook, renameBook } from '@/storage/books';
 import { addPart } from '@/storage/parts';
-import { getStory } from '@/storage/stories';
+import { getStory, updateStory } from '@/storage/stories';
 import ReaderView from '@/ui/views/ReaderView.vue';
 import {
   button,
-  castChanged,
   db,
+  jumped,
   mountView,
+  paused,
+  played,
+  playerSnapshot,
+  resumed,
   savedCorrection,
   storeStory,
   stubVoices,
@@ -24,8 +28,16 @@ import {
 } from '../../helpers/ui';
 
 vi.mock('@/ui/composables/usePlayer', () => import('../../helpers/ui').then((m) => m.playerStub()));
+// Saves go through as usual; a test can hold one back to tap something while it is in flight.
+vi.mock('@/storage/analyses', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/storage/analyses')>();
+  return { ...actual, saveAnalysis: vi.fn(actual.saveAnalysis) };
+});
 
-afterEach(unmountView);
+afterEach(() => {
+  unmountView();
+  vi.mocked(saveAnalysis).mockReset();
+});
 
 const lines = (root: ParentNode) => [...root.querySelectorAll<HTMLElement>('.segment')];
 const tint = (el: Element | null | undefined) =>
@@ -314,7 +326,6 @@ describe('“Same person as…” in the speaker picker', () => {
     }
     expect((await getAnalysis(db, two))!.segments[0]!.speakerId).toBe(story.ids.Robert);
     await until(() => !host.querySelector('.sheet'), 'the picker to close');
-    expect(castChanged).toHaveBeenCalled();
   });
 
   it('goes back to choosing who reads the line without merging', async () => {
@@ -532,6 +543,286 @@ describe('a passage', () => {
     expect(stretch(story, saved, 'It was a long time')?.speakerId).toBe(story.ids.Hindley);
     expect(stretch(story, saved, 'Hush')?.speakerId).toBe(story.ids.Hindley);
     expect(stretch(story, saved, 'That was all')?.speakerId).toBe(story.ids.N);
+  });
+});
+
+describe('playback around a fix', () => {
+  // Once the unknown speaker's first two lines are both Tom's, they join into one line, and the
+  // lines after them move up by one: “Liar.” goes from line 3 to line 2.
+  const chunks: Chunk[] = [
+    ['“Where were you?”', 'U', 'speech'],
+    [' “Out.”', 'U', 'speech'],
+    [' I said.\n\n', 'N', 'narration'],
+    ['“Liar.”', 'U', 'speech'],
+  ];
+  const at = (story: StoredStory, segmentIndex: number, partId = story.partId) => ({
+    partId,
+    segmentIndex,
+  });
+  /** Lets saves and player moves still under way land, before checking that nothing happened. */
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 100));
+
+  async function fixing(story: StoredStory, count = chunks.length) {
+    const host = await mountView(ReaderView, { id: story.storyId, partId: story.partId });
+    await until(() => lines(host).length === count, 'the lines');
+    button(host, 'Fix speakers')!.click();
+    await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+    return host;
+  }
+
+  /** Gives the first two lines to Tom, one tap at a time; the second joins them. */
+  async function giveBothToTom(host: HTMLElement) {
+    button(await tap(host, 0), 'Tom')!.click();
+    await until(() => lines(host)[0]?.title === 'Tom', 'the first fix');
+    button(await tap(host, 1), 'Tom')!.click();
+    await until(() => lines(host).length === chunks.length - 1, 'the lines to join');
+  }
+
+  /** Starts a passage of the unknown speaker's first two lines told by Tom; they join. */
+  async function startPassage(host: HTMLElement) {
+    const sheet = await tap(host, 0);
+    sheet.querySelector<HTMLInputElement>('input[value="range"]')!.click();
+    button(sheet, 'Tom')!.click();
+    await until(() => host.querySelector('.banner'), 'the banner');
+  }
+
+  /** Holds the next save of an analysis back until the function it gives is called. */
+  function holdNextSave(): () => void {
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const save = vi.mocked(saveAnalysis);
+    const real = save.getMockImplementation()!;
+    save.mockImplementationOnce(async (...args) => {
+      await held;
+      return real(...args);
+    });
+    return release;
+  }
+
+  /**
+   * Adds a second part whose first line is longer than the first part's first three lines, so a
+   * place there read with the first part's lines would land on its line 0. Gives its id.
+   */
+  async function secondPart(story: StoredStory) {
+    const pieces: Chunk[] = [
+      ['The river had risen over the road in the night. ', 'N', 'narration'],
+      ['“Look,”', 'Tom', 'speech'],
+      [' said Tom.\n\n', 'N', 'narration'],
+      ['Nobody answered.', 'N', 'narration'],
+    ];
+    const text = pieces.map(([piece]) => piece).join('');
+    const part = await addPart(db, story.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text,
+    });
+    let end = 0;
+    await saveAnalysis(db, {
+      partId: part.id,
+      textHash: part.textHash,
+      analyzer: { kind: 'heuristic', version: 2 },
+      createdAt: new Date().toISOString(),
+      segments: pieces.map(([piece, who, mode]) => {
+        end += piece.length;
+        return {
+          start: end - piece.length,
+          end,
+          speakerId: story.ids[who]!,
+          mode,
+          source: 'heuristic',
+        };
+      }),
+    });
+    return part.id;
+  }
+
+  it('carries on from the same words, with the new voices, when Done ends the fix', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3) };
+    const host = await fixing(story);
+    expect(paused).toHaveBeenCalled();
+
+    await giveBothToTom(host);
+    // Each fix has the player drop the queue it built before, keeping to the same words.
+    await until(() => jumped.mock.calls.length === 2, 'the second fix to reach the player');
+    expect(jumped.mock.calls.map(([to]) => to)).toEqual([at(story, 3), at(story, 2)]);
+    await until(
+      () => host.querySelector('.segment.current')?.textContent === '“Liar.”',
+      'the playing line to stay on “Liar.”',
+    );
+
+    button(host, 'Done')!.click();
+    await until(() => played.mock.calls.length, 'playback to carry on');
+    expect(played).toHaveBeenCalledWith(at(story, 2));
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it('keeps to the words of a line that joins the line before it', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    // Playing “Out.”, which the second fix joins to the line before it.
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 1) };
+    const host = await fixing(story);
+    await giveBothToTom(host);
+    await until(() => jumped.mock.calls.length === 2, 'the second fix to reach the player');
+    expect(jumped.mock.calls.map(([to]) => to)).toEqual([at(story, 1), at(story, 0)]);
+    button(host, 'Done')!.click();
+    await until(() => played.mock.calls.length, 'playback to carry on');
+    expect(played).toHaveBeenCalledWith(at(story, 0));
+  });
+
+  it('carries on as it was when nothing was fixed', async () => {
+    const story = await storeStory(chunks);
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3) };
+    const host = await fixing(story);
+    button(host, 'Done')!.click();
+    await until(() => resumed.mock.calls.length, 'playback to resume');
+    expect(played).not.toHaveBeenCalled();
+    expect(jumped).not.toHaveBeenCalled();
+  });
+
+  it('leaves playback stopped on the same words when it was paused before Fix', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    playerSnapshot.value = { state: 'paused', speed: 1, position: at(story, 3) };
+    const host = await fixing(story);
+    button(await tap(host, 0), 'Tom')!.click();
+    await until(() => jumped.mock.calls.length, 'the fix to reach the player');
+    button(host, 'Done')!.click();
+    await until(() => !host.querySelector('.text.editing'), 'Done');
+    await settle();
+    expect(played).not.toHaveBeenCalled();
+    expect(resumed).not.toHaveBeenCalled();
+    // The fix dropped the queue the player had paused (a jump goes idle): ▶ builds it afresh.
+    expect(playerSnapshot.value).toMatchObject({ state: 'idle', position: at(story, 3) });
+  });
+
+  it('keeps the saved place on the same words when nothing has played', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    await updateStory(db, story.storyId, { position: at(story, 3) });
+    const host = await fixing(story);
+    await giveBothToTom(host);
+    await until(
+      async () => (await getStory(db, story.storyId))!.position?.segmentIndex === 2,
+      'the saved place to move to “Liar.”',
+    );
+    expect(jumped).not.toHaveBeenCalled();
+  });
+
+  it('leaves a saved place in another part where it is', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    const two = await secondPart(story);
+    await updateStory(db, story.storyId, { position: at(story, 3, two) });
+    const host = await fixing(story);
+    await giveBothToTom(host);
+    await settle();
+    expect((await getStory(db, story.storyId))!.position).toEqual(at(story, 3, two));
+  });
+
+  it('keeps playback in another part on its line, and carries on there', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    const two = await secondPart(story);
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3, two) };
+    const host = await fixing(story);
+    await giveBothToTom(host);
+    await until(() => jumped.mock.calls.length === 2, 'the second fix to reach the player');
+    expect(jumped.mock.calls.map(([to]) => to)).toEqual([at(story, 3, two), at(story, 3, two)]);
+    button(host, 'Done')!.click();
+    await until(() => played.mock.calls.length, 'playback to carry on');
+    expect(played).toHaveBeenCalledWith(at(story, 3, two));
+  });
+
+  it.each([['the next part'], ['the next part and back']])(
+    'leaves playback alone after Done once Fix went to %s',
+    async (trip) => {
+      const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+      const two = await secondPart(story);
+      playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3) };
+      const host = await fixing(story);
+      const select = host.querySelector<HTMLSelectElement>('.part-picker select')!;
+      for (const partId of trip.endsWith('back') ? [two, story.partId] : [two]) {
+        select.value = partId;
+        select.dispatchEvent(new Event('change'));
+      }
+      await until(() => jumped.mock.calls.length === (trip.endsWith('back') ? 2 : 1), 'the moves');
+      button(host, 'Done')!.click();
+      await until(() => !host.querySelector('.text.editing'), 'Done');
+      await settle();
+      expect(played).not.toHaveBeenCalled();
+      expect(resumed).not.toHaveBeenCalled();
+    },
+  );
+
+  it('carries on from the same line after “Same person as…”', async () => {
+    const people: Chunk[] = [
+      ['“Where were you?”', 'Bob', 'speech'],
+      [' asked Bob.\n\n', 'N', 'narration'],
+      ['“Out,”', 'Robert', 'speech'],
+      [' said Robert.', 'N', 'narration'],
+    ];
+    const story = await storeStory(people);
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 2) };
+    const host = await fixing(story, people.length);
+    const sheet = await tap(host, 0);
+    button(sheet, 'Bob is the same person as…')!.click();
+    await until(() => button(sheet, 'Confirm merge'), 'the merge step');
+    button(sheet, 'Robert')!.click();
+    await until(() => sheet.querySelector('.warning'), 'the warning');
+    button(sheet, 'Confirm merge')!.click();
+    // The old queue read Bob's lines in his old voice: it is dropped.
+    await until(() => jumped.mock.calls.length, 'the merge to reach the player');
+    expect(jumped).toHaveBeenCalledWith(at(story, 2));
+    button(host, 'Done')!.click();
+    await until(() => played.mock.calls.length, 'playback to carry on');
+    expect(played).toHaveBeenCalledWith(at(story, 2));
+  });
+
+  it('does not scroll to the playing line while fixing', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3) };
+    const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
+    try {
+      const host = await fixing(story);
+      await giveBothToTom(host);
+      // The playing line was renumbered from 3 to 2.
+      await until(
+        () => host.querySelector('.segment.current')?.textContent === '“Liar.”',
+        'the playing line to stay on “Liar.”',
+      );
+      await settle();
+      expect(scroll).not.toHaveBeenCalled();
+    } finally {
+      scroll.mockRestore();
+    }
+  });
+
+  it('waits for a passage still being saved before Done carries on', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3) };
+    const host = await fixing(story);
+    await startPassage(host);
+    const release = holdNextSave();
+    lines(host)[1]!.click();
+    button(host, 'Done')!.click();
+    await settle();
+    expect(resumed).not.toHaveBeenCalled();
+    expect(played).not.toHaveBeenCalled();
+    release();
+    await until(() => played.mock.calls.length, 'playback to carry on');
+    expect(jumped.mock.calls.map(([to]) => to)).toEqual([at(story, 2)]);
+    expect(played).toHaveBeenCalledWith(at(story, 2));
+  });
+
+  it('follows the same words when playback started again while a fix was saved', async () => {
+    const story = await storeStory(chunks, { characters: [{ name: 'Tom' }] });
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3) };
+    const host = await fixing(story);
+    await startPassage(host);
+    const release = holdNextSave();
+    lines(host)[1]!.click();
+    // The media controls played on meanwhile: the same line, started again.
+    playerSnapshot.value = { state: 'playing', speed: 1, position: at(story, 3) };
+    release();
+    await until(() => jumped.mock.calls.length, 'the fix to reach the player');
+    expect(jumped).toHaveBeenCalledWith(at(story, 2));
   });
 });
 

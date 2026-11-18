@@ -6,7 +6,7 @@ import { createApp, defineComponent, h, shallowRef, type App, type Component } f
 import { createMemoryHistory, createRouter, type Router } from 'vue-router';
 import type { Character, Mode, Segment, Traits, VoiceSettings } from '@/format/types';
 import type { DeviceVoice } from '@/playback/engine';
-import type { PlayerSnapshot } from '@/playback/player';
+import type { PlayerPosition, PlayerSnapshot } from '@/playback/player';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { addPart } from '@/storage/parts';
@@ -51,15 +51,39 @@ export const previewed = vi.fn<(text: string, voice: VoiceSettings) => Promise<v
 );
 export const stopped = vi.fn<() => Promise<void>>(async () => undefined);
 
-/** What usePlayer.ts exports, with a player that does nothing and an engine listing stubVoices. */
+const IDLE: PlayerSnapshot = { state: 'idle', speed: 1 };
+
+/**
+ * The stubbed player's snapshot, which a test may set to put the player somewhere (playing a
+ * line, say), and its play, pause, resume and jump, which move the snapshot as the real player
+ * does, without speaking. unmountView puts the player back to idle and forgets the calls.
+ */
+export const playerSnapshot = shallowRef<PlayerSnapshot>(IDLE);
+const moveTo = (changes: Partial<PlayerSnapshot>) => {
+  playerSnapshot.value = { ...playerSnapshot.value, ...changes };
+};
+export const played = vi.fn<(from?: PlayerPosition) => Promise<void>>(async (from) =>
+  moveTo({ state: 'playing', position: from ?? playerSnapshot.value.position }),
+);
+export const paused = vi.fn<() => Promise<void>>(async () => {
+  if (playerSnapshot.value.state === 'playing') moveTo({ state: 'paused' });
+});
+export const resumed = vi.fn<() => Promise<void>>(async () => {
+  if (playerSnapshot.value.state === 'paused') moveTo({ state: 'playing' });
+});
+export const jumped = vi.fn<(to: PlayerPosition) => Promise<void>>(async (to) =>
+  moveTo({ position: to, state: playerSnapshot.value.state === 'playing' ? 'playing' : 'idle' }),
+);
+
+/** What usePlayer.ts exports, with a player that does not speak and an engine listing stubVoices. */
 export function playerStub() {
   const done = async () => undefined;
   const player = {
-    play: done,
-    pause: done,
-    resume: done,
+    play: played,
+    pause: paused,
+    resume: resumed,
     stop: stopped,
-    jump: done,
+    jump: jumped,
     setSpeed: done,
     preview: previewed,
     skipSegment: done,
@@ -68,7 +92,6 @@ export function playerStub() {
     castChanged,
     subscribe: () => () => undefined,
   };
-  const snapshot = shallowRef<PlayerSnapshot>({ state: 'idle', speed: 1 });
   const listVoices = async () => {
     if (voicesHeld) await voicesHeld;
     return [...stubVoices];
@@ -76,7 +99,7 @@ export function playerStub() {
   return {
     getEngine: () => ({ listVoices }),
     existingPlayer: () => undefined,
-    usePlayer: () => ({ player, snapshot }),
+    usePlayer: () => ({ player, snapshot: playerSnapshot }),
   };
 }
 
@@ -167,7 +190,7 @@ export async function mountView(
 
 /**
  * Unmounts the view and empties the page, for afterEach. The stubbed engine and player start
- * afresh: no voices, none held back, no castChanged call remembered.
+ * afresh: no voices, none held back, the player idle, no call to it remembered.
  */
 export function unmountView() {
   app?.unmount();
@@ -179,6 +202,8 @@ export function unmountView() {
   previewed.mockReset();
   previewed.mockImplementation(async () => undefined);
   stopped.mockClear();
+  playerSnapshot.value = IDLE;
+  for (const spy of [played, paused, resumed, jumped]) spy.mockClear();
 }
 
 /** Polls until `check` gives something truthy: live queries and saves land asynchronously. */

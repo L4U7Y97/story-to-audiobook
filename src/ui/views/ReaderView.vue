@@ -6,6 +6,7 @@ import { modeForAnyone, reassignSegments, tellerOf, type ReassignScope } from '@
 import { assignVoice } from '@/cast/assignVoices';
 import { findTypedNameOwner } from '@/cast/castOps';
 import { inferTraits } from '@/cast/traits';
+import type { PlayerPosition } from '@/playback/player';
 import { paragraphStarts } from '@/playback/utterances';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
@@ -14,7 +15,7 @@ import { newId } from '@/storage/ids';
 import { DEFAULT_LOCALE } from '@/storage/stories';
 import { listParts } from '@/storage/parts';
 import { groupParts } from '@/storage/books';
-import { getStory } from '@/storage/stories';
+import { getStory, updateStory } from '@/storage/stories';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { getEngine, usePlayer } from '../composables/usePlayer';
 import { speakerColorIndex, speakerTint } from '../speakerColors';
@@ -105,10 +106,11 @@ const currentIndex = computed(() => {
   return position && position.partId === partId.value ? position.segmentIndex : -1;
 });
 
-// Keep the spoken segment in view.
+// Keep the spoken segment in view, except while fixing speakers: a fix can renumber the lines, and
+// the page must not move away from the line being fixed.
 const textEl = ref<HTMLElement>();
 watch(currentIndex, async (index) => {
-  if (index < 0) return;
+  if (index < 0 || editing.value) return;
   await nextTick();
   textEl.value
     ?.querySelector(`[data-index="${index}"]`)
@@ -217,11 +219,82 @@ const pickedMode = computed((): Mode | undefined => {
   return picking.value.teller ? 'narration' : modeForAnyone(p.text, segments, pickedIndex.value);
 });
 
+/**
+ * Where Done carries on listening: the place "Fix speakers" paused, which fixes keep on the same
+ * words (keepPlace). Anything else that moves playback meanwhile (another part, the media
+ * controls) leaves it behind, and Done then leaves playback alone.
+ */
+let carryOn: PlayerPosition | undefined;
+/** Settles once every fix started so far is saved and its place kept. */
+let fixesSaved: Promise<unknown> = Promise.resolve();
+
 async function toggleEditing() {
   editing.value = !editing.value;
   range.value = null;
-  // Segment indices can shift while editing, so playback pauses.
-  if (editing.value) await player.pause();
+  if (editing.value) {
+    // Segment indices can shift while editing, so playback pauses.
+    carryOn = snapshot.value.state === 'playing' ? snapshot.value.position : undefined;
+    await player.pause();
+    return;
+  }
+  // A fix still being saved moves the place: wait for it.
+  await fixesSaved;
+  const at = carryOn;
+  carryOn = undefined;
+  if (editing.value || !at || snapshot.value.position !== at) return;
+  if (snapshot.value.state === 'paused') await player.resume();
+  // A fix dropped the old queue (keepPlace): play again from the same words, in the new voices.
+  else if (snapshot.value.state === 'idle') await player.play(at);
+}
+
+/** A part's lines as they were before a fix changed them. */
+interface ChangedLines {
+  partId: string;
+  lines: readonly Segment[];
+}
+
+/**
+ * Saves a fix, then keeps the place (keepPlace). `changed`: the part whose lines the fix may
+ * join, with its lines before the fix.
+ */
+function saveFix(save: () => Promise<unknown>, changed?: ChangedLines): Promise<void> {
+  const work = (async () => {
+    try {
+      await save();
+      editError.value = '';
+      picking.value = null;
+      await keepPlace(changed);
+    } catch (e) {
+      editError.value = e instanceof Error ? e.message : String(e);
+    }
+  })();
+  fixesSaved = Promise.all([fixesSaved, work]);
+  return work;
+}
+
+/**
+ * After a fix: the place, where the player is or else the saved place, stays on the same words,
+ * since a fix can join lines and so renumber the lines after them. The player jumps there, which
+ * drops the queue it built before the fix (its voices and line numbers are out of date), so
+ * playback goes on with the new voices: at once if it is playing, at the next Play if not.
+ */
+async function keepPlace(changed?: ChangedLines) {
+  const after = changed && (await getAnalysis(db, changed.partId))?.segments;
+  // Read once the fix is saved: playback may have moved meanwhile.
+  const live = snapshot.value.position;
+  const at = live ?? story.value?.position;
+  if (!at) return;
+  const offset = at.partId === changed?.partId ? changed.lines[at.segmentIndex]?.start : undefined;
+  const found = offset === undefined ? -1 : (after?.findIndex((s) => s.end > offset) ?? -1);
+  const moved = { partId: at.partId, segmentIndex: found < 0 ? at.segmentIndex : found };
+  if (!live) {
+    if (moved.segmentIndex !== at.segmentIndex)
+      await updateStory(db, props.id, { position: moved });
+    return;
+  }
+  const carried = live === carryOn;
+  await player.jump(moved);
+  if (carried) carryOn = moved;
 }
 
 // A passage ends in the part it starts in.
@@ -259,17 +332,15 @@ async function applySpeaker(
     narratorId: s.narratorId,
     ...options,
   });
-  try {
-    await saveAnalysis(
-      db,
-      { ...a, segments },
-      { added, aliasAdditions: [], pruneUnusedCharacters: true },
-    );
-    editError.value = '';
-    picking.value = null;
-  } catch (e) {
-    editError.value = e instanceof Error ? e.message : String(e);
-  }
+  await saveFix(
+    () =>
+      saveAnalysis(
+        db,
+        { ...a, segments },
+        { added, aliasAdditions: [], pruneUnusedCharacters: true },
+      ),
+    { partId: p.id, lines: a.segments },
+  );
 }
 
 /** Applies a choice from the picker. A range waits for a tap on its last line. */
@@ -318,14 +389,8 @@ async function mergeSpeaker(intoId: string) {
   const fromId = pickedSegment.value?.speakerId;
   if (!fromId) return;
   range.value = null;
-  try {
-    await mergeCharactersInStory(db, props.id, fromId, intoId);
-    editError.value = '';
-    picking.value = null;
-    player.castChanged();
-  } catch (e) {
-    editError.value = e instanceof Error ? e.message : String(e);
-  }
+  // A merge renames speakers in every part but never joins lines (castOps mergeCharacters).
+  await saveFix(() => mergeCharactersInStory(db, props.id, fromId, intoId));
 }
 
 /** Parts in the order the picker lists them. */
@@ -344,6 +409,8 @@ const nextPart = computed(() =>
 );
 
 function goToPart(id: string) {
+  // The place moves: Done no longer carries on where Fix speakers paused.
+  carryOn = undefined;
   void player.jump({ partId: id, segmentIndex: 0 });
   void router.replace({ name: 'reader', params: { id: props.id, partId: id } });
   window.scrollTo({ top: 0 });

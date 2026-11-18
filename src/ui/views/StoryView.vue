@@ -150,9 +150,13 @@ async function onAdded(added: Part[]) {
   await analyse(added);
 }
 
+/** Bumped on every "Replace text…" so an already-open form scrolls back into view. */
+const replaceRequest = ref(0);
+
 function startReplace(part: Part) {
   adding.value = null;
   replacing.value = part;
+  replaceRequest.value++;
 }
 
 async function remove(part: Part) {
@@ -336,6 +340,7 @@ function wordCount(text: string): number {
                 :story-id="story.id"
                 :parts="formParts"
                 :replacing="replacing"
+                :reveal-token="replaceRequest"
                 :book-id="group.book.id"
                 :book-title="group.book.title"
                 @added="onAdded"
@@ -392,6 +397,7 @@ function wordCount(text: string): number {
           :story-id="story.id"
           :parts="formParts"
           :replacing="replacing"
+          :reveal-token="replaceRequest"
           @added="onAdded"
           @cancel="((adding = null), (replacing = undefined))"
         />

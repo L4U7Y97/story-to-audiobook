@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import type { Part } from '@/format/types';
 import { getAppDb } from '@/storage/db';
 import { addPart, replacePart } from '@/storage/parts';
@@ -17,6 +17,8 @@ const props = defineProps<{
   replacing?: Part;
   bookId?: string;
   bookTitle?: string;
+  /** Changes each time the user asks to replace; brings the form back into view. */
+  revealToken?: number;
 }>();
 const emit = defineEmits<{ added: [parts: Part[]]; cancel: [] }>();
 
@@ -33,6 +35,21 @@ const saving = ref(false);
 const text = computed(() => (mode.value === 'paste' ? fromPaste(pasted.value) : file.value?.text));
 const canSave = computed(() => !!text.value && /\S/.test(text.value) && !saving.value);
 const defaultTitle = computed(() => props.replacing?.title ?? `Part ${props.parts.length + 1}`);
+
+const form = ref<HTMLFormElement>();
+const textarea = ref<HTMLTextAreaElement>();
+
+// "Replace text…" opens the form far from the part's menu (below the book's list), so bring it
+// into view and put the cursor in the text box — also when the form is already open and the
+// same part's "Replace text…" is chosen again (`revealToken` changes).
+function reveal() {
+  if (!props.replacing) return;
+  const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  form.value?.scrollIntoView?.({ block: 'center', behavior: reduce ? 'auto' : 'smooth' });
+  textarea.value?.focus({ preventScroll: true });
+}
+onMounted(reveal);
+watch(() => props.revealToken, reveal);
 
 async function onFileChange(event: Event) {
   const input = event.target as HTMLInputElement;
@@ -79,7 +96,7 @@ async function save() {
 </script>
 
 <template>
-  <form class="card add-part" @submit.prevent="save">
+  <form ref="form" :class="['card', 'add-part', { replacing }]" @submit.prevent="save">
     <h2>
       {{
         replacing
@@ -147,7 +164,7 @@ async function save() {
     <template v-else>
       <label v-if="mode === 'paste'">
         Text
-        <textarea v-model="pasted" rows="10" placeholder="Paste a chapter or a few pages…" />
+        <textarea ref="textarea" v-model="pasted" rows="10" placeholder="Paste a chapter or a few pages…" />
       </label>
       <label v-else>
         File
@@ -186,6 +203,11 @@ async function save() {
 .add-part {
   display: grid;
   gap: 12px;
+}
+
+.add-part.replacing {
+  margin: 24px 0;
+  scroll-margin: 24px;
 }
 
 .tabs {

@@ -362,7 +362,7 @@ npm test
 - [ ] Spec success criteria 1–10 all verified. Status on 2026-10-15:
   - [x] 1. Fixtures import byte for byte as .txt (also a BOM + CRLF copy) and as .epub (`tests/unit/ingest/fixtures.test.ts`; expected EPUB text in `tests/fixtures/*/*.epub.txt`)
   - [x] 2. Text preservation asserted on every save and in property tests (`validate.property.test.ts`, `llm.property.test.ts`)
-  - [ ] 3. Heuristic: fixture thresholds met (`heuristicFixtures.test.ts`); 5,000 words in ~20–30 ms of analysis on the dev machine (`performance.test.ts`). Emulator, paste to "Ready": 0.6 s warm, 1.5 s on a fresh app start. **Phone timing still to measure.**
+  - [ ] 3. Heuristic: fixture thresholds met (`heuristicFixtures.test.ts`); 5,000 words in ~20–30 ms of analysis on the dev machine (`performance.test.ts`). Emulator, paste to analysed (measured to the old "Ready" label; the row now shows only its word count once analysed): 0.6 s warm, 1.5 s on a fresh app start. **Phone timing still to measure.**
   - [ ] 4. Cost estimate shown before Claude analysis (browser check). **Accuracy ≥ 90% needs `npm run eval:llm` with an API key.**
   - [x] 5. Part 2 reuses part 1's character ids and voices (`analyzer.test.ts`, Marianela split in two)
   - [x] 6. Merging rewrites every part and those lines play with the surviving voice (`castOps.test.ts`)

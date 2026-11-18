@@ -6,7 +6,7 @@ import { exportFileName, exportStory } from '@/storage/exportImport';
 import { saveTextFile } from '../files';
 import { getAppDb } from '@/storage/db';
 import { getStory } from '@/storage/stories';
-import { deletePart, listParts, movePart, renamePart } from '@/storage/parts';
+import { deletePart, movePart, renamePart } from '@/storage/parts';
 import {
   addBook,
   deleteBook,
@@ -31,7 +31,19 @@ const router = useRouter();
 const route = useRoute();
 
 const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
-const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
+/**
+ * The story's parts, as a key. The parts are read again when it changes, not on every save of the
+ * story: its place is saved every few seconds while it plays.
+ */
+const partIdsKey = computed(() => story.value?.partIds.join('\n'));
+const { data: parts } = useLiveQuery(async () => {
+  const ids = story.value?.partIds;
+  return ids && (await db.parts.bulkGet(ids)).filter((p): p is Part => p !== undefined);
+}, [partIdsKey]);
+/** Each part's word count, counted again only when the parts change. */
+const wordCounts = computed(
+  () => new Map((parts.value ?? []).map((part) => [part.id, wordCount(part.text)])),
+);
 /** Adding a part: to this book id, or '' when the story has no books; null when not adding. */
 const adding = ref<string | null>(null);
 const replacing = ref<Part | undefined>();
@@ -62,6 +74,7 @@ const displayGroups = computed(() =>
     .map((group) => ({
       ...group,
       parts: partSort.arrange(partGroup(group.book?.id), group.parts, (part) => part.id),
+      summary: bookSummary(group.parts),
     })),
 );
 /** The book the add/replace form works on, if any. */
@@ -131,17 +144,32 @@ const characterCount = computed(
 );
 
 /**
+ * Parts queued for analysis here, until their analysis ends: their rows say so and offer no
+ * Analyse, so a batch's rows keep their height and no part is queued twice.
+ */
+const waiting = ref(new Set<string>());
+
+/**
  * Analyses parts in reading order (analyses run one at a time, so later parts reuse earlier
  * characters). With an API key, Claude is used only after the user has seen the cost estimate.
  */
 async function analyse(parts: Part[], method?: Method) {
+  const queue = () => parts.forEach((part) => waiting.value.add(part.id));
+  if (method) queue();
   await loadSettings();
   if (!method && hasKey()) {
     confirming.value = parts;
     return;
   }
+  queue();
   confirming.value = [];
-  for (const part of parts) await run(part, method ?? 'heuristic');
+  for (const part of parts) {
+    try {
+      await run(part, method ?? 'heuristic');
+    } finally {
+      waiting.value.delete(part.id);
+    }
+  }
 }
 
 async function onAdded(added: Part[]) {
@@ -166,21 +194,45 @@ async function remove(part: Part) {
   await deletePart(db, props.id, part.id);
 }
 
-const STATUS_LABEL: Record<AnalysisStatus, string> = {
-  pending: 'Waiting for analysis',
+/** What a part's row says about its analysis: nothing once it is done. */
+const STATUS_LABEL: Record<Exclude<AnalysisStatus, 'done'>, string> = {
+  pending: 'Not analysed yet',
   running: 'Analysing…',
-  done: 'Ready',
   failed: 'Analysis failed',
 };
 
-function statusLabel(part: Part): string {
+function statusLabel(part: Part): string | undefined {
+  if (part.analysisStatus === 'done') return undefined;
   const p = progress.value[part.id];
   if (part.analysisStatus === 'running' && p?.total) return `Analysing… ${p.done}/${p.total}`;
+  if (part.analysisStatus !== 'running' && waiting.value.has(part.id)) {
+    return 'Waiting for analysis';
+  }
   return STATUS_LABEL[part.analysisStatus];
+}
+
+/** Whether a part's row offers Analyse (or Retry) under its title. */
+function canAnalyse(part: Part): boolean {
+  if (waiting.value.has(part.id)) return false;
+  return (
+    (part.analysisStatus === 'pending' && !confirming.value.some((p) => p.id === part.id)) ||
+    (part.analysisStatus === 'failed' && !errors.value[part.id])
+  );
 }
 
 function wordCount(text: string): number {
   return text.split(/\s+/).filter(Boolean).length;
+}
+
+/** A book's line under its title: "3 parts · 2 not analysed". */
+function bookSummary(bookParts: readonly Part[]): { parts: string; notAnalysed?: string } {
+  const waiting = bookParts.filter((part) => part.analysisStatus !== 'done').length;
+  return {
+    parts: !bookParts.length
+      ? 'No parts yet'
+      : `${bookParts.length} ${bookParts.length === 1 ? 'part' : 'parts'}`,
+    notAnalysed: waiting ? `${waiting} not analysed` : undefined,
+  };
 }
 </script>
 
@@ -201,254 +253,294 @@ function wordCount(text: string): number {
         {{ characterCount }}
         {{ characterCount === 1 ? 'character' : 'characters' }}
       </p>
-      <div v-if="!selectedBookId && parts?.length" class="story-actions">
-        <RouterLink class="button primary" :to="{ name: 'reader', params: { id: story.id } }">
-          {{ story.position ? 'Continue listening' : 'Read &amp; listen' }}
-        </RouterLink>
-        <RouterLink class="button" :to="{ name: 'cast', params: { id: story.id } }"
-          >Cast</RouterLink
-        >
-      </div>
-
-      <TransitionGroup
-        v-if="!selectedBookId || selectedBook"
-        tag="div"
-        name="sort"
-        class="book-list"
-      >
-        <SortableItem
-          v-for="group in displayGroups"
-          :id="group.book?.id ?? 'all'"
-          :key="group.book?.id ?? 'all'"
-          :tag="group.book ? 'section' : 'div'"
-          :sortable="bookSort"
-          :group="BOOKS"
-          handle
-          :disabled="!group.book || Boolean(selectedBookId)"
-          :class="{ book: group.book }"
-          :aria-labelledby="group.book ? `book-${group.book.id}` : undefined"
-          @open="group.book && openBook(group.book)"
-        >
-          <header v-if="group.book" class="book-header" data-sortable-handle>
-            <h2 v-if="!selectedBookId" :id="`book-${group.book.id}`">
-              <RouterLink
-                class="book-title"
-                draggable="false"
-                :to="{ name: 'book', params: { id: story.id, bookId: group.book.id } }"
-                >{{ group.book.title }}</RouterLink
-              >
-            </h2>
-            <span class="muted">
-              {{ group.parts.length }} {{ group.parts.length === 1 ? 'part' : 'parts' }}
-            </span>
-            <RouterLink
-              v-if="group.parts.length"
-              class="book-listen"
-              :to="{ name: 'reader', params: { id: story.id, partId: group.parts[0]!.id } }"
-            >
-              Listen</RouterLink
-            >
-            <BookActions
-              class="book-menu"
-              :book="group.book"
-              :part-count="group.parts.length"
-              :reorderable="!selectedBookId"
-              @rename="renameBook(db, story.id, group.book.id, $event)"
-              @remove="removeBook(group.book)"
-            />
-          </header>
-          <div
-            v-if="!group.book || selectedBookId === group.book.id"
-            :id="group.book ? `book-content-${group.book.id}` : undefined"
-            class="book-content"
+      <!-- The rest waits for the parts: no book says it has none meanwhile, nothing moves down. -->
+      <p v-if="!parts" class="muted">Loading…</p>
+      <template v-else>
+        <div v-if="!selectedBookId && parts?.length" class="story-actions">
+          <RouterLink class="button primary" :to="{ name: 'reader', params: { id: story.id } }">
+            {{ story.position ? 'Continue listening' : 'Read &amp; listen' }}
+          </RouterLink>
+          <RouterLink class="button" :to="{ name: 'cast', params: { id: story.id } }"
+            >Cast</RouterLink
           >
-            <TransitionGroup v-if="group.parts.length" tag="ol" name="sort" class="parts">
-              <SortableItem
-                v-for="part in group.parts"
-                :id="part.id"
-                :key="part.id"
-                tag="li"
-                :sortable="partSort"
-                :group="partGroup(group.book?.id)"
-                class="card part"
-                @open="openPart(part)"
-              >
-                <RouterLink
-                  class="part-title"
-                  draggable="false"
-                  :to="{ name: 'reader', params: { id: story.id, partId: part.id } }"
-                  >{{ part.title }}</RouterLink
-                >
-                <span class="muted">{{ wordCount(part.text).toLocaleString() }} words</span>
-                <span class="status" :data-status="part.analysisStatus">
-                  {{ statusLabel(part) }}
-                  <button
-                    v-if="
-                      (part.analysisStatus === 'pending' &&
-                        !confirming.some((p) => p.id === part.id)) ||
-                      (part.analysisStatus === 'failed' && !errors[part.id])
-                    "
-                    class="analyse"
-                    @click="analyse([part])"
+        </div>
+
+        <TransitionGroup
+          v-if="!selectedBookId || selectedBook"
+          tag="div"
+          name="sort"
+          class="book-list"
+        >
+          <SortableItem
+            v-for="group in displayGroups"
+            :id="group.book?.id ?? 'all'"
+            :key="group.book?.id ?? 'all'"
+            :tag="group.book ? 'section' : 'div'"
+            :sortable="bookSort"
+            :group="BOOKS"
+            handle
+            :disabled="!group.book || Boolean(selectedBookId)"
+            :class="{ book: group.book }"
+            :aria-labelledby="group.book ? `book-${group.book.id}` : undefined"
+            @open="group.book && openBook(group.book)"
+          >
+            <header
+              v-if="group.book"
+              :class="['book-header', { 'on-page': selectedBookId }]"
+              data-sortable-handle
+            >
+              <template v-if="!selectedBookId">
+                <h2 :id="`book-${group.book.id}`">
+                  <RouterLink
+                    class="book-title"
+                    draggable="false"
+                    :to="{ name: 'book', params: { id: story.id, bookId: group.book.id } }"
+                    >{{ group.book.title }}</RouterLink
                   >
-                    {{ part.analysisStatus === 'failed' ? 'Retry' : 'Analyse' }}
-                  </button>
-                </span>
-                <PartActions
-                  class="part-menu"
-                  :part="part"
-                  :books="books.length > 1 ? books : undefined"
-                  :has-key="Boolean(settings?.apiKey)"
-                  @rename="renamePart(db, part.id, $event)"
-                  @move-to-book="movePartToBook(db, story.id, part.id, $event)"
-                  @replace="startReplace(part)"
-                  @reanalyse="analyse([part], $event)"
-                  @remove="remove(part)"
+                </h2>
+                <!-- The ⋮ comes where it is drawn, so focus goes the way the eye does. -->
+                <BookActions
+                  class="book-menu"
+                  :book="group.book"
+                  :part-count="group.parts.length"
+                  reorderable
+                  @rename="renameBook(db, story.id, group.book.id, $event)"
+                  @remove="removeBook(group.book)"
                 />
-                <div v-if="errors[part.id]" class="error" role="alert">
-                  <span>{{ errors[part.id]!.message }}</span>
-                  <span class="error-actions">
-                    <button class="analyse" @click="analyse([part], errors[part.id]!.method)">
-                      Retry
-                    </button>
-                    <button
-                      v-if="errors[part.id]!.method === 'llm'"
-                      class="analyse"
-                      @click="analyse([part], 'heuristic')"
-                    >
-                      Analyse without Claude
-                    </button>
-                    <RouterLink
-                      v-if="errors[part.id]!.message === 'API key rejected'"
-                      :to="{ name: 'settings' }"
-                      >Settings</RouterLink
-                    >
-                  </span>
-                </div>
-                <p v-else-if="notes[part.id]" class="note muted">{{ notes[part.id] }}</p>
-              </SortableItem>
-            </TransitionGroup>
-            <p v-else-if="group.book" class="muted">No parts in this book yet.</p>
-            <p v-else-if="parts" class="muted">
-              No parts yet. Add the first chapter or a few pages.
-            </p>
-
-            <template v-if="group.book">
-              <AddPartForm
-                v-if="adding === group.book.id || (replacing && replacing.bookId === group.book.id)"
-                :key="replacing?.id ?? 'new'"
-                :story-id="story.id"
-                :parts="formParts"
-                :replacing="replacing"
-                :reveal-token="replaceRequest"
-                :book-id="group.book.id"
-                :book-title="group.book.title"
-                @added="onAdded"
-                @cancel="((adding = null), (replacing = undefined))"
-              />
-              <button
-                v-else
-                class="add"
-                @click="((replacing = undefined), (adding = group.book.id))"
+              </template>
+              <p class="book-summary">
+                {{ group.summary.parts
+                }}<template v-if="group.summary.notAnalysed">
+                  · <span class="not-analysed">{{ group.summary.notAnalysed }}</span>
+                </template>
+              </p>
+              <RouterLink
+                v-if="group.parts.length"
+                class="button book-listen"
+                draggable="false"
+                :aria-label="`Listen to ${group.book.title}`"
+                :to="{ name: 'reader', params: { id: story.id, partId: group.parts[0]!.id } }"
+                >Listen</RouterLink
               >
-                Add a part to “{{ group.book.title }}”
-              </button>
-            </template>
+              <BookActions
+                v-if="selectedBookId"
+                class="book-menu"
+                :book="group.book"
+                :part-count="group.parts.length"
+                :reorderable="false"
+                @rename="renameBook(db, story.id, group.book.id, $event)"
+                @remove="removeBook(group.book)"
+              />
+            </header>
+            <div
+              v-if="!group.book || selectedBookId === group.book.id"
+              :id="group.book ? `book-content-${group.book.id}` : undefined"
+              class="book-content"
+            >
+              <TransitionGroup
+                v-if="group.parts.length"
+                tag="ol"
+                name="sort"
+                class="parts"
+                :style="{ '--digits': String(group.parts.length).length }"
+              >
+                <SortableItem
+                  v-for="(part, index) in group.parts"
+                  :id="part.id"
+                  :key="part.id"
+                  tag="li"
+                  :sortable="partSort"
+                  :group="partGroup(group.book?.id)"
+                  class="card part"
+                  @open="openPart(part)"
+                >
+                  <span class="part-number">{{ index + 1 }}.</span>
+                  <RouterLink
+                    class="part-title"
+                    draggable="false"
+                    :to="{ name: 'reader', params: { id: story.id, partId: part.id } }"
+                    >{{ part.title }}</RouterLink
+                  >
+                  <span class="part-meta">
+                    {{ (wordCounts.get(part.id) ?? 0).toLocaleString() }} words<template
+                      v-if="statusLabel(part)"
+                    >
+                      ·
+                      <span class="status" :data-status="part.analysisStatus">{{
+                        statusLabel(part)
+                      }}</span>
+                    </template>
+                  </span>
+                  <PartActions
+                    class="part-menu"
+                    :part="part"
+                    :books="books.length > 1 ? books : undefined"
+                    :has-key="Boolean(settings?.apiKey)"
+                    @rename="renamePart(db, part.id, $event)"
+                    @move-to-book="movePartToBook(db, story.id, part.id, $event)"
+                    @replace="startReplace(part)"
+                    @reanalyse="analyse([part], $event)"
+                    @remove="remove(part)"
+                  />
+                  <div v-if="canAnalyse(part)" class="part-do">
+                    <button class="analyse" @click="analyse([part])">
+                      {{ part.analysisStatus === 'failed' ? 'Retry' : 'Analyse' }}
+                    </button>
+                  </div>
+                  <div v-if="errors[part.id]" class="error" role="alert">
+                    <span>{{ errors[part.id]!.message }}</span>
+                    <span class="error-actions">
+                      <button class="analyse" @click="analyse([part], errors[part.id]!.method)">
+                        Retry
+                      </button>
+                      <button
+                        v-if="errors[part.id]!.method === 'llm'"
+                        class="analyse"
+                        @click="analyse([part], 'heuristic')"
+                      >
+                        Analyse without Claude
+                      </button>
+                      <RouterLink
+                        v-if="errors[part.id]!.message === 'API key rejected'"
+                        :to="{ name: 'settings' }"
+                        >Settings</RouterLink
+                      >
+                    </span>
+                  </div>
+                  <p v-else-if="notes[part.id]" class="note muted">{{ notes[part.id] }}</p>
+                </SortableItem>
+              </TransitionGroup>
+              <p v-else-if="!group.book" class="muted">
+                No parts yet. Add the first chapter or a few pages.
+              </p>
+
+              <template v-if="group.book">
+                <AddPartForm
+                  v-if="
+                    adding === group.book.id || (replacing && replacing.bookId === group.book.id)
+                  "
+                  :key="replacing?.id ?? 'new'"
+                  :story-id="story.id"
+                  :parts="formParts"
+                  :replacing="replacing"
+                  :reveal-token="replaceRequest"
+                  :book-id="group.book.id"
+                  :book-title="group.book.title"
+                  @added="onAdded"
+                  @cancel="((adding = null), (replacing = undefined))"
+                />
+                <button
+                  v-else
+                  class="add"
+                  @click="((replacing = undefined), (adding = group.book.id))"
+                >
+                  Add a part to “{{ group.book.title }}”
+                </button>
+              </template>
+            </div>
+          </SortableItem>
+        </TransitionGroup>
+        <p v-else class="muted" role="status">Book not found.</p>
+
+        <section
+          v-if="confirming.length && confirmEstimate"
+          class="card confirm"
+          aria-labelledby="confirm-heading"
+        >
+          <h2 id="confirm-heading">
+            Analyse
+            {{
+              confirming.length === 1 ? `“${confirming[0]!.title}”` : `${confirming.length} parts`
+            }}
+            with Claude?
+          </h2>
+          <p class="muted">
+            {{ modelLabel(settings?.model ?? '') }} · {{ confirmEstimate.requests }}
+            {{ confirmEstimate.requests === 1 ? 'request' : 'requests' }} · about
+            {{ Math.round((confirmEstimate.inputTokens + confirmEstimate.outputTokens) / 1000) }}k
+            tokens
+          </p>
+          <p>
+            Estimated cost:
+            <strong>{{
+              confirmEstimate.usd === undefined
+                ? 'unknown for this model'
+                : formatUsd(confirmEstimate.usd)
+            }}</strong>
+          </p>
+          <div class="confirm-actions">
+            <button class="primary" @click="analyse(confirming, 'llm')">Analyse with Claude</button>
+            <button @click="analyse(confirming, 'heuristic')">Use the free method</button>
+            <button class="link" @click="confirming = []">Not now</button>
           </div>
-        </SortableItem>
-      </TransitionGroup>
-      <p v-else-if="selectedBookId" class="muted" role="status">Book not found.</p>
+        </section>
 
-      <section
-        v-if="confirming.length && confirmEstimate"
-        class="card confirm"
-        aria-labelledby="confirm-heading"
-      >
-        <h2 id="confirm-heading">
-          Analyse
-          {{ confirming.length === 1 ? `“${confirming[0]!.title}”` : `${confirming.length} parts` }}
-          with Claude?
-        </h2>
-        <p class="muted">
-          {{ modelLabel(settings?.model ?? '') }} · {{ confirmEstimate.requests }}
-          {{ confirmEstimate.requests === 1 ? 'request' : 'requests' }} · about
-          {{ Math.round((confirmEstimate.inputTokens + confirmEstimate.outputTokens) / 1000) }}k
-          tokens
-        </p>
-        <p>
-          Estimated cost:
-          <strong>{{
-            confirmEstimate.usd === undefined
-              ? 'unknown for this model'
-              : formatUsd(confirmEstimate.usd)
-          }}</strong>
-        </p>
-        <div class="confirm-actions">
-          <button class="primary" @click="analyse(confirming, 'llm')">Analyse with Claude</button>
-          <button @click="analyse(confirming, 'heuristic')">Use the free method</button>
-          <button class="link" @click="confirming = []">Not now</button>
-        </div>
-      </section>
-
-      <template v-if="!selectedBookId && !books.length">
-        <AddPartForm
-          v-if="adding !== null || replacing"
-          :key="replacing?.id ?? 'new'"
-          :story-id="story.id"
-          :parts="formParts"
-          :replacing="replacing"
-          :reveal-token="replaceRequest"
-          @added="onAdded"
-          @cancel="((adding = null), (replacing = undefined))"
-        />
-        <button v-else class="primary add" @click="adding = ''">Add a part</button>
-      </template>
-
-      <form v-if="!selectedBookId && addingBook" class="card add-book" @submit.prevent="createBook">
-        <h2>Add a book</h2>
-        <p class="muted">
-          <template v-if="!books.length && parts?.length">
-            The parts you have now become “Book 1”.
-          </template>
-          Every book of this story shares the same characters and voices.
-        </p>
-        <label>
-          Title
-          <input
-            v-model="newBookTitle"
-            :placeholder="`Book ${books.length ? books.length + 1 : parts?.length ? 2 : 1}`"
-            autocomplete="off"
+        <template v-if="!selectedBookId && !books.length">
+          <AddPartForm
+            v-if="adding !== null || replacing"
+            :key="replacing?.id ?? 'new'"
+            :story-id="story.id"
+            :parts="formParts"
+            :replacing="replacing"
+            :reveal-token="replaceRequest"
+            @added="onAdded"
+            @cancel="((adding = null), (replacing = undefined))"
           />
-        </label>
-        <div class="form-actions">
-          <button type="button" @click="((addingBook = false), (newBookTitle = ''))">Cancel</button>
-          <button class="primary" type="submit">Add book</button>
-        </div>
-      </form>
-      <button
-        v-else-if="!selectedBookId"
-        :class="['add', 'add-book-button', { primary: books.length > 0 }]"
-        @click="addingBook = true"
-      >
-        Add a book
-      </button>
+          <button v-else class="primary add" @click="adding = ''">Add a part</button>
+        </template>
 
-      <section
-        v-if="!selectedBookId && parts?.length"
-        class="backup"
-        aria-labelledby="backup-heading"
-      >
-        <h2 id="backup-heading">Backup</h2>
-        <p class="muted">
-          Stories live only on this device. Export one to a file to keep a copy or open it on
-          another device (Library → Import a story). The file has the text, analysis and voices,
-          never your API key.
-        </p>
-        <button :disabled="exporting" @click="exportFile">
-          {{ exporting ? 'Exporting…' : 'Export story' }}
+        <form
+          v-if="!selectedBookId && addingBook"
+          class="card add-book"
+          @submit.prevent="createBook"
+        >
+          <h2>Add a book</h2>
+          <p class="muted">
+            <template v-if="!books.length && parts?.length">
+              The parts you have now become “Book 1”.
+            </template>
+            Every book of this story shares the same characters and voices.
+          </p>
+          <label>
+            Title
+            <input
+              v-model="newBookTitle"
+              :placeholder="`Book ${books.length ? books.length + 1 : parts?.length ? 2 : 1}`"
+              autocomplete="off"
+            />
+          </label>
+          <div class="form-actions">
+            <button type="button" @click="((addingBook = false), (newBookTitle = ''))">
+              Cancel
+            </button>
+            <button class="primary" type="submit">Add book</button>
+          </div>
+        </form>
+        <button
+          v-else-if="!selectedBookId"
+          :class="['add', 'add-book-button', { primary: books.length > 0 }]"
+          @click="addingBook = true"
+        >
+          Add a book
         </button>
-        <p v-if="exportError" class="error" role="alert">{{ exportError }}</p>
-      </section>
+
+        <section
+          v-if="!selectedBookId && parts?.length"
+          class="backup"
+          aria-labelledby="backup-heading"
+        >
+          <h2 id="backup-heading">Backup</h2>
+          <p class="muted">
+            Stories live only on this device. Export one to a file to keep a copy or open it on
+            another device (Library → Import a story). The file has the text, analysis and voices,
+            never your API key.
+          </p>
+          <button :disabled="exporting" @click="exportFile">
+            {{ exporting ? 'Exporting…' : 'Export story' }}
+          </button>
+          <p v-if="exportError" class="error" role="alert">{{ exportError }}</p>
+        </section>
+      </template>
     </template>
 
     <p v-else-if="story === undefined" class="muted">Loading…</p>
@@ -467,20 +559,54 @@ function wordCount(text: string): number {
   margin: 16px 0;
   display: grid;
   gap: 8px;
-  counter-reset: part;
 }
 
+/*
+ * A part's row: its number, then its title (up to two lines) over its length and, when the part
+ * needs something, what; the ⋮ on the right. Analyse or Retry gets a line of its own.
+ */
 .part {
   display: grid;
-  grid-template-columns: 1fr auto auto;
-  gap: 2px 12px;
-  counter-increment: part;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  column-gap: 8px;
+  row-gap: 2px;
+  align-items: baseline;
+}
+
+/* As wide as the list's longest number, so the titles line up. */
+.part-number {
+  grid-column: 1;
+  grid-row: 1;
+  min-width: calc((var(--digits, 1) + 0.5) * 1ch);
+  text-align: end;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
 }
 
 .part-title {
+  grid-column: 2;
+  grid-row: 1;
   font-weight: 600;
   color: inherit;
   text-decoration: none;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  overflow: hidden;
+}
+
+.part-meta {
+  grid-column: 2;
+  grid-row: 2;
+  font-size: 0.85rem;
+  color: var(--muted);
+}
+
+.part-do {
+  grid-column: 2 / -1;
+  margin-top: 6px;
 }
 
 .backup {
@@ -509,27 +635,10 @@ function wordCount(text: string): number {
   flex: 1;
 }
 
-.part-title::before {
-  content: counter(part) '. ';
-  color: var(--muted);
-}
-
 .part-menu {
   grid-column: 3;
   grid-row: 1 / span 2;
   align-self: center;
-}
-
-.status {
-  grid-column: 2;
-  grid-row: 1 / span 2;
-  align-self: center;
-  font-size: 0.85rem;
-  color: var(--muted);
-}
-
-.status[data-status='done'] {
-  color: var(--ok);
 }
 
 .status[data-status='failed'] {
@@ -540,20 +649,9 @@ function wordCount(text: string): number {
   width: 100%;
 }
 
-.status {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.analyse {
-  min-height: 36px;
-  padding: 0 12px;
-}
-
 .error,
 .note {
-  grid-column: 1 / -1;
+  grid-column: 2 / -1;
   margin: 4px 0 0;
   font-size: 0.85rem;
 }
@@ -618,25 +716,80 @@ function wordCount(text: string): number {
     0 10px 28px 8px rgb(0 0 0 / 25%);
 }
 
+/*
+ * A book on the story page: its title and ⋮, then "3 parts · 2 not analysed" and Listen. On the
+ * book's own page, under its title: one line of those, without the rule. Listen and the ⋮ have
+ * columns of their own, so a title runs up to the ⋮ whether or not the book has Listen.
+ */
 .book-header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   align-items: center;
-  gap: 12px;
+  column-gap: 8px;
   border-bottom: 1px solid var(--border);
-  padding-bottom: 4px;
+  padding-bottom: 8px;
 }
 
 .book-header h2 {
+  grid-column: 1 / 3;
+  grid-row: 1;
   margin: 0;
   font-size: 1.15rem;
-  flex: 1;
   min-width: 0;
   overflow-wrap: anywhere;
+}
+
+.book-menu {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+}
+
+.book-summary {
+  grid-column: 1;
+  grid-row: 2;
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+
+.not-analysed {
+  color: var(--warn);
+}
+
+.book-listen {
+  grid-column: 2 / 4;
+  grid-row: 2;
+  justify-self: end;
+  padding: 0 14px;
+  border-radius: 999px;
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.book-header.on-page {
+  border-bottom: none;
+  padding-bottom: 0;
+}
+
+.book-header.on-page .book-summary {
+  grid-row: 1;
+}
+
+.book-header.on-page .book-listen {
+  grid-column: 2;
+  grid-row: 1;
 }
 
 .book-title {
   color: inherit;
   text-decoration: none;
+}
+
+/* A story without books keeps the list's own margins. */
+.book .book-content {
+  display: grid;
+  gap: 8px;
 }
 
 .book .parts {
@@ -671,6 +824,22 @@ function wordCount(text: string): number {
 @media (prefers-reduced-motion: reduce) {
   .sort-move {
     transition: none;
+  }
+}
+
+/*
+ * Phones: a part row's controls leave its title more room, as on the Cast page. The ⋮ looks the
+ * same; its target stays at least 36px wide.
+ */
+@media (max-width: 480px) {
+  .part {
+    --gutter: 12px;
+    column-gap: 6px;
+  }
+
+  .part-menu :deep(summary),
+  .book-menu :deep(summary) {
+    min-width: 36px;
   }
 }
 </style>

@@ -3,10 +3,18 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 import type { Router } from 'vue-router';
 import { addBook } from '@/storage/books';
-import { addPart, listParts } from '@/storage/parts';
-import { getStory } from '@/storage/stories';
+import { addPart, listParts, setAnalysisStatus } from '@/storage/parts';
+import { getStory, updateStory } from '@/storage/stories';
 import StoryView from '@/ui/views/StoryView.vue';
-import { db, mountView, storeStory, unmountView, until } from '../../helpers/ui';
+import {
+  button,
+  db,
+  holdVoices,
+  mountView,
+  storeStory,
+  unmountView,
+  until,
+} from '../../helpers/ui';
 
 vi.mock('@/ui/composables/usePlayer', () => import('../../helpers/ui').then((m) => m.playerStub()));
 
@@ -535,6 +543,13 @@ describe('book sections', () => {
         ? currentParts
         : undefined;
     }, 'the parts reordered from the keyboard');
+    // A step leaves nothing drawn out of place: only reading the parts again moves the rows.
+    await until(
+      () =>
+        [...host.querySelectorAll('.part-title')].map((title) => title.textContent).join(',') ===
+        'Two,One',
+      'the rendered parts reordered from the keyboard',
+    );
   });
 
   it('closes an actions menu on a press outside it or Escape', async () => {
@@ -753,5 +768,209 @@ describe('book sections', () => {
       else delete (window as { innerHeight?: number }).innerHeight;
       page.scrollTop = 0;
     }
+  });
+});
+
+describe('part rows', () => {
+  /** A story with its stored part ("One", analysed) and two more: one waiting, one failed. */
+  async function storyWithParts() {
+    const stored = await storeStory([['Once upon a time, there was a road.', 'N', 'narration']]);
+    await addPart(db, stored.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'Not read yet.',
+    });
+    const failed = await addPart(db, stored.storyId, {
+      title: 'Three',
+      source: { kind: 'paste' },
+      text: 'This one went wrong.',
+    });
+    await setAnalysisStatus(db, failed.id, 'failed');
+    return stored;
+  }
+
+  const rows = (host: HTMLElement) =>
+    [...host.querySelectorAll<HTMLElement>('.part')].map((row) => ({
+      number: row.querySelector('.part-number')?.textContent?.trim(),
+      title: row.querySelector('.part-title')?.textContent?.trim(),
+      meta: row.querySelector('.part-meta')?.textContent?.replace(/\s+/gu, ' ').trim(),
+      action: row.querySelector('.part-do button')?.textContent?.trim(),
+    }));
+
+  it('gives each part its length, and its analysis only when the part needs something', async () => {
+    const stored = await storyWithParts();
+    const host = await mountView(StoryView, { id: stored.storyId });
+    await until(() => host.querySelectorAll('.part').length === 3, 'the parts');
+    expect(rows(host)).toEqual([
+      { number: '1.', title: 'One', meta: '8 words', action: undefined },
+      { number: '2.', title: 'Two', meta: '3 words · Not analysed yet', action: 'Analyse' },
+      { number: '3.', title: 'Three', meta: '4 words · Analysis failed', action: 'Retry' },
+    ]);
+    expect(host.querySelector('.parts')?.getAttribute('style')).toContain('--digits: 1');
+  });
+
+  it('says which parts wait for their analysis, and offers them no Analyse meanwhile', async () => {
+    const stored = await storyWithParts();
+    // An analysis starts by listing the device's voices: held, the parts wait their turn.
+    const release = holdVoices();
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const [, two, three] = await until(() => {
+      const current = host.querySelectorAll<HTMLElement>('.part');
+      return current.length === 3 ? current : undefined;
+    }, 'the parts');
+
+    button(two!, 'Analyse')!.click();
+    button(three!, 'Retry')!.click();
+    await until(() => rows(host)[2]?.meta === '4 words · Waiting for analysis', 'the waiting rows');
+    expect(rows(host).slice(1)).toEqual([
+      { number: '2.', title: 'Two', meta: '3 words · Waiting for analysis', action: undefined },
+      { number: '3.', title: 'Three', meta: '4 words · Waiting for analysis', action: undefined },
+    ]);
+
+    release();
+    await until(() => rows(host).every((row) => !row.meta?.includes('·')), 'every part analysed');
+    expect(rows(host).map((row) => row.action)).toEqual([undefined, undefined, undefined]);
+  });
+
+  it('opens the reader at a book’s first part from its Listen, not the book page', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const second = await addBook(db, stored.storyId, 'Book 2');
+    const two = await addPart(db, stored.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'The next book.',
+      bookId: second.id,
+    });
+    let router: Router | undefined;
+    const host = await mountView(
+      StoryView,
+      { id: stored.storyId },
+      (instance) => (router = instance),
+    );
+    const listen = await until(
+      () => host.querySelectorAll<HTMLElement>('.book-listen')[1],
+      'Book 2’s Listen',
+    );
+
+    listen.dispatchEvent(new MouseEvent('click', { bubbles: true, cancelable: true }));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader route');
+    // The header around it opens its book on a click: that must not follow.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(router!.currentRoute.value.name).toBe('reader');
+    expect(router!.currentRoute.value.params.partId).toBe(two.id);
+  });
+
+  it('sums up each book under its title, with Listen when it has parts', async () => {
+    const stored = await storyWithParts();
+    // The story's parts become “Book 1”; “Book 2” stays empty.
+    await addBook(db, stored.storyId, 'Book 2');
+    const host = await mountView(StoryView, { id: stored.storyId });
+    await until(() => host.querySelectorAll('.book').length === 2, 'the books');
+    const books = [...host.querySelectorAll<HTMLElement>('.book')].map((book) => ({
+      title: book.querySelector('h2')?.textContent,
+      summary: book.querySelector('.book-summary')?.textContent?.replace(/\s+/gu, ' ').trim(),
+      listen: book.querySelector('.book-listen')?.getAttribute('aria-label'),
+    }));
+    expect(books).toEqual([
+      { title: 'Book 1', summary: '3 parts · 2 not analysed', listen: 'Listen to Book 1' },
+      { title: 'Book 2', summary: 'No parts yet', listen: undefined },
+    ]);
+  });
+
+  it('does not read the parts again when only the story’s place is saved', async () => {
+    const stored = await storyWithParts();
+    const reads = vi.spyOn(db.parts, 'bulkGet');
+    try {
+      const host = await mountView(StoryView, { id: stored.storyId });
+      await until(() => host.querySelectorAll('.part').length === 3, 'the parts');
+      const before = reads.mock.calls.length;
+      // While a story plays, its place is saved every few seconds.
+      await updateStory(db, stored.storyId, {
+        position: { partId: stored.partId, segmentIndex: 0 },
+      });
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      expect(reads.mock.calls.length).toBe(before);
+      // A change to a part is read.
+      await db.parts.update(stored.partId, { title: 'One, renamed' });
+      await until(() => rows(host)[0]?.title === 'One, renamed', 'the new title');
+      expect(reads.mock.calls.length).toBeGreaterThan(before);
+    } finally {
+      reads.mockRestore();
+    }
+  });
+});
+
+describe('while the parts are read', () => {
+  /**
+   * Calls `look` now and after every change to the page, until the function this returns is
+   * called: a page that shows something for a moment only is caught too.
+   */
+  function watchPage(host: HTMLElement, look: () => void): () => void {
+    const observer = new MutationObserver(look);
+    observer.observe(host, { subtree: true, childList: true, characterData: true });
+    look();
+    return () => observer.disconnect();
+  }
+
+  const textOf = (element: Element) => element.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
+
+  it('shows the books once their parts are read, none of them empty meanwhile', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const second = await addBook(db, stored.storyId, 'Book 2');
+    await addPart(db, stored.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'The next book.',
+      bookId: second.id,
+    });
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const seen = new Set<string>();
+    const stop = watchPage(host, () => {
+      for (const summary of host.querySelectorAll('.book-summary')) seen.add(textOf(summary));
+      // Shown alone, it would move down under the books a moment later.
+      if (host.querySelector('.add-book-button') && !host.querySelector('.book')) {
+        seen.add('Add a book before the books');
+      }
+    });
+    await until(() => host.querySelectorAll('.book-listen').length === 2, 'both books');
+    stop();
+
+    expect([...seen]).toEqual(['1 part', '1 part · 1 not analysed']);
+  });
+
+  it('offers Add a part once the parts are read, so it adds at the end', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const host = await mountView(StoryView, { id: stored.storyId });
+    let early = false;
+    const stop = watchPage(host, () => {
+      if (button(host, 'Add a part') && !host.querySelector('.part')) early = true;
+    });
+    await until(() => host.querySelector('.part') && button(host, 'Add a part'), 'the part');
+    stop();
+
+    expect(early).toBe(false);
+  });
+
+  it('says a book is missing only once the parts are read, and only when it is', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    await addBook(db, stored.storyId, 'Book 2');
+    const story = (await getStory(db, stored.storyId))!;
+    let host = await mountView(StoryView, { id: stored.storyId, bookId: story.books![0]!.id });
+    const said = new Set<string>();
+    const stop = watchPage(host, () => {
+      for (const status of host.querySelectorAll('[role="status"]')) said.add(textOf(status));
+    });
+    await until(() => host.querySelector('.book-summary'), 'the book');
+    stop();
+    expect(said).not.toContain('Book not found.');
+
+    unmountView();
+    host = await mountView(StoryView, { id: stored.storyId, bookId: 'no-such-book' });
+    await until(
+      () => host.querySelector('[role="status"]')?.textContent === 'Book not found.',
+      'the message',
+    );
+    expect(host.querySelector('.book')).toBeNull();
   });
 });

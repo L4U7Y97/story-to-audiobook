@@ -43,9 +43,9 @@ function ownTarget(event: Event): Element | undefined {
 function onPointerDown(event: PointerEvent) {
   const target = ownTarget(event);
   if (!target) return;
-  // Links and the actions button drag too (the click after a drag is swallowed); other controls
-  // keep their own behaviour.
-  if (!target.closest('summary, a') && target.closest(INTERACTIVE)) return;
+  // Links, the actions button and buttons marked data-sortable-drag drag too (the click after a
+  // drag is swallowed); other controls keep their own behaviour.
+  if (!target.closest('summary, a, [data-sortable-drag]') && target.closest(INTERACTIVE)) return;
   props.sortable.press(props.group, props.id, event, event.currentTarget as HTMLElement);
 }
 

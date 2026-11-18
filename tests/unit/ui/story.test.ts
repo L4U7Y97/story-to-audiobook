@@ -2,16 +2,28 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { nextTick } from 'vue';
 import type { Router } from 'vue-router';
+import type { Part, Segment } from '@/format/types';
+import { saveAnalysis } from '@/storage/analyses';
 import { addBook } from '@/storage/books';
-import { addPart, listParts, setAnalysisStatus } from '@/storage/parts';
-import { getStory, updateStory } from '@/storage/stories';
+import { addPart, deletePart, listParts, setAnalysisStatus } from '@/storage/parts';
+import { createStory, getStory, updateStory } from '@/storage/stories';
 import StoryView from '@/ui/views/StoryView.vue';
 import {
   button,
   db,
   holdVoices,
+  jumped,
   mountView,
+  partsChanged,
+  placeRestored,
+  played,
+  playerAlreadyMade,
+  playerSnapshot,
+  resumed,
+  stopped,
   storeStory,
+  submit,
+  typeInto,
   unmountView,
   until,
 } from '../../helpers/ui';
@@ -859,6 +871,8 @@ describe('part rows', () => {
 
     expect(router!.currentRoute.value.name).toBe('reader');
     expect(router!.currentRoute.value.params.partId).toBe(two.id);
+    // Its first part is not analysed yet: the reader shows it, and nothing plays.
+    expect(played).not.toHaveBeenCalled();
   });
 
   it('sums up each book under its title, with Listen when it has parts', async () => {
@@ -873,7 +887,11 @@ describe('part rows', () => {
       listen: book.querySelector('.book-listen')?.getAttribute('aria-label'),
     }));
     expect(books).toEqual([
-      { title: 'Book 1', summary: '3 parts · 2 not analysed', listen: 'Listen to Book 1' },
+      {
+        title: 'Book 1',
+        summary: '3 parts · 2 not analysed',
+        listen: 'Listen to Book 1 from the start',
+      },
       { title: 'Book 2', summary: 'No parts yet', listen: undefined },
     ]);
   });
@@ -901,18 +919,733 @@ describe('part rows', () => {
   });
 });
 
-describe('while the parts are read', () => {
+/**
+ * Calls `look` now and after every change to the page, until the function this returns is called:
+ * a page that shows something for a moment only is caught too.
+ */
+function watchPage(host: HTMLElement, look: () => void): () => void {
+  const observer = new MutationObserver(look);
+  observer.observe(host, { subtree: true, childList: true, characterData: true });
+  look();
+  return () => observer.disconnect();
+}
+
+describe('listening', () => {
   /**
-   * Calls `look` now and after every change to the page, until the function this returns is
-   * called: a page that shows something for a moment only is caught too.
+   * Adds a part the narrator reads, analysed: one line per piece, each piece ten letters long, so
+   * line n starts n tenths of the way in.
    */
-  function watchPage(host: HTMLElement, look: () => void): () => void {
-    const observer = new MutationObserver(look);
-    observer.observe(host, { subtree: true, childList: true, characterData: true });
-    look();
-    return () => observer.disconnect();
+  async function addHeardPart(storyId: string, title: string, lines: number, bookId?: string) {
+    const pieces = Array.from({ length: lines }, (_, n) => `Line ${n}...`.padEnd(10, '.'));
+    const text = pieces.join('');
+    const part = await addPart(db, storyId, { title, source: { kind: 'paste' }, text, bookId });
+    await analyseInLines(part, 10);
+    return part;
   }
 
+  /** Saves an analysis of `part` that cuts its text into lines `width` letters long. */
+  async function analyseInLines(part: Part, width: number) {
+    const narratorId = (await getStory(db, part.storyId))!.narratorId;
+    const count = Math.ceil(part.text.length / width);
+    const segments = Array.from({ length: count }, (_, n): Segment => ({
+      start: n * width,
+      end: Math.min(part.text.length, n * width + width),
+      speakerId: narratorId,
+      mode: 'narration',
+      source: 'heuristic',
+    }));
+    await saveAnalysis(db, {
+      partId: part.id,
+      textHash: part.textHash,
+      analyzer: { kind: 'heuristic', version: 2 },
+      createdAt: new Date().toISOString(),
+      segments,
+    });
+  }
+
+  /** A story of two books, each with one part, ten lines long unless `lines` says otherwise. */
+  async function twoBooks(lines: [number, number] = [10, 10]) {
+    const story = await createStory(db, { title: 'Story', lang: 'en' });
+    const first = await addBook(db, story.id, 'Book 1');
+    const second = await addBook(db, story.id, 'Book 2');
+    const one = await addHeardPart(story.id, 'Into the woods', lines[0], first.id);
+    const two = await addHeardPart(story.id, 'The way back', lines[1], second.id);
+    return { storyId: story.id, books: [first, second], one, two };
+  }
+
+  /** What the Continue button says: what it does, and where. */
+  const listenButton = (host: HTMLElement) => {
+    const listen = host.querySelector<HTMLButtonElement>('.listen');
+    return {
+      what: listen?.querySelector('.listen-what')?.textContent?.trim(),
+      where: listen?.querySelector('.listen-where')?.textContent?.replace(/\s+/gu, ' ').trim(),
+    };
+  };
+
+  const bookButtons = (host: HTMLElement) =>
+    [...host.querySelectorAll<HTMLElement>('.book-listen')].map((pill) => ({
+      text: pill.textContent?.trim(),
+      label: pill.getAttribute('aria-label'),
+    }));
+
+  const click = (element: Element | null | undefined) => (element as HTMLElement).click();
+
+  it('starts a story never played at its first part, and opens the reader there', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: stored.storyId }, (r) => (router = r));
+    await until(() => listenButton(host).where, 'the Continue button');
+
+    expect(listenButton(host)).toEqual({ what: 'Start listening', where: '1. One' });
+    expect(placeRestored).toHaveBeenCalledWith(stored.storyId);
+
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+    // From the place the player restores, if the app was killed mid-story, else the start.
+    expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(router!.currentRoute.value.params.partId).toBe(stored.partId);
+  });
+
+  it('says where listening goes on, and goes on from there', async () => {
+    const { storyId, two } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 4 } });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: storyId }, (r) => (router = r));
+    await until(() => listenButton(host).where?.includes('%'), 'the place');
+
+    expect(listenButton(host)).toEqual({
+      what: 'Continue',
+      where: 'Book 2 · 1. The way back · 40%',
+    });
+    // Starting Book 1 would lose the place: only its own book offers to go on.
+    expect(bookButtons(host)).toEqual([{ text: 'Continue', label: 'Continue Book 2' }]);
+
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+    expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(router!.currentRoute.value.params.partId).toBeFalsy();
+  });
+
+  it('goes on from the place with its book’s Continue, as the main button does', async () => {
+    const { storyId, two } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 4 } });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: storyId }, (r) => (router = r));
+    await until(() => bookButtons(host).length === 1, 'the books');
+
+    click(host.querySelector('.book-listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+
+    expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(router!.currentRoute.value.params.partId).toBeFalsy();
+  });
+
+  it('offers Continue on the page of the book with the place, and nothing on another’s', async () => {
+    const { storyId, two, books } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 4 } });
+    const host = await mountView(StoryView, { id: storyId, bookId: books[1]!.id });
+    await until(() => bookButtons(host).length === 1, 'the book');
+
+    expect(bookButtons(host)).toEqual([{ text: 'Continue', label: 'Continue Book 2' }]);
+    expect(host.querySelector('.listen')).toBeNull();
+    click(host.querySelector('.book-listen'));
+    await until(() => played.mock.calls.length, 'playback');
+    expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+
+    unmountView();
+    const other = await mountView(StoryView, { id: storyId, bookId: books[0]!.id });
+    await until(() => other.querySelector('.book-summary'), 'the other book');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bookButtons(other)).toEqual([]);
+  });
+
+  it('starts any book from its beginning while nothing has been heard', async () => {
+    const { storyId, two } = await twoBooks();
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: storyId }, (r) => (router = r));
+    await until(() => bookButtons(host).length === 2, 'the books');
+    expect(bookButtons(host)).toEqual([
+      { text: 'Listen', label: 'Listen to Book 1 from the start' },
+      { text: 'Listen', label: 'Listen to Book 2 from the start' },
+    ]);
+
+    click(host.querySelectorAll('.book-listen')[1]);
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+
+    expect(played).toHaveBeenCalledExactlyOnceWith({ partId: two.id, segmentIndex: 0 });
+    expect(router!.currentRoute.value.params.partId).toBe(two.id);
+    await until(() => listenButton(host).what === 'Now playing', 'the playing state');
+    expect(listenButton(host).where).toBe('Book 2 · 1. The way back');
+    expect(bookButtons(host)).toEqual([{ text: 'Playing', label: 'Playing Book 2' }]);
+
+    // While it plays, Continue only opens the reader.
+    await router!.push({ name: 'story', params: { id: storyId } });
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader again');
+    expect(played).toHaveBeenCalledTimes(1);
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it('resumes a story paused elsewhere, from the player’s place', async () => {
+    const { storyId, one, two } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: one.id, segmentIndex: 0 } });
+    playerAlreadyMade(storyId, {
+      state: 'paused',
+      speed: 1,
+      position: { partId: two.id, segmentIndex: 7 },
+    });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: storyId }, (r) => (router = r));
+    await until(() => listenButton(host).where?.includes('%'), 'the place');
+
+    expect(listenButton(host)).toEqual({
+      what: 'Continue',
+      where: 'Book 2 · 1. The way back · 70%',
+    });
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+
+    expect(resumed).toHaveBeenCalledOnce();
+    expect(played).not.toHaveBeenCalled();
+  });
+
+  /** A player made before the page: in `state`, at `line` of Book 2 if given; a saved place too. */
+  interface PlayerCase {
+    when: string;
+    state: 'idle' | 'blocked';
+    line?: number;
+    saved?: number;
+    where: string;
+  }
+  it.each<PlayerCase>([
+    {
+      when: 'an idle player with no place of its own (the Cast page made it)',
+      state: 'idle',
+      saved: 6,
+      where: 'Book 2 · 1. The way back · 60%',
+    },
+    {
+      when: 'an idle player with a place, ahead of the one saved',
+      state: 'idle',
+      line: 3,
+      saved: 1,
+      where: 'Book 2 · 1. The way back · 30%',
+    },
+    {
+      when: 'a player that could not go on, and nothing saved',
+      state: 'blocked',
+      line: 2,
+      where: 'Book 2 · 1. The way back · 20%',
+    },
+  ])('goes on from the place with $when', async ({ state, line, saved, where }) => {
+    const { storyId, two } = await twoBooks();
+    if (saved !== undefined) {
+      await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: saved } });
+    }
+    const position = line === undefined ? undefined : { partId: two.id, segmentIndex: line };
+    playerAlreadyMade(storyId, {
+      state,
+      speed: 1,
+      ...(position ? { position } : {}),
+      ...(state === 'blocked' ? { message: 'This part could not be read.' } : {}),
+    });
+    const host = await mountView(StoryView, { id: storyId });
+    await until(() => listenButton(host).where === where, 'the place');
+
+    expect(listenButton(host).what).toBe('Continue');
+    click(host.querySelector('.listen'));
+    await until(() => played.mock.calls.length, 'playback');
+    // The player's own place when it has one; else the saved one, as the player restores it.
+    expect(played).toHaveBeenCalledExactlyOnceWith(position);
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it('leaves another story playing until this one is played', async () => {
+    const other = await storeStory([['Somewhere else.', 'N', 'narration']]);
+    playerAlreadyMade(other.storyId, {
+      state: 'playing',
+      speed: 1,
+      position: { partId: other.partId, segmentIndex: 0 },
+    });
+    const { storyId, two } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 4 } });
+    const host = await mountView(StoryView, { id: storyId });
+    await until(() => listenButton(host).where?.includes('%'), 'the place');
+
+    expect(listenButton(host).what).toBe('Continue');
+    expect(stopped).not.toHaveBeenCalled();
+
+    click(host.querySelector('.listen'));
+    await until(() => played.mock.calls.length, 'playback');
+    expect(stopped).toHaveBeenCalledOnce();
+    expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+  });
+
+  it('starts from the beginning once the part being heard is deleted', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const gone = await addHeardPart(stored.storyId, 'Gone', 10);
+    playerAlreadyMade(stored.storyId, {
+      state: 'idle',
+      speed: 1,
+      position: { partId: gone.id, segmentIndex: 4 },
+    });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: stored.storyId }, (r) => (router = r));
+    await until(() => listenButton(host).where === '2. Gone · 40%', 'the place');
+
+    await deletePart(db, stored.storyId, gone.id);
+    await until(() => listenButton(host).what === 'Start listening', 'the place gone');
+    expect(listenButton(host).where).toBe('1. One');
+
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+    expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+    expect(router!.currentRoute.value.params.partId).toBe(stored.partId);
+  });
+
+  it.each(['idle', 'paused'] as const)(
+    'goes on from the saved place when the player’s own part was deleted (%s)',
+    async (state) => {
+      const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+      const kept = await addHeardPart(stored.storyId, 'Kept', 10);
+      const gone = await addHeardPart(stored.storyId, 'Gone', 10);
+      await updateStory(db, stored.storyId, { position: { partId: kept.id, segmentIndex: 3 } });
+      playerAlreadyMade(stored.storyId, {
+        state,
+        speed: 1,
+        position: { partId: gone.id, segmentIndex: 4 },
+      });
+      const host = await mountView(StoryView, { id: stored.storyId });
+      await until(() => listenButton(host).where === '3. Gone · 40%', 'the player’s place');
+
+      await deletePart(db, stored.storyId, gone.id);
+      await until(() => listenButton(host).where === '2. Kept · 30%', 'the saved place');
+      click(host.querySelector('.listen'));
+      await until(() => played.mock.calls.length, 'playback');
+      // Not the queue paused in the deleted part.
+      expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+      expect(resumed).not.toHaveBeenCalled();
+    },
+  );
+
+  it('offers to listen again from the start once the story was heard to its end', async () => {
+    const { storyId, one, two } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 9 }, ended: true });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: storyId }, (r) => (router = r));
+    // Every state the page shows as it opens: no Continue on the way to Listen again.
+    const shown = new Set<string>();
+    const stop = watchPage(host, () => {
+      const { what, where } = listenButton(host);
+      const pills = bookButtons(host).map((pill) => pill.text);
+      if (what) shown.add(`${what} | ${where} | ${pills.join('/')}`);
+    });
+    await until(() => listenButton(host).what === 'Listen again', 'the end');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    stop();
+
+    // Nothing is lost by starting any book.
+    expect([...shown]).toEqual(['Listen again | Book 1 · 1. Into the woods | Listen/Listen']);
+
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+    expect(played).toHaveBeenCalledExactlyOnceWith({ partId: one.id, segmentIndex: 0 });
+    expect(router!.currentRoute.value.params.partId).toBe(one.id);
+  });
+
+  it('offers to listen again where the player ended, before a last line with nothing to say', async () => {
+    const { storyId, one, two } = await twoBooks();
+    // The part's last line ("* * *", say) is not spoken: listening ended on the line before it.
+    playerAlreadyMade(storyId, {
+      state: 'idle',
+      speed: 1,
+      position: { partId: two.id, segmentIndex: 8 },
+      message: 'End of the story.',
+      ended: true,
+    });
+    const host = await mountView(StoryView, { id: storyId });
+    await until(() => listenButton(host).what, 'the end');
+
+    expect(listenButton(host)).toEqual({
+      what: 'Listen again',
+      where: 'Book 1 · 1. Into the woods',
+    });
+    expect(bookButtons(host).map((pill) => pill.text)).toEqual(['Listen', 'Listen']);
+    click(host.querySelector('.listen'));
+    await until(() => played.mock.calls.length, 'playback');
+    expect(played).toHaveBeenCalledExactlyOnceWith({ partId: one.id, segmentIndex: 0 });
+  });
+
+  it('goes on at the story’s last line when listening only got there', async () => {
+    // A last part one line long: the player waits on its only line, moved there, say.
+    const { storyId, two } = await twoBooks([10, 1]);
+    playerAlreadyMade(storyId, {
+      state: 'idle',
+      speed: 1,
+      position: { partId: two.id, segmentIndex: 0 },
+    });
+    const host = await mountView(StoryView, { id: storyId });
+    await until(() => listenButton(host).what, 'the place');
+
+    expect(listenButton(host)).toEqual({ what: 'Continue', where: 'Book 2 · 1. The way back' });
+    expect(bookButtons(host)).toEqual([{ text: 'Continue', label: 'Continue Book 2' }]);
+    click(host.querySelector('.listen'));
+    await until(() => played.mock.calls.length, 'playback');
+    expect(played).toHaveBeenCalledExactlyOnceWith({ partId: two.id, segmentIndex: 0 });
+  });
+
+  it('goes on with a part added after the end, from its start', async () => {
+    const { storyId, books, two } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 9 }, ended: true });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: storyId }, (r) => (router = r));
+    await until(() => listenButton(host).what === 'Listen again', 'the end');
+
+    const added = await addHeardPart(storyId, 'Home again', 10, books[1]!.id);
+    await until(() => listenButton(host).what === 'Continue', 'the new part');
+    expect(listenButton(host).where).toBe('Book 2 · 2. Home again');
+    expect(bookButtons(host)).toEqual([{ text: 'Continue', label: 'Continue Book 2' }]);
+
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+    expect(played).toHaveBeenCalledExactlyOnceWith({ partId: added.id, segmentIndex: 0 });
+    expect(router!.currentRoute.value.params.partId).toBe(added.id);
+  });
+
+  it('goes on from the last line of a part that is not the story’s last', async () => {
+    const { storyId, one } = await twoBooks();
+    await updateStory(db, storyId, { position: { partId: one.id, segmentIndex: 9 } });
+    const host = await mountView(StoryView, { id: storyId });
+    await until(() => listenButton(host).where?.includes('%'), 'the place');
+
+    expect(listenButton(host)).toEqual({
+      what: 'Continue',
+      where: 'Book 1 · 1. Into the woods · 90%',
+    });
+    expect(bookButtons(host)).toEqual([{ text: 'Continue', label: 'Continue Book 1' }]);
+  });
+
+  it('says Now playing on the last line while it plays, before the end saved there is cleared', async () => {
+    const { storyId, two } = await twoBooks();
+    // Played again from the end: the end saved stays until the player saves its next line.
+    await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 9 }, ended: true });
+    playerAlreadyMade(storyId, {
+      state: 'playing',
+      speed: 1,
+      position: { partId: two.id, segmentIndex: 9 },
+    });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: storyId }, (r) => (router = r));
+    await until(() => listenButton(host).where?.includes('%'), 'the place');
+
+    expect(listenButton(host)).toEqual({
+      what: 'Now playing',
+      where: 'Book 2 · 1. The way back · 90%',
+    });
+    expect(bookButtons(host)).toEqual([{ text: 'Playing', label: 'Playing Book 2' }]);
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+    expect(played).not.toHaveBeenCalled();
+  });
+
+  it('starts at the first part when the saved place is in a part that no longer exists', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    await updateStory(db, stored.storyId, { position: { partId: 'deleted', segmentIndex: 1 } });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: stored.storyId }, (r) => (router = r));
+    await until(() => listenButton(host).what, 'the button');
+    expect(listenButton(host)).toEqual({ what: 'Start listening', where: '1. One' });
+
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+    // Not from the saved place: the player would find nothing to read there.
+    expect(played).toHaveBeenCalledExactlyOnceWith({ partId: stored.partId, segmentIndex: 0 });
+  });
+
+  it('gives how far into its own part the place is, never into the part it was in', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const first = await addHeardPart(stored.storyId, 'First', 10);
+    // The same words cut into four lines: only the part tells the two analyses apart.
+    const second = await addPart(db, stored.storyId, {
+      title: 'Second',
+      source: { kind: 'paste' },
+      text: first.text,
+    });
+    await analyseInLines(second, 25);
+    playerAlreadyMade(stored.storyId, {
+      state: 'paused',
+      speed: 1,
+      position: { partId: first.id, segmentIndex: 8 },
+    });
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const shown = new Set<string>();
+    const stop = watchPage(host, () => {
+      const where = listenButton(host).where;
+      if (where?.includes('%')) shown.add(where);
+    });
+    await until(() => listenButton(host).where?.endsWith('80%'), 'the place');
+
+    playerSnapshot.value = {
+      ...playerSnapshot.value,
+      position: { partId: second.id, segmentIndex: 2 },
+    };
+    await until(() => listenButton(host).where?.endsWith('50%'), 'the place in the next part');
+    stop();
+    expect([...shown]).toEqual(['2. First · 80%', '3. Second · 50%']);
+  });
+
+  it('goes on from the last line when the player was only paused there', async () => {
+    const { storyId, two } = await twoBooks();
+    playerAlreadyMade(storyId, {
+      state: 'paused',
+      speed: 1,
+      position: { partId: two.id, segmentIndex: 9 },
+    });
+    const host = await mountView(StoryView, { id: storyId });
+    await until(() => listenButton(host).where?.includes('%'), 'the place');
+
+    expect(listenButton(host)).toEqual({
+      what: 'Continue',
+      where: 'Book 2 · 1. The way back · 90%',
+    });
+  });
+
+  it('gives no percentage at the start of a part, or past the lines it has', async () => {
+    const { storyId, one } = await twoBooks();
+    const placeAt = (segmentIndex: number) =>
+      updateStory(db, storyId, { position: { partId: one.id, segmentIndex } });
+    await placeAt(4);
+    const host = await mountView(StoryView, { id: storyId });
+    const where = () => listenButton(host).where;
+    await until(() => where()?.endsWith('40%'), 'the place');
+
+    // A place kept from an analysis with more lines than this one has.
+    await placeAt(99);
+    await until(() => where() === 'Book 1 · 1. Into the woods', 'no percentage past the lines');
+    await placeAt(6);
+    await until(() => where()?.endsWith('60%'), 'the place again');
+    await placeAt(0);
+    await until(() => where() === 'Book 1 · 1. Into the woods', 'no percentage at the start');
+    expect(listenButton(host).what).toBe('Continue');
+  });
+
+  it('only opens a part not analysed yet: the reader says why it cannot be heard', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const waiting = await addPart(db, stored.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'Not read yet.',
+    });
+    await updateStory(db, stored.storyId, { position: { partId: waiting.id, segmentIndex: 0 } });
+    let router: Router | undefined;
+    const host = await mountView(StoryView, { id: stored.storyId }, (r) => (router = r));
+    await until(() => listenButton(host).where === '2. Two', 'the place');
+
+    click(host.querySelector('.listen'));
+    await until(() => router?.currentRoute.value.name === 'reader', 'the reader');
+
+    expect(played).not.toHaveBeenCalled();
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it.each(['running', 'failed'] as const)(
+    'plays a part being analysed again (%s), from the analysis it has',
+    async (status) => {
+      const { storyId, two } = await twoBooks();
+      await updateStory(db, storyId, { position: { partId: two.id, segmentIndex: 4 } });
+      await setAnalysisStatus(db, two.id, status);
+      const host = await mountView(StoryView, { id: storyId });
+      await until(() => listenButton(host).where?.includes('40%'), 'the place');
+
+      click(host.querySelector('.listen'));
+      await until(() => played.mock.calls.length, 'playback');
+      expect(played).toHaveBeenCalledExactlyOnceWith(undefined);
+    },
+  );
+
+  it('sends the player back to a part’s first line when its text is replaced', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const heard = await addHeardPart(stored.storyId, 'Heard', 10);
+    playerAlreadyMade(stored.storyId, {
+      state: 'paused',
+      speed: 1,
+      position: { partId: heard.id, segmentIndex: 5 },
+    });
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const row = await until(() => host.querySelectorAll<HTMLElement>('.part')[1], 'the row');
+
+    click(row.querySelector('.part-menu summary'));
+    button(row, 'Replace text…')!.click();
+    const form = await until(() => host.querySelector('form.replacing'), 'the replace form');
+    typeInto(form.querySelector('textarea')!, 'A new text, read from its start.');
+    submit(form);
+
+    await until(() => jumped.mock.calls.length, 'the player told');
+    expect(jumped).toHaveBeenCalledExactlyOnceWith({ partId: heard.id, segmentIndex: 0 });
+    expect(resumed).not.toHaveBeenCalled();
+  });
+
+  it('leaves the player where it is when another part’s text is replaced', async () => {
+    const stored = await storeStory([['Once upon a time.', 'N', 'narration']]);
+    const heard = await addHeardPart(stored.storyId, 'Heard', 10);
+    playerAlreadyMade(stored.storyId, {
+      state: 'paused',
+      speed: 1,
+      position: { partId: heard.id, segmentIndex: 5 },
+    });
+    const host = await mountView(StoryView, { id: stored.storyId });
+    const row = await until(() => host.querySelectorAll<HTMLElement>('.part')[0], 'the row');
+
+    click(row.querySelector('.part-menu summary'));
+    button(row, 'Replace text…')!.click();
+    const form = await until(() => host.querySelector('form.replacing'), 'the replace form');
+    typeInto(form.querySelector('textarea')!, 'Another beginning.');
+    submit(form);
+
+    await until(
+      async () => (await listParts(db, stored.storyId))[0]?.analysisStatus === 'done',
+      'the new text analysed',
+    );
+    expect(jumped).not.toHaveBeenCalled();
+    // Whether its queue holds that part is the player's to check: once the old text is gone, and
+    // again once the new text is analysed.
+    expect(partsChanged).toHaveBeenCalledTimes(2);
+  });
+
+  describe('has the player check its queue', () => {
+    /** Does `act`, waits for `done`, then for the player to be asked to check its queue again. */
+    async function checkedAfter(act: () => void, done: () => Promise<boolean>, what: string) {
+      const before = partsChanged.mock.calls.length;
+      act();
+      await until(done, what);
+      await until(() => partsChanged.mock.calls.length > before, `a check after ${what}`);
+    }
+
+    const pressKey = (target: Element | null, key: string) =>
+      target!.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, key }));
+
+    /** Two books, the player playing in the first; its parts in reading order. */
+    async function playingStory(...extra: string[]) {
+      const { storyId, books, one } = await twoBooks();
+      for (const title of extra) {
+        const text = `${title} words.`;
+        await addPart(db, storyId, {
+          title,
+          source: { kind: 'paste' },
+          text,
+          bookId: books[0]!.id,
+        });
+      }
+      playerAlreadyMade(storyId, {
+        state: 'playing',
+        speed: 1,
+        position: { partId: one.id, segmentIndex: 2 },
+      });
+      const titles = async () => (await listParts(db, storyId)).map((part) => part.title).join();
+      return { storyId, books, titles };
+    }
+
+    it('once parts are analysed, moved or deleted', async () => {
+      const { storyId, books, titles } = await playingStory('Extra', 'Spare');
+      const host = await mountView(StoryView, { id: storyId, bookId: books[0]!.id });
+      const row = (title: string) =>
+        [...host.querySelectorAll<HTMLElement>('.part')].find((part) =>
+          part.textContent?.includes(title),
+        )!;
+      await until(() => row('Spare'), 'the parts');
+
+      await checkedAfter(
+        () => button(row('Extra'), 'Analyse')!.click(),
+        async () =>
+          (await listParts(db, storyId)).find((part) => part.title === 'Extra')?.analysisStatus ===
+          'done',
+        'the analysis',
+      );
+      await checkedAfter(
+        () => pressKey(row('Extra').querySelector('.part-menu summary'), 'ArrowUp'),
+        async () => (await titles()) === 'Extra,Into the woods,Spare,The way back',
+        'the move up',
+      );
+      await checkedAfter(
+        () => {
+          click(row('Spare').querySelector('.part-menu summary'));
+          const remove = button(row('Spare'), 'Delete part')!;
+          remove.click();
+          remove.click();
+        },
+        async () => (await titles()) === 'Extra,Into the woods,The way back',
+        'the deletion',
+      );
+      await checkedAfter(
+        () => {
+          click(row('Extra').querySelector('.part-menu summary'));
+          button(row('Extra'), 'Move to “Book 2”')!.click();
+        },
+        async () => (await titles()) === 'Into the woods,The way back,Extra',
+        'the move to Book 2',
+      );
+    });
+
+    it('once books are moved or deleted', async () => {
+      const { storyId, titles } = await playingStory();
+      const host = await mountView(StoryView, { id: storyId });
+      const menus = () => host.querySelectorAll<HTMLElement>('.book-menu summary');
+      await until(() => menus().length === 2, 'the books');
+
+      await checkedAfter(
+        () => pressKey(menus()[1]!, 'ArrowUp'),
+        async () => (await titles()) === 'The way back,Into the woods',
+        'the move up',
+      );
+      await checkedAfter(
+        () => {
+          const section = host.querySelectorAll<HTMLElement>('.book')[0]!;
+          click(section.querySelector('.book-menu summary'));
+          const remove = button(section, /Delete book/)!;
+          remove.click();
+          remove.click();
+        },
+        async () => (await titles()) === 'Into the woods',
+        'the deletion',
+      );
+    });
+  });
+
+  it('lifts a book held by its play button, and plays nothing on release', async () => {
+    const { storyId } = await twoBooks();
+    const host = await mountView(StoryView, { id: storyId });
+    const sections = await until(() => {
+      const current = host.querySelectorAll<HTMLElement>('.book');
+      return bookButtons(host).length === 2 ? current : undefined;
+    }, 'the books');
+    stack([...sections]);
+    const pill = sections[0]!.querySelector<HTMLElement>('.book-listen')!;
+    const pointer = (type: string, init: MouseEventInit) =>
+      Object.assign(new MouseEvent(type, { bubbles: true, cancelable: true, ...init }), {
+        pointerId: 5,
+      });
+
+    pill.dispatchEvent(pointer('pointerdown', { button: 0, clientX: 20, clientY: 10 }));
+    await hold();
+    window.dispatchEvent(pointer('pointermove', { clientX: 20, clientY: 170 }));
+    await nextTick();
+    expect([...host.querySelectorAll('.book h2')].map((title) => title.textContent)).toEqual([
+      'Book 2',
+      'Book 1',
+    ]);
+    window.dispatchEvent(pointer('pointerup', {}));
+    // The click a release fires.
+    pill.click();
+
+    await until(async () => {
+      const story = await getStory(db, storyId);
+      return story?.books?.map((book) => book.title).join(',') === 'Book 2,Book 1';
+    }, 'the new order');
+    expect(played).not.toHaveBeenCalled();
+  });
+});
+
+describe('while the parts are read', () => {
   const textOf = (element: Element) => element.textContent?.replace(/\s+/gu, ' ').trim() ?? '';
 
   it('shows the books once their parts are read, none of them empty meanwhile', async () => {

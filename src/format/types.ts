@@ -50,6 +50,8 @@ export interface Story {
   /** Always present; a Character with role 'narrator'. */
   narratorId: string;
   position?: { partId: string; segmentIndex: number };
+  /** Listening reached the end of the story, at `position`; saving another place clears it. */
+  ended?: boolean;
   createdAt: string;
   updatedAt: string;
 }

@@ -781,6 +781,9 @@ describe('playback around a fix', () => {
     const scroll = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(() => {});
     try {
       const host = await fixing(story);
+      // Opened on the playing line, before fixing.
+      await until(() => scroll.mock.calls.length, 'the page to open on the playing line');
+      scroll.mockClear();
       await giveBothToTom(host);
       // The playing line was renumbered from 3 to 2.
       await until(
@@ -823,6 +826,187 @@ describe('playback around a fix', () => {
     release();
     await until(() => jumped.mock.calls.length, 'the fix to reach the player');
     expect(jumped).toHaveBeenCalledWith(at(story, 2));
+  });
+});
+
+describe('opening on a part being read', () => {
+  /** Spies on scrolls to lines: which line, and how. */
+  function watchScrolls() {
+    const scrolled: Array<[number, ScrollBehavior | undefined]> = [];
+    const spy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (
+      this: Element,
+      options?: boolean | ScrollIntoViewOptions,
+    ) {
+      const index = (this as HTMLElement).dataset.index;
+      const behavior = typeof options === 'object' ? options.behavior : undefined;
+      if (index !== undefined) scrolled.push([Number(index), behavior]);
+    });
+    return { scrolled, restore: () => spy.mockRestore() };
+  }
+
+  const playingAt = (story: StoredStory, segmentIndex: number) => {
+    playerSnapshot.value = {
+      state: 'playing',
+      speed: 1,
+      position: { partId: story.partId, segmentIndex },
+    };
+  };
+
+  it('goes at once to the line being read, then follows the next ones smoothly', async () => {
+    const story = await storeStory(frame);
+    playingAt(story, 4);
+    const scrolls = watchScrolls();
+    try {
+      // As the story page's Continue opens it: the part is playing already.
+      const host = await mountView(ReaderView, { id: story.storyId });
+      await until(() => scrolls.scrolled.length, 'the page to open on the line');
+      expect(scrolls.scrolled).toEqual([[4, 'auto']]);
+      expect(host.querySelector('.segment.current')?.textContent).toBe('“Hush,”');
+
+      playingAt(story, 5);
+      await until(() => scrolls.scrolled.length === 2, 'the next line');
+      expect(scrolls.scrolled[1]).toEqual([5, 'smooth']);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('moves to the next lines at once when the reader asks for less motion', async () => {
+    const story = await storeStory(frame);
+    playingAt(story, 4);
+    const media = vi
+      .spyOn(window, 'matchMedia')
+      .mockReturnValue({ matches: true } as unknown as MediaQueryList);
+    const scrolls = watchScrolls();
+    try {
+      await mountView(ReaderView, { id: story.storyId });
+      await until(() => scrolls.scrolled.length, 'the page to open on the line');
+      playingAt(story, 5);
+      await until(() => scrolls.scrolled.length === 2, 'the next line');
+      expect(scrolls.scrolled).toEqual([
+        [4, 'auto'],
+        [5, 'auto'],
+      ]);
+    } finally {
+      scrolls.restore();
+      media.mockRestore();
+    }
+  });
+
+  it('opens on a line linked from the cast, not on the line being read', async () => {
+    const story = await storeStory(frame);
+    playingAt(story, 1);
+    const scrolls = watchScrolls();
+    try {
+      await mountView(ReaderView, { id: story.storyId, partId: story.partId, line: 4 });
+      await until(() => scrolls.scrolled.length, 'the scroll');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(scrolls.scrolled.map(([index]) => index)).toEqual([4]);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('goes at once to the line being read when playback starts after the lines show', async () => {
+    const story = await storeStory(frame);
+    const scrolls = watchScrolls();
+    try {
+      // As Continue opens it: the player takes up its place a moment after the page shows.
+      const host = await mountView(ReaderView, { id: story.storyId });
+      await until(() => lines(host).length === frame.length, 'the lines');
+      playingAt(story, 6);
+      await until(() => scrolls.scrolled.length, 'the scroll');
+      expect(scrolls.scrolled).toEqual([[6, 'auto']]);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('scrolls smoothly to a line tapped to play in a part nothing was playing in', async () => {
+    const story = await storeStory(frame);
+    const scrolls = watchScrolls();
+    try {
+      // Opened from the part's row.
+      const host = await mountView(ReaderView, { id: story.storyId, partId: story.partId });
+      await until(() => lines(host).length === frame.length, 'the lines');
+      lines(host)[5]!.click();
+      await until(() => scrolls.scrolled.length, 'the scroll');
+      expect(played).toHaveBeenCalledExactlyOnceWith({ partId: story.partId, segmentIndex: 5 });
+      expect(scrolls.scrolled).toEqual([[5, 'smooth']]);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('goes at once to the line being read in each part playback moves into', async () => {
+    const story = await storeStory(frame);
+    const next = await addPart(db, story.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'Years later. It rained.',
+    });
+    const narration = (start: number, end: number): Segment => ({
+      start,
+      end,
+      speakerId: story.ids.N!,
+      mode: 'narration',
+      source: 'user',
+    });
+    await saveAnalysis(db, {
+      partId: next.id,
+      textHash: next.textHash,
+      analyzer: { kind: 'heuristic', version: 2 },
+      createdAt: new Date().toISOString(),
+      segments: [narration(0, 13), narration(13, 23)],
+    });
+    playingAt(story, 6);
+    const scrolls = watchScrolls();
+    try {
+      const host = await mountView(ReaderView, { id: story.storyId });
+      await until(() => scrolls.scrolled.length, 'the page to open on the line');
+      playerSnapshot.value = {
+        state: 'playing',
+        speed: 1,
+        position: { partId: next.id, segmentIndex: 1 },
+      };
+      await until(() => lines(host).length === 2, 'the next part');
+      await until(() => scrolls.scrolled.length === 2, 'the line in the next part');
+      expect(scrolls.scrolled).toEqual([
+        [6, 'auto'],
+        [1, 'auto'],
+      ]);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('stays put when the part’s analysis is saved again with other paragraphs', async () => {
+    const story = await storeStory(frame);
+    playerSnapshot.value = {
+      state: 'paused',
+      speed: 1,
+      position: { partId: story.partId, segmentIndex: 4 },
+    };
+    const scrolls = watchScrolls();
+    try {
+      const host = await mountView(ReaderView, { id: story.storyId, partId: story.partId });
+      await until(() => scrolls.scrolled.length, 'the page to open on the line');
+      const paragraphs = () => host.querySelectorAll('.text p').length;
+      const before = paragraphs();
+
+      // The first line now ends before its blank line, so the next line no longer starts a
+      // paragraph: one paragraph fewer, the same lines.
+      await saveAgain(story, ([first, second, ...rest]) => [
+        { ...first!, end: first!.end - 2 },
+        { ...second!, start: second!.start - 2 },
+        ...rest,
+      ]);
+      await until(() => paragraphs() === before - 1, 'the paragraphs as saved again');
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(scrolls.scrolled).toEqual([[4, 'auto']]);
+    } finally {
+      scrolls.restore();
+    }
   });
 });
 

@@ -49,7 +49,6 @@ export const castChanged = vi.fn<() => void>();
 export const previewed = vi.fn<(text: string, voice: VoiceSettings) => Promise<void>>(
   async () => undefined,
 );
-export const stopped = vi.fn<() => Promise<void>>(async () => undefined);
 
 const IDLE: PlayerSnapshot = { state: 'idle', speed: 1 };
 
@@ -63,7 +62,7 @@ const moveTo = (changes: Partial<PlayerSnapshot>) => {
   playerSnapshot.value = { ...playerSnapshot.value, ...changes };
 };
 export const played = vi.fn<(from?: PlayerPosition) => Promise<void>>(async (from) =>
-  moveTo({ state: 'playing', position: from ?? playerSnapshot.value.position }),
+  moveTo({ state: 'playing', position: from ?? playerSnapshot.value.position, ended: undefined }),
 );
 export const paused = vi.fn<() => Promise<void>>(async () => {
   if (playerSnapshot.value.state === 'playing') moveTo({ state: 'paused' });
@@ -72,8 +71,30 @@ export const resumed = vi.fn<() => Promise<void>>(async () => {
   if (playerSnapshot.value.state === 'paused') moveTo({ state: 'playing' });
 });
 export const jumped = vi.fn<(to: PlayerPosition) => Promise<void>>(async (to) =>
-  moveTo({ position: to, state: playerSnapshot.value.state === 'playing' ? 'playing' : 'idle' }),
+  moveTo({
+    position: to,
+    state: playerSnapshot.value.state === 'playing' ? 'playing' : 'idle',
+    ended: undefined,
+  }),
 );
+export const stopped = vi.fn<() => Promise<void>>(async () => moveTo({ state: 'idle' }));
+/** The stubbed player's partsChanged, which a view calls once it changed parts. */
+export const partsChanged = vi.fn<() => Promise<void>>(async () => undefined);
+
+/**
+ * The story whose player has been made, as usePlayer makes it: existingPlayer finds it for that
+ * story only. unmountView forgets it.
+ */
+let playerStory: string | undefined;
+
+/** As if a view had played `storyId` already: its player exists, in `snapshot`. */
+export function playerAlreadyMade(storyId: string, snapshot: PlayerSnapshot) {
+  playerStory = storyId;
+  playerSnapshot.value = snapshot;
+}
+
+/** The stubbed restorePlace, which a view calls to take up the place a killed app reached. */
+export const placeRestored = vi.fn<(storyId: string) => Promise<void>>(async () => undefined);
 
 /** What usePlayer.ts exports, with a player that does not speak and an engine listing stubVoices. */
 export function playerStub() {
@@ -90,16 +111,27 @@ export function playerStub() {
     skipParagraph: done,
     skipPart: done,
     castChanged,
+    partsChanged,
     subscribe: () => () => undefined,
   };
   const listVoices = async () => {
     if (voicesHeld) await voicesHeld;
     return [...stubVoices];
   };
+  const made = { player, snapshot: playerSnapshot };
   return {
     getEngine: () => ({ listVoices }),
-    existingPlayer: () => undefined,
-    usePlayer: () => ({ player, snapshot: playerSnapshot }),
+    existingPlayer: (storyId: string) => (playerStory === storyId ? made : undefined),
+    restorePlace: placeRestored,
+    usePlayer: (storyId: string) => {
+      // Another story's player stops, and this story's starts idle.
+      if (playerStory !== undefined && playerStory !== storyId) {
+        void stopped();
+        playerSnapshot.value = IDLE;
+      }
+      playerStory = storyId;
+      return made;
+    },
   };
 }
 
@@ -190,7 +222,7 @@ export async function mountView(
 
 /**
  * Unmounts the view and empties the page, for afterEach. The stubbed engine and player start
- * afresh: no voices, none held back, the player idle, no call to it remembered.
+ * afresh: no voices, none held back, no player made, the player idle, no call to it remembered.
  */
 export function unmountView() {
   app?.unmount();
@@ -201,9 +233,11 @@ export function unmountView() {
   castChanged.mockClear();
   previewed.mockReset();
   previewed.mockImplementation(async () => undefined);
-  stopped.mockClear();
   playerSnapshot.value = IDLE;
-  for (const spy of [played, paused, resumed, jumped]) spy.mockClear();
+  playerStory = undefined;
+  for (const spy of [played, paused, resumed, stopped, jumped, partsChanged, placeRestored]) {
+    spy.mockClear();
+  }
 }
 
 /** Polls until `check` gives something truthy: live queries and saves land asynchronously. */
@@ -244,7 +278,7 @@ export function button(root: ParentNode, label: string | RegExp): HTMLButtonElem
   );
 }
 
-export function typeInto(input: HTMLInputElement, value: string) {
+export function typeInto(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
   input.value = value;
   input.dispatchEvent(new Event('input'));
 }

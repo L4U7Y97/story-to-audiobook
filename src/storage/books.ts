@@ -142,6 +142,7 @@ export async function deleteBook(db: StoryDb, storyId: string, bookId: string): 
       books: story.books.filter((b) => b.id !== bookId),
       partIds: story.partIds.filter((id) => !gone.has(id)),
       position,
+      ended: position && story.ended,
       updatedAt: now(),
     });
     await db.analyses.bulkDelete(doomed);

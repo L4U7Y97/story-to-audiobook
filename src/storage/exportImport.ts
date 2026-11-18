@@ -177,7 +177,11 @@ export async function importStory(db: StoryDb, data: StoryExport): Promise<Impor
         : { position: undefined }),
       updatedAt: now(),
     };
-    if (!story.position) delete story.position;
+    // The end is where it was reached; without that place it means nothing.
+    if (!story.position) {
+      delete story.position;
+      delete story.ended;
+    }
     if (!books) delete story.books;
 
     await db.stories.add(story);

@@ -1,10 +1,12 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, shallowRef } from 'vue';
 import type { AnalysisStatus, Book, Part } from '@/format/types';
 import { formatUsd } from '@/analysis/llm/cost';
 import { exportFileName, exportStory } from '@/storage/exportImport';
+import type { PlayerPosition } from '@/playback/player';
 import { saveTextFile } from '../files';
 import { getAppDb } from '@/storage/db';
+import { getAnalysis } from '@/storage/analyses';
 import { getStory } from '@/storage/stories';
 import { deletePart, movePart, renamePart } from '@/storage/parts';
 import {
@@ -17,7 +19,7 @@ import {
 } from '@/storage/books';
 import { useLiveQuery } from '../composables/useLiveQuery';
 import { useSortable } from '../composables/useSortable';
-import { existingPlayer } from '../composables/usePlayer';
+import { existingPlayer, restorePlace, usePlayer } from '../composables/usePlayer';
 import { modelLabel, useAnalysis, type Method } from '../composables/useAnalysis';
 import AddPartForm from '../components/AddPartForm.vue';
 import PartActions from '../components/PartActions.vue';
@@ -59,13 +61,13 @@ const BOOKS = 'books';
 const partGroup = (bookId: string | undefined) => `parts:${bookId ?? 'all'}`;
 const bookSort = useSortable({
   order: () => books.value.map((book) => book.id),
-  move: (_group, id, toIndex) => moveBook(db, props.id, id, toIndex),
+  move: (_group, id, toIndex) => moveBook(db, props.id, id, toIndex).then(partsChanged),
 });
 const partSort = useSortable({
   order: (group) =>
     groups.value.find((item) => partGroup(item.book?.id) === group)?.parts.map((part) => part.id) ??
     [],
-  move: (_group, id, toIndex) => movePart(db, props.id, id, toIndex),
+  move: (_group, id, toIndex) => movePart(db, props.id, id, toIndex).then(partsChanged),
 });
 const displayGroups = computed(() =>
   bookSort
@@ -102,6 +104,144 @@ function openPart(part: Part) {
   void router.push({ name: 'reader', params: { id: props.id, partId: part.id } });
 }
 
+/**
+ * This story's player, if it has one. Only a play makes it: making it on sight would stop another
+ * story playing.
+ */
+const live = shallowRef<ReturnType<typeof usePlayer> | undefined>(existingPlayer(props.id));
+function playerToListen() {
+  live.value = usePlayer(props.id);
+  return live.value;
+}
+const playingNow = computed(() => live.value?.snapshot.value.state === 'playing');
+const partById = (partId: string | undefined) => parts.value?.find((part) => part.id === partId);
+/** The player's place, while its part is here. */
+const livePlace = computed(() => {
+  const at = live.value?.snapshot.value.position;
+  return partById(at?.partId) ? at : undefined;
+});
+/** Where listening is: the player's place, else the saved one, while its part is here. */
+const place = computed<PlayerPosition | undefined>(() => {
+  const saved = story.value?.position;
+  return livePlace.value ?? (partById(saved?.partId) ? saved : undefined);
+});
+/** Whether listening reached the end of the story at the place, as the player recorded it. */
+const reachedEnd = computed(() =>
+  livePlace.value
+    ? live.value?.snapshot.value.ended === true
+    : place.value !== undefined && story.value?.ended === true,
+);
+/**
+ * The part after the place's one, where listening goes on from an end reached before it was
+ * added. Read from the parts shown, so a part added is named as soon as it counts.
+ */
+const partAfterPlace = computed(() => {
+  const list = parts.value ?? [];
+  const index = list.findIndex((part) => part.id === place.value?.partId);
+  return index < 0 ? undefined : list[index + 1]?.id;
+});
+/** All of the story was heard: listening reached its end, and no part was added after it. */
+const finished = computed(() => reachedEnd.value && !partAfterPlace.value);
+/** The place listening goes on from; none when nothing was heard yet, or all of it was. */
+const keptPlace = computed<PlayerPosition | undefined>(() => {
+  if (!reachedEnd.value) return place.value;
+  return partAfterPlace.value ? { partId: partAfterPlace.value, segmentIndex: 0 } : undefined;
+});
+/** The part listening goes on in, or starts with. */
+const placePart = computed(() => partById(keptPlace.value?.partId ?? story.value?.partIds[0]));
+const placePartId = computed(() => keptPlace.value?.partId);
+const { data: placeAnalysis } = useLiveQuery(
+  async () => (placePartId.value ? getAnalysis(db, placePartId.value) : undefined),
+  [placePartId],
+);
+/** The place's part as the lists show it, "3. The storm", and its book's title. */
+const placeName = computed(() => {
+  const part = placePart.value;
+  const group = part && groups.value.find((g) => g.parts.includes(part));
+  if (!part || !group) return undefined;
+  return { book: group.book?.title, part: `${group.parts.indexOf(part) + 1}. ${part.title}` };
+});
+/** How far into its part the kept place is, in percent of the part's text. */
+const placePercent = computed(() => {
+  const at = keptPlace.value;
+  const part = placePart.value;
+  const analysis = placeAnalysis.value;
+  if (!at || !part?.text.length || analysis?.partId !== at.partId) return undefined;
+  if (analysis.textHash !== part.textHash) return undefined;
+  const start = analysis.segments[at.segmentIndex]?.start;
+  return start === undefined ? undefined : Math.floor((100 * start) / part.text.length);
+});
+const listenLabel = computed(() => {
+  if (playingNow.value) return 'Now playing';
+  if (keptPlace.value) return 'Continue';
+  return finished.value ? 'Listen again' : 'Start listening';
+});
+
+onMounted(() => restorePlace(props.id).catch(() => undefined));
+
+/** Whether a part can be heard: it has an analysis of its text, as the player asks. */
+async function canPlay(part: Part): Promise<boolean> {
+  if (part.analysisStatus === 'done') return true;
+  // Analysed again (running, or failed): the analysis it had still reads its text.
+  return (await getAnalysis(db, part.id))?.textHash === part.textHash;
+}
+
+/**
+ * Listens on from the kept place (resuming a pause), else from the story's start, and opens the
+ * reader. A part that cannot be heard yet is only shown: the reader says why.
+ */
+async function continueListening() {
+  const at = keptPlace.value;
+  const part = placePart.value;
+  if (!part) return;
+  // The reader finds the player's place and the saved one by itself; a part started is named.
+  const goesOn = at !== undefined && (at === livePlace.value || at === story.value?.position);
+  if (await canPlay(part)) {
+    const { player, snapshot } = playerToListen();
+    const state = snapshot.value.state;
+    if (state === 'paused' && at === snapshot.value.position) void player.resume();
+    else if (state !== 'playing') void player.play(startAt(at, part));
+  }
+  void router.push({
+    name: 'reader',
+    params: { id: props.id, partId: goesOn ? undefined : part.id },
+  });
+}
+
+/**
+ * Where a play starts: the kept place, else the start of `first`, the story's first part. The
+ * saved place is left to the player, which first takes up a later place a killed app reached; so
+ * is a story with no place saved yet, which may have such a place too.
+ */
+function startAt(at: PlayerPosition | undefined, first: Part): PlayerPosition | undefined {
+  if (at) return at === story.value?.position ? undefined : at;
+  return story.value?.position || finished.value
+    ? { partId: first.id, segmentIndex: 0 }
+    : undefined;
+}
+
+/** The book of the kept place (a plain value, so a new line does not redraw the books). */
+const placeBookId = computed(() => (keptPlace.value ? placePart.value?.bookId : undefined));
+
+/**
+ * A book's play button. With a place kept, only its book has one, to go on there: starting another
+ * book would lose the place. With none, each book can be started from its first part.
+ */
+function bookListen(book: Book): 'Listen' | 'Continue' | 'Playing' | undefined {
+  if (placeBookId.value === book.id) return playingNow.value ? 'Playing' : 'Continue';
+  return placeBookId.value ? undefined : 'Listen';
+}
+
+async function listenToBook(book: Book) {
+  if (bookListen(book) !== 'Listen') return continueListening();
+  const first = groups.value.find((group) => group.book?.id === book.id)?.parts[0];
+  if (!first) return;
+  if (await canPlay(first)) {
+    void playerToListen().player.play({ partId: first.id, segmentIndex: 0 });
+  }
+  void router.push({ name: 'reader', params: { id: props.id, partId: first.id } });
+}
+
 function openBook(book: Book) {
   void router.push({ name: 'book', params: { id: props.id, bookId: book.id } });
 }
@@ -113,6 +253,20 @@ async function removeBook(book: Book) {
     await playing!.player.stop();
   }
   await deleteBook(db, props.id, book.id);
+  partsChanged();
+}
+
+async function moveToBook(part: Part, bookId: string) {
+  await movePartToBook(db, props.id, part.id, bookId);
+  partsChanged();
+}
+
+/**
+ * After parts changed: the player drops a queue that holds the next part as it was, when another
+ * part now comes next or it reads differently (Player.partsChanged).
+ */
+function partsChanged() {
+  void existingPlayer(props.id)?.player.partsChanged();
 }
 const { settings, progress, errors, notes, loadSettings, hasKey, estimate, run } = useAnalysis(db);
 /** Parts waiting for the user to accept the cost of analysing them with Claude. */
@@ -168,13 +322,20 @@ async function analyse(parts: Part[], method?: Method) {
       await run(part, method ?? 'heuristic');
     } finally {
       waiting.value.delete(part.id);
+      partsChanged();
     }
   }
 }
 
 async function onAdded(added: Part[]) {
+  const replaced = replacing.value;
   adding.value = null;
   replacing.value = undefined;
+  // A part's new text has new lines: the player drops the old ones and waits at its first line.
+  const playing = replaced && existingPlayer(props.id);
+  if (playing && playing.snapshot.value.position?.partId === replaced.id) {
+    await playing.player.jump({ partId: replaced.id, segmentIndex: 0 });
+  } else partsChanged();
   await analyse(added);
 }
 
@@ -192,6 +353,7 @@ async function remove(part: Part) {
   const playing = existingPlayer(props.id);
   if (playing?.snapshot.value.position?.partId === part.id) await playing.player.stop();
   await deletePart(db, props.id, part.id);
+  partsChanged();
 }
 
 /** What a part's row says about its analysis: nothing once it is done. */
@@ -257,9 +419,30 @@ function bookSummary(bookParts: readonly Part[]): { parts: string; notAnalysed?:
       <p v-if="!parts" class="muted">Loading…</p>
       <template v-else>
         <div v-if="!selectedBookId && parts?.length" class="story-actions">
-          <RouterLink class="button primary" :to="{ name: 'reader', params: { id: story.id } }">
-            {{ story.position ? 'Continue listening' : 'Read &amp; listen' }}
-          </RouterLink>
+          <button class="primary listen" @click="continueListening">
+            <svg viewBox="0 0 24 24" width="20" height="20" aria-hidden="true">
+              <path
+                v-if="playingNow"
+                d="M5 9h3v6H5zm5.5-4h3v14h-3zM16 8h3v8h-3z"
+                fill="currentColor"
+              />
+              <path v-else d="M8 5v14l11-7z" fill="currentColor" />
+            </svg>
+            <span class="listen-text">
+              <span class="listen-what">{{ listenLabel }}</span>
+              <span v-if="placeName" class="listen-where">
+                <template v-if="placeName.book">
+                  <span class="listen-book">{{ placeName.book }}</span>
+                  <span class="listen-dot"> · </span>
+                </template>
+                <span class="listen-part">{{ placeName.part }}</span>
+                <template v-if="placePercent">
+                  <span class="listen-dot"> · </span>
+                  <span class="listen-percent">{{ placePercent }}%</span>
+                </template>
+              </span>
+            </span>
+          </button>
           <RouterLink class="button" :to="{ name: 'cast', params: { id: story.id } }"
             >Cast</RouterLink
           >
@@ -314,14 +497,28 @@ function bookSummary(bookParts: readonly Part[]): { parts: string; notAnalysed?:
                   · <span class="not-analysed">{{ group.summary.notAnalysed }}</span>
                 </template>
               </p>
-              <RouterLink
-                v-if="group.parts.length"
-                class="button book-listen"
-                draggable="false"
-                :aria-label="`Listen to ${group.book.title}`"
-                :to="{ name: 'reader', params: { id: story.id, partId: group.parts[0]!.id } }"
-                >Listen</RouterLink
+              <!-- Held, it lifts the book like the rest of the header. -->
+              <button
+                v-if="group.parts.length && bookListen(group.book)"
+                class="book-listen"
+                data-sortable-drag
+                :aria-label="
+                  bookListen(group.book) === 'Listen'
+                    ? `Listen to ${group.book.title} from the start`
+                    : `${bookListen(group.book)} ${group.book.title}`
+                "
+                @click="listenToBook(group.book)"
               >
+                <svg viewBox="0 0 24 24" width="16" height="16" aria-hidden="true">
+                  <path
+                    v-if="bookListen(group.book) === 'Playing'"
+                    d="M5 9h3v6H5zm5.5-4h3v14h-3zM16 8h3v8h-3z"
+                    fill="currentColor"
+                  />
+                  <path v-else d="M8 5v14l11-7z" fill="currentColor" />
+                </svg>
+                {{ bookListen(group.book) }}
+              </button>
               <BookActions
                 v-if="selectedBookId"
                 class="book-menu"
@@ -377,7 +574,7 @@ function bookSummary(bookParts: readonly Part[]): { parts: string; notAnalysed?:
                     :books="books.length > 1 ? books : undefined"
                     :has-key="Boolean(settings?.apiKey)"
                     @rename="renamePart(db, part.id, $event)"
-                    @move-to-book="movePartToBook(db, story.id, part.id, $event)"
+                    @move-to-book="moveToBook(part, $event)"
                     @replace="startReplace(part)"
                     @reanalyse="analyse([part], $event)"
                     @remove="remove(part)"
@@ -631,8 +828,61 @@ function bookSummary(bookParts: readonly Part[]): { parts: string; notAnalysed?:
   margin: 12px 0;
 }
 
-.story-actions .button {
+/*
+ * Continue: what it does over where it goes on, "Book 1 · 3. The storm · 42%" (a long title is
+ * cut short, the percentage stays).
+ */
+.listen {
   flex: 1;
+  min-width: 0;
+  min-height: 56px;
+  justify-content: flex-start;
+  gap: 10px;
+  padding: 6px 14px;
+  text-align: start;
+}
+
+.listen svg {
+  flex: none;
+}
+
+.listen-text {
+  display: grid;
+  min-width: 0;
+}
+
+.listen-what {
+  font-weight: 600;
+}
+
+.listen-where {
+  display: flex;
+  gap: 0.3em;
+  min-width: 0;
+  font-size: 0.85rem;
+}
+
+.listen-book,
+.listen-part {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A long book title gives way first, so the part shows too. */
+.listen-book {
+  flex: none;
+  max-width: 40%;
+}
+
+.listen-dot,
+.listen-percent {
+  flex: none;
+}
+
+.story-actions .button {
+  flex: none;
+  padding: 0 20px;
 }
 
 .part-menu {
@@ -761,6 +1011,7 @@ function bookSummary(bookParts: readonly Part[]): { parts: string; notAnalysed?:
   grid-column: 2 / 4;
   grid-row: 2;
   justify-self: end;
+  gap: 6px;
   padding: 0 14px;
   border-radius: 999px;
   color: var(--accent);

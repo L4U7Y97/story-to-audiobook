@@ -99,7 +99,7 @@ describe('books', () => {
     const a = await addPart(db, story.id, { ...paste('a', '“Hi,” said Anne.'), bookId: b1.id });
     await addPart(db, story.id, { ...paste('c'), bookId: b2.id });
     await analyzePart(db, a.id, { voices: [] });
-    await updateStory(db, story.id, { position: { partId: a.id, segmentIndex: 0 } });
+    await updateStory(db, story.id, { position: { partId: a.id, segmentIndex: 0 }, ended: true });
 
     await moveBook(db, story.id, b1.id, 1);
     await renameBook(db, story.id, b2.id, 'Prequel');
@@ -110,6 +110,7 @@ describe('books', () => {
     const after = (await getStory(db, story.id))!;
     expect(after.books!.map((b) => b.title)).toEqual(['Prequel']);
     expect(after.position).toBeUndefined();
+    expect(after.ended).toBeUndefined();
     expect(await titles(story.id)).toEqual(['c']);
     expect(await db.parts.get(a.id)).toBeUndefined();
     expect(await db.analyses.get(a.id)).toBeUndefined();

@@ -58,6 +58,7 @@ async function sampleStory(): Promise<string> {
   await updateStory(db, story.id, {
     cast: renamed.value,
     position: { partId: p2.id, segmentIndex: 1 },
+    ended: true,
   });
   return story.id;
 }
@@ -93,6 +94,17 @@ describe('export and import', () => {
     const second = await exportStory(db, copy.id);
     expect(normalise(second)).toEqual(normalise(first));
     expect(second.story.position?.partId).toBe(copy.partIds[1]);
+    expect(second.story.ended).toBe(true);
+  });
+
+  it('drops an end reached at a place the file does not have', async () => {
+    const storyId = await sampleStory();
+    const data = await exportStory(db, storyId);
+    data.story.position = { partId: 'not-in-the-file', segmentIndex: 0 };
+    const { story: copy } = await importStory(db, data);
+    expect(copy.position).toBeUndefined();
+    expect(copy.ended).toBeUndefined();
+    expect('ended' in (await getStory(db, copy.id))!).toBe(false);
   });
 
   it('keeps the ids when importing into another library, and the copy plays with the same cast', async () => {

@@ -85,12 +85,30 @@ describe('parts', () => {
     const story = await createStory(db, { title: 'S', lang: 'en' });
     const part = await partsRepo.addPart(db, story.id, pasted('Hello.'));
     await saveAnalysis(db, await analysisFor(part.id, 'Hello.', story.narratorId));
-    await updateStory(db, story.id, { position: { partId: part.id, segmentIndex: 0 } });
+    await updateStory(db, story.id, {
+      position: { partId: part.id, segmentIndex: 0 },
+      ended: true,
+    });
     await partsRepo.deletePart(db, story.id, part.id);
     const after = await getStory(db, story.id);
     expect(after!.partIds).toEqual([]);
     expect(after!.position).toBeUndefined();
+    expect(after!.ended).toBeUndefined();
     expect(await getAnalysis(db, part.id)).toBeUndefined();
+  });
+
+  it('keeps the end of the story reached when another part is deleted', async () => {
+    const story = await createStory(db, { title: 'S', lang: 'en' });
+    const first = await partsRepo.addPart(db, story.id, pasted('Hello.'));
+    const last = await partsRepo.addPart(db, story.id, pasted('Goodbye.'));
+    await updateStory(db, story.id, {
+      position: { partId: last.id, segmentIndex: 0 },
+      ended: true,
+    });
+    await partsRepo.deletePart(db, story.id, first.id);
+    const after = await getStory(db, story.id);
+    expect(after!.position).toEqual({ partId: last.id, segmentIndex: 0 });
+    expect(after!.ended).toBe(true);
   });
 
   it('offers no way to change a stored part text', () => {

@@ -92,7 +92,12 @@ export async function replacePart(
     await db.parts.put(part);
     await db.analyses.delete(partId);
     if (story.position?.partId === partId) {
-      await db.stories.update(storyId, { position: { partId, segmentIndex: 0 }, updatedAt: now() });
+      // Its new text has not been heard, to the end or at all.
+      await db.stories.update(storyId, {
+        position: { partId, segmentIndex: 0 },
+        ended: undefined,
+        updatedAt: now(),
+      });
     }
     return part;
   });
@@ -154,7 +159,12 @@ export async function deletePart(db: StoryDb, storyId: string, partId: string): 
     if (!story) throw new Error(`story ${storyId} not found`);
     const partIds = story.partIds.filter((id) => id !== partId);
     const position = story.position?.partId === partId ? undefined : story.position;
-    await db.stories.update(storyId, { partIds, position, updatedAt: now() });
+    await db.stories.update(storyId, {
+      partIds,
+      position,
+      ended: position && story.ended,
+      updatedAt: now(),
+    });
     await db.analyses.delete(partId);
     await db.parts.delete(partId);
   });

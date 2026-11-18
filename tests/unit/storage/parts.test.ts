@@ -33,7 +33,7 @@ describe('replacePart', () => {
     await addPart(db, story.id, paste('Two.', 'two'));
     await analyzePart(db, one.id, { voices: [] });
     const castBefore = (await getStory(db, story.id))!.cast;
-    await updateStory(db, story.id, { position: { partId: one.id, segmentIndex: 1 } });
+    await updateStory(db, story.id, { position: { partId: one.id, segmentIndex: 1 }, ended: true });
 
     const replaced = await replacePart(db, story.id, one.id, paste('“Bye,” said Anne.', 'one v2'));
 
@@ -46,7 +46,9 @@ describe('replacePart', () => {
     expect(await getAnalysis(db, one.id)).toBeUndefined();
     const after = (await getStory(db, story.id))!;
     expect(after.cast).toEqual(castBefore);
+    // Its new text is to be heard from its start: the end reached in the old one is gone.
     expect(after.position).toEqual({ partId: one.id, segmentIndex: 0 });
+    expect(after.ended).toBeUndefined();
 
     await analyzePart(db, one.id, { voices: [] });
     const afterReanalysis = (await getStory(db, story.id))!.cast;

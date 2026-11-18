@@ -106,16 +106,18 @@ const currentIndex = computed(() => {
   return position && position.partId === partId.value ? position.segmentIndex : -1;
 });
 
-// Keep the spoken segment in view, except while fixing speakers: a fix can renumber the lines, and
-// the page must not move away from the line being fixed.
 const textEl = ref<HTMLElement>();
-watch(currentIndex, async (index) => {
-  if (index < 0 || editing.value) return;
-  await nextTick();
+
+/**
+ * Scrolls a line to the middle of the screen: at once with `jump` (the page has just shown its
+ * part) or when the reader asked for less motion, smoothly otherwise.
+ */
+function scrollToLine(index: number, jump = false) {
+  const still = jump || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
   textEl.value
     ?.querySelector(`[data-index="${index}"]`)
-    ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
-});
+    ?.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
+}
 
 /** The line a link asked for, marked while the route asks for it (changing part drops it). */
 const targetIndex = computed(() =>
@@ -129,9 +131,7 @@ watch(
   async ([index, shown]) => {
     if (index < 0 || !shown) return;
     await nextTick();
-    textEl.value
-      ?.querySelector(`[data-index="${index}"]`)
-      ?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    scrollToLine(index);
   },
   { immediate: true },
 );
@@ -148,11 +148,33 @@ watch(
 
 function playFrom(index: number) {
   if (!partId.value) return;
+  // The page is on the part already: the line tapped is scrolled to smoothly.
+  landedIn = partId.value;
   void player.play({ partId: partId.value, segmentIndex: index });
 }
 
 // "Fix speakers" mode: tapping a line opens the speaker picker instead of playing it.
 const editing = ref(false);
+
+/** The part whose spoken line the page has gone to since its lines showed. */
+let landedIn: string | undefined;
+// Keep the spoken line in view from the moment its part's lines show (the reader often opens on
+// a part already playing), the first time at once. Not while fixing speakers: a fix can renumber
+// the lines, and the page must not move away from the line being fixed. A line linked from the
+// cast is where the page opens; it goes to the spoken line when the next one starts. An analysis
+// saved again with other lines does not move the page.
+watch(
+  [currentIndex, () => paragraphs.value.length > 0],
+  async ([index, shown]) => {
+    if (index < 0 || !shown || editing.value) return;
+    const first = landedIn !== partId.value;
+    landedIn = partId.value;
+    if (first && targetIndex.value >= 0) return;
+    await nextTick();
+    scrollToLine(index, first);
+  },
+  { immediate: true },
+);
 /**
  * A line as it was tapped. An analysis saved again meanwhile (one finishing in the background)
  * can put another line at its index, so the line is found again by its offsets and speaker.

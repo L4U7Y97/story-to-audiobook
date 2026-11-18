@@ -50,7 +50,7 @@ export async function listStories(db: StoryDb): Promise<Story[]> {
   return db.stories.orderBy('updatedAt').reverse().toArray();
 }
 
-export type StoryChanges = Partial<Pick<Story, 'title' | 'cast' | 'position'>>;
+export type StoryChanges = Partial<Pick<Story, 'title' | 'cast' | 'position' | 'ended'>>;
 
 export async function updateStory(db: StoryDb, id: string, changes: StoryChanges): Promise<void> {
   const updated = await db.stories.update(id, { ...changes, updatedAt: now() });

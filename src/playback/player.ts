@@ -18,7 +18,8 @@ export interface PlayerPosition {
 export interface PlayerSource {
   story(): Promise<Story | undefined>;
   part(partId: string): Promise<{ part: Part; analysis?: Analysis } | undefined>;
-  savePosition(position: PlayerPosition): Promise<void>;
+  /** `ended`: listening reached the end of the story there. */
+  savePosition(position: PlayerPosition, ended: boolean): Promise<void>;
 }
 
 export interface PlayerSnapshot {
@@ -27,6 +28,8 @@ export interface PlayerSnapshot {
   speed: number;
   /** Why playback stopped on its own (e.g. the next part is not analysed). */
   message?: string;
+  /** Listening reached the end of the story, at `position`; the next play or move clears it. */
+  ended?: boolean;
 }
 
 export interface PlayerOptions {
@@ -119,6 +122,38 @@ export class Player {
     this.castDirty = true;
   }
 
+  /**
+   * Call after parts change: replaced, deleted, moved or analysed again. The engine's queue holds
+   * the part after the one being read as it was then; when another part now comes next, or it
+   * reads differently, the queue is dropped (jump): playing goes on from the line being read,
+   * paused waits there, idle.
+   */
+  async partsChanged(): Promise<void> {
+    const following = this.queuedAfter();
+    if (!following) return;
+    const session = this.session;
+    const ids = (await this.source.story())?.partIds ?? [];
+    const at = this.snapshot.position;
+    const now =
+      at && ids.includes(at.partId)
+        ? await this.analysedPart(ids[ids.indexOf(at.partId) + 1])
+        : undefined;
+    // Played on meanwhile: a new queue, the end, or into the part (too late to drop it).
+    if (session !== this.session || this.queuedAfter() !== following) return;
+    if (now && sameReading(now, following)) return;
+    await this.jump(this.snapshot.position!);
+  }
+
+  /** The part queued after the one being read, while the engine holds a queue. */
+  private queuedAfter() {
+    const { position: at, state } = this.snapshot;
+    if (!at || (state !== 'playing' && state !== 'paused')) return undefined;
+    // Parts after the queue are read when it ends, so only one queued after this one can be stale.
+    const queued = [...this.batch.values()];
+    const index = queued.findIndex((b) => b.part.id === at.partId);
+    return index < 0 ? undefined : queued[index + 1];
+  }
+
   async skipSegment(delta: number): Promise<void> {
     const at = this.snapshot.position;
     if (!at || !this.loaded) return;
@@ -153,7 +188,7 @@ export class Player {
     if (this.snapshot.state === 'playing') return this.restart(to);
     this.session++;
     await this.engine.stop();
-    this.update({ position: to, state: 'idle' });
+    this.update({ position: to, state: 'idle', message: undefined, ended: undefined });
     await this.save(true);
   }
 
@@ -161,7 +196,7 @@ export class Player {
     const session = ++this.session;
     await this.engine.stop();
     if (session !== this.session) return;
-    this.update({ state: 'playing', position: from, message: undefined });
+    this.update({ state: 'playing', position: from, message: undefined, ended: undefined });
     void this.run(session, from);
   }
 
@@ -207,10 +242,14 @@ export class Player {
       });
       if (session !== this.session) return;
 
+      // The parts as they are now: some may have been added, moved or deleted meanwhile.
       const lastId = batch.at(-1)!.part.id;
-      const next = story.partIds[story.partIds.indexOf(lastId) + 1];
+      const fresh = (await this.source.story())?.partIds;
+      if (session !== this.session) return;
+      const ids = fresh?.includes(lastId) ? fresh : story.partIds;
+      const next = ids[ids.indexOf(lastId) + 1];
       if (!next) {
-        this.update({ state: 'idle', message: 'End of the story.' });
+        this.update({ state: 'idle', message: 'End of the story.', ended: true });
         await this.save(true);
         return;
       }
@@ -266,13 +305,25 @@ export class Player {
     const t = this.now();
     if (!force && t - this.lastSave < this.saveIntervalMs) return;
     this.lastSave = t;
-    await this.source.savePosition(position);
+    await this.source.savePosition(position, this.snapshot.ended === true);
   }
 
   private update(changes: Partial<PlayerSnapshot>): void {
     this.snapshot = { ...this.snapshot, ...changes };
     for (const l of this.listeners) l(this.snapshot);
   }
+}
+
+/** Whether two analysed parts would be read the same: same part, same text, same lines. */
+function sameReading(
+  a: { part: Part; analysis: Analysis },
+  b: { part: Part; analysis: Analysis },
+): boolean {
+  return (
+    a.part.id === b.part.id &&
+    a.part.textHash === b.part.textHash &&
+    JSON.stringify(a.analysis.segments) === JSON.stringify(b.analysis.segments)
+  );
 }
 
 function firstPosition(story: Story | undefined): PlayerPosition | undefined {

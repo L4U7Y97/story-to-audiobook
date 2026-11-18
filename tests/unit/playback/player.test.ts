@@ -104,21 +104,25 @@ function setup(parts: Array<ReturnType<typeof makePart>>, kind: EngineKind = 'fa
     updatedAt: '',
   };
   const saved: PlayerPosition[] = [];
+  /** Whether each save was of the end of the story. */
+  const ends: boolean[] = [];
   let clock = 0;
   const { engine: speech, narrator, control: engine } = makeEngine(kind);
   const player = new Player(
     speech,
     {
-      story: async () => story,
+      // A copy, as each read of the database gives: a change the test makes later is not in it.
+      story: async () => ({ ...story }),
       part: async (id) => parts.find((p) => p.part.id === id),
-      savePosition: async (p) => {
+      savePosition: async (p, ended) => {
         saved.push(p);
+        ends.push(ended);
         story.position = p;
       },
     },
     { saveIntervalMs: 2000, now: () => clock },
   );
-  return { story, saved, engine, narrator, player, tick: (ms: number) => (clock += ms) };
+  return { story, saved, ends, engine, narrator, player, tick: (ms: number) => (clock += ms) };
 }
 
 /** Lets the player finish its async steps (loading parts, starting the engine). */
@@ -303,7 +307,175 @@ describe.each(['fake engine', 'native engine'] as const)('Player with the %s', (
     expect(engine.current?.text).toBe('“Go,”');
     expect(engine.current?.voice.rate).toBe(2);
   });
+
+  it('records the end of the story until it plays or moves again', async () => {
+    // The last line has nothing to say, so the last line spoken is the one before it.
+    parts[1] = makePart('p2', [
+      ['Morning came.\n\n', 'n'],
+      ['* * *', 'n'],
+    ]);
+    const { engine, player, ends, saved } = setup(parts, kind);
+    await player.play({ partId: 'p2', segmentIndex: 0 });
+    await flush();
+    engine.finishAll();
+    await flush();
+    expect(texts(engine)).toEqual(['Morning came.']);
+    expect(player.state).toMatchObject({
+      state: 'idle',
+      message: 'End of the story.',
+      ended: true,
+      position: { partId: 'p2', segmentIndex: 0 },
+    });
+    expect([saved.at(-1), ends.at(-1)]).toEqual([{ partId: 'p2', segmentIndex: 0 }, true]);
+
+    // Stopped there (to try a voice, say), it is still the end.
+    await player.stop();
+    expect(ends.at(-1)).toBe(true);
+    await player.jump({ partId: 'p1', segmentIndex: 0 });
+    expect(player.state.ended).toBeUndefined();
+    expect(player.state.message).toBeUndefined();
+    expect(ends.at(-1)).toBe(false);
+
+    await player.play({ partId: 'p2', segmentIndex: 0 });
+    await flush();
+    engine.finishAll();
+    await flush();
+    expect(player.state.ended).toBe(true);
+    await player.play();
+    await flush();
+    expect(player.state).toMatchObject({ state: 'playing', ended: undefined });
+  });
 });
+
+describe.each(['fake engine', 'native engine'] as const)(
+  'Player when parts change, with the %s',
+  (kind) => {
+    let parts: Array<ReturnType<typeof makePart>>;
+    beforeEach(() => {
+      parts = [
+        makePart('p1', [
+          ['It was late. ', 'n'],
+          ['“Go,” ', 'a'],
+        ]),
+        makePart('p2', [['Morning came.', 'n']]),
+        makePart('p3', [['Noon.', 'n']]),
+      ];
+    });
+
+    /** Part `id` with a new text, analysed, as "Replace text…" leaves it once analysed. */
+    function replaced(id: string, pieces: Array<[string, string]>) {
+      const part = makePart(id, pieces);
+      part.part.textHash = `${part.part.textHash}-new`;
+      part.analysis!.textHash = part.part.textHash;
+      return part;
+    }
+
+    /** Plays the rest of the story out. */
+    async function playOut(engine: { finishAll(): void }) {
+      for (let i = 0; i < 4; i++) {
+        engine.finishAll();
+        await flush();
+      }
+    }
+
+    it('reads the new text of the part queued after the one playing', async () => {
+      const { engine, player } = setup(parts, kind);
+      await player.play();
+      await flush();
+      engine.advance();
+      parts[1] = replaced('p2', [['Evening fell.', 'n']]);
+      await player.partsChanged();
+      await flush();
+      await playOut(engine);
+      // The line being read starts again, then the new text.
+      expect(texts(engine)).toEqual(['It was late.', '“Go,”', '“Go,”', 'Evening fell.', 'Noon.']);
+    });
+
+    it('reads the part queued after the one playing as it was analysed again', async () => {
+      const { engine, player } = setup(parts, kind);
+      await player.play();
+      await flush();
+      // The same words, Anne's now.
+      parts[1] = makePart('p2', [['Morning came.', 'a']]);
+      await player.partsChanged();
+      await flush();
+      engine.advance();
+      engine.advance();
+      expect(engine.current?.text).toBe('Morning came.');
+      expect(engine.current?.voice.pitch).toBe(1.2);
+    });
+
+    it('drops the part queued after the one playing once it is deleted', async () => {
+      const { engine, player, story } = setup(parts, kind);
+      await player.play();
+      await flush();
+      story.partIds = ['p1', 'p3'];
+      parts.splice(1, 1);
+      await player.partsChanged();
+      await flush();
+      await playOut(engine);
+      expect(texts(engine)).toEqual(['It was late.', 'It was late.', '“Go,”', 'Noon.']);
+    });
+
+    it('reads the part moved after the one playing instead of the one queued', async () => {
+      const { engine, player, story } = setup(parts, kind);
+      await player.play();
+      await flush();
+      story.partIds = ['p1', 'p3', 'p2'];
+      await player.partsChanged();
+      await flush();
+      await playOut(engine);
+      expect(texts(engine)).toEqual([
+        'It was late.',
+        'It was late.',
+        '“Go,”',
+        'Noon.',
+        'Morning came.',
+      ]);
+    });
+
+    it('drops a paused queue holding an out-of-date part, waiting idle on the same line', async () => {
+      const { player, saved } = setup(parts, kind);
+      await player.play();
+      await flush();
+      await player.pause();
+      parts[1] = replaced('p2', [['Evening fell.', 'n']]);
+      await player.partsChanged();
+      expect(player.state).toMatchObject({
+        state: 'idle',
+        position: { partId: 'p1', segmentIndex: 0 },
+      });
+      expect(saved.at(-1)).toEqual({ partId: 'p1', segmentIndex: 0 });
+    });
+
+    it('keeps its queue when the part queued after the one playing reads the same', async () => {
+      const { engine, player, story } = setup(parts, kind);
+      await player.play();
+      await flush();
+      // A part after the queue changes; one is added at the end.
+      parts[2] = replaced('p3', [['Dusk.', 'n']]);
+      parts.push(makePart('p4', [['Night.', 'n']]));
+      story.partIds = [...story.partIds, 'p4'];
+      await player.partsChanged();
+      await flush();
+      expect(texts(engine)).toEqual(['It was late.']);
+      expect(player.state.state).toBe('playing');
+
+      await playOut(engine);
+      expect(texts(engine)).toEqual(['It was late.', '“Go,”', 'Morning came.', 'Dusk.', 'Night.']);
+    });
+
+    it('goes on after its queue with the part that comes next by then', async () => {
+      const { engine, player, story } = setup(parts, kind);
+      await player.play({ partId: 'p2', segmentIndex: 0 });
+      await flush();
+      engine.advance(); // into p3, the last part of the queue
+      story.partIds = ['p2', 'p3', 'p1'];
+      await playOut(engine);
+      expect(texts(engine)).toEqual(['Morning came.', 'Noon.', 'It was late.', '“Go,”']);
+    });
+  },
+);
 
 describe('Player with the native engine', () => {
   let parts: Array<ReturnType<typeof makePart>>;

@@ -2,6 +2,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { FakeSpeechEngine } from '@/playback/fakeEngine';
 import { batchUtteranceId } from '@/playback/utterances';
+import { addPart } from '@/storage/parts';
 import { getSetting } from '@/storage/settings';
 import { getStory, updateStory } from '@/storage/stories';
 import { existingPlayer, getEngine, restorePlace, usePlayer } from '@/ui/composables/usePlayer';
@@ -92,6 +93,49 @@ describe('usePlayer', () => {
 
     await player.jump({ partId: stored.partId, segmentIndex: 0 });
     expect('ended' in (await saved())!).toBe(false);
+  });
+
+  it('keeps a place being listened to through a move or a stop, until the story ends', async () => {
+    const stored = await storeStory([
+      ['One. ', 'N', 'narration'],
+      ['Two.', 'N', 'narration'],
+    ]);
+    storyId = stored.storyId;
+    const engine = getEngine() as FakeSpeechEngine;
+    const { player, listening } = usePlayer(storyId);
+    expect(listening.value).toBe(false);
+
+    void player.play({ partId: stored.partId, segmentIndex: 0 });
+    await until(() => engine.current?.text === 'One.', 'the first line');
+    expect(listening.value).toBe(true);
+    await player.pause();
+    // ◀ or ▶ while paused leaves the player idle at the new place; it is still the one listened to.
+    await player.jump({ partId: stored.partId, segmentIndex: 1 });
+    expect(player.state.state).toBe('idle');
+    expect(listening.value).toBe(true);
+    await player.stop();
+    expect(listening.value).toBe(true);
+
+    void player.play();
+    await until(() => engine.current?.text === 'Two.', 'the last line');
+    engine.finishAll();
+    await until(() => !listening.value, 'the end of the story');
+  });
+
+  it('keeps no place being listened to once the player cannot go on', async () => {
+    const stored = await storeStory([['One.', 'N', 'narration']]);
+    storyId = stored.storyId;
+    // The next part is not analysed.
+    await addPart(db, storyId, { title: 'Two', source: { kind: 'paste' }, text: 'Two.' });
+    const engine = getEngine() as FakeSpeechEngine;
+    const { player, listening } = usePlayer(storyId);
+
+    void player.play({ partId: stored.partId, segmentIndex: 0 });
+    await until(() => engine.current?.text === 'One.', 'the line');
+    expect(listening.value).toBe(true);
+    engine.finishAll();
+    await until(() => player.state.state === 'blocked', 'the unanalysed part');
+    expect(listening.value).toBe(false);
   });
 });
 

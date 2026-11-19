@@ -1,7 +1,9 @@
 import 'fake-indexeddb/auto';
 import { readFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import type { Router } from 'vue-router';
 import type { Segment } from '@/format/types';
+import type { PlayerSnapshot } from '@/playback/player';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { addBook, renameBook } from '@/storage/books';
 import { addPart } from '@/storage/parts';
@@ -10,7 +12,9 @@ import ReaderView from '@/ui/views/ReaderView.vue';
 import {
   button,
   db,
+  holdJumps,
   jumped,
+  mountRouted,
   mountView,
   paused,
   played,
@@ -71,6 +75,33 @@ function stretch(story: StoredStory, segments: Segment[], words: string) {
 async function saveAgain(story: StoredStory, redo: (segments: Segment[]) => Segment[]) {
   const analysis = (await getAnalysis(db, story.partId))!;
   await saveAnalysis(db, { ...analysis, segments: redo(analysis.segments) });
+}
+
+/** Adds a part to `story` after the others: the narrator's `lines`, analysed. */
+async function addNarratedPart(story: StoredStory, lines: string[], title = 'Two') {
+  const part = await addPart(db, story.storyId, {
+    title,
+    source: { kind: 'paste' },
+    text: lines.join(''),
+  });
+  let end = 0;
+  await saveAnalysis(db, {
+    partId: part.id,
+    textHash: part.textHash,
+    analyzer: { kind: 'heuristic', version: 2 },
+    createdAt: new Date().toISOString(),
+    segments: lines.map((line): Segment => {
+      end += line.length;
+      return {
+        start: end - line.length,
+        end,
+        speakerId: story.ids.N!,
+        mode: 'narration',
+        source: 'heuristic',
+      };
+    }),
+  });
+  return part;
 }
 
 // A frame narrator; Nelly's tale in the middle.
@@ -829,32 +860,29 @@ describe('playback around a fix', () => {
   });
 });
 
+/** Spies on scrolls to lines: which line, and how. */
+function watchScrolls() {
+  const scrolled: Array<[number, ScrollBehavior | undefined]> = [];
+  const spy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (
+    this: Element,
+    options?: boolean | ScrollIntoViewOptions,
+  ) {
+    const index = (this as HTMLElement).dataset.index;
+    const behavior = typeof options === 'object' ? options.behavior : undefined;
+    if (index !== undefined) scrolled.push([Number(index), behavior]);
+  });
+  return { scrolled, restore: () => spy.mockRestore() };
+}
+
+/** Puts the stubbed player on line `segmentIndex` of part `partId`, playing. */
+function playingAt(partId: string, segmentIndex: number) {
+  playerSnapshot.value = { state: 'playing', speed: 1, position: { partId, segmentIndex } };
+}
+
 describe('opening on a part being read', () => {
-  /** Spies on scrolls to lines: which line, and how. */
-  function watchScrolls() {
-    const scrolled: Array<[number, ScrollBehavior | undefined]> = [];
-    const spy = vi.spyOn(Element.prototype, 'scrollIntoView').mockImplementation(function (
-      this: Element,
-      options?: boolean | ScrollIntoViewOptions,
-    ) {
-      const index = (this as HTMLElement).dataset.index;
-      const behavior = typeof options === 'object' ? options.behavior : undefined;
-      if (index !== undefined) scrolled.push([Number(index), behavior]);
-    });
-    return { scrolled, restore: () => spy.mockRestore() };
-  }
-
-  const playingAt = (story: StoredStory, segmentIndex: number) => {
-    playerSnapshot.value = {
-      state: 'playing',
-      speed: 1,
-      position: { partId: story.partId, segmentIndex },
-    };
-  };
-
   it('goes at once to the line being read, then follows the next ones smoothly', async () => {
     const story = await storeStory(frame);
-    playingAt(story, 4);
+    playingAt(story.partId, 4);
     const scrolls = watchScrolls();
     try {
       // As the story page's Continue opens it: the part is playing already.
@@ -863,7 +891,7 @@ describe('opening on a part being read', () => {
       expect(scrolls.scrolled).toEqual([[4, 'auto']]);
       expect(host.querySelector('.segment.current')?.textContent).toBe('“Hush,”');
 
-      playingAt(story, 5);
+      playingAt(story.partId, 5);
       await until(() => scrolls.scrolled.length === 2, 'the next line');
       expect(scrolls.scrolled[1]).toEqual([5, 'smooth']);
     } finally {
@@ -873,7 +901,7 @@ describe('opening on a part being read', () => {
 
   it('moves to the next lines at once when the reader asks for less motion', async () => {
     const story = await storeStory(frame);
-    playingAt(story, 4);
+    playingAt(story.partId, 4);
     const media = vi
       .spyOn(window, 'matchMedia')
       .mockReturnValue({ matches: true } as unknown as MediaQueryList);
@@ -881,7 +909,7 @@ describe('opening on a part being read', () => {
     try {
       await mountView(ReaderView, { id: story.storyId });
       await until(() => scrolls.scrolled.length, 'the page to open on the line');
-      playingAt(story, 5);
+      playingAt(story.partId, 5);
       await until(() => scrolls.scrolled.length === 2, 'the next line');
       expect(scrolls.scrolled).toEqual([
         [4, 'auto'],
@@ -895,7 +923,7 @@ describe('opening on a part being read', () => {
 
   it('opens on a line linked from the cast, not on the line being read', async () => {
     const story = await storeStory(frame);
-    playingAt(story, 1);
+    playingAt(story.partId, 1);
     const scrolls = watchScrolls();
     try {
       await mountView(ReaderView, { id: story.storyId, partId: story.partId, line: 4 });
@@ -914,7 +942,7 @@ describe('opening on a part being read', () => {
       // As Continue opens it: the player takes up its place a moment after the page shows.
       const host = await mountView(ReaderView, { id: story.storyId });
       await until(() => lines(host).length === frame.length, 'the lines');
-      playingAt(story, 6);
+      playingAt(story.partId, 6);
       await until(() => scrolls.scrolled.length, 'the scroll');
       expect(scrolls.scrolled).toEqual([[6, 'auto']]);
     } finally {
@@ -940,35 +968,13 @@ describe('opening on a part being read', () => {
 
   it('goes at once to the line being read in each part playback moves into', async () => {
     const story = await storeStory(frame);
-    const next = await addPart(db, story.storyId, {
-      title: 'Two',
-      source: { kind: 'paste' },
-      text: 'Years later. It rained.',
-    });
-    const narration = (start: number, end: number): Segment => ({
-      start,
-      end,
-      speakerId: story.ids.N!,
-      mode: 'narration',
-      source: 'user',
-    });
-    await saveAnalysis(db, {
-      partId: next.id,
-      textHash: next.textHash,
-      analyzer: { kind: 'heuristic', version: 2 },
-      createdAt: new Date().toISOString(),
-      segments: [narration(0, 13), narration(13, 23)],
-    });
-    playingAt(story, 6);
+    const next = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(story.partId, 6);
     const scrolls = watchScrolls();
     try {
       const host = await mountView(ReaderView, { id: story.storyId });
       await until(() => scrolls.scrolled.length, 'the page to open on the line');
-      playerSnapshot.value = {
-        state: 'playing',
-        speed: 1,
-        position: { partId: next.id, segmentIndex: 1 },
-      };
+      playingAt(next.id, 1);
       await until(() => lines(host).length === 2, 'the next part');
       await until(() => scrolls.scrolled.length === 2, 'the line in the next part');
       expect(scrolls.scrolled).toEqual([
@@ -1005,6 +1011,948 @@ describe('opening on a part being read', () => {
       await new Promise((resolve) => setTimeout(resolve, 50));
       expect(scrolls.scrolled).toEqual([[4, 'auto']]);
     } finally {
+      scrolls.restore();
+    }
+  });
+});
+
+describe('reading along', () => {
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 50));
+  const backButton = (host: HTMLElement) => button(host, /Back to the playing line/);
+  const indexes = (scrolls: ReturnType<typeof watchScrolls>) =>
+    scrolls.scrolled.map(([index]) => index);
+
+  /**
+   * Lays the lines out as a browser would (happy-dom has no layout): each on the screen, or above
+   * or below it as `where` says. Then scrolls, so the page measures them again.
+   */
+  function layOut(host: HTMLElement, where: (index: number) => 'above' | 'on' | 'below') {
+    for (const line of lines(host)) {
+      const index = Number(line.dataset.index);
+      const top = { above: -5000, on: 100 + 30 * index, below: 5000 }[where(index)];
+      vi.spyOn(line, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, top, 300, 30));
+    }
+    window.dispatchEvent(new Event('scroll'));
+  }
+
+  /** The reader on `story`'s part, playing line 1, scrolled to it. */
+  async function reading(story: StoredStory) {
+    playingAt(story.partId, 1);
+    const scrolls = watchScrolls();
+    const host = await mountView(ReaderView, { id: story.storyId, partId: story.partId });
+    await until(() => scrolls.scrolled.length, 'the page to open on the line');
+    return { host, scrolls };
+  }
+
+  /**
+   * Spies on lines taking the focus: the line's tabindex then (happy-dom lets any element take
+   * it; a browser only one with a tabindex), and how.
+   */
+  function watchFocus() {
+    const focus = HTMLElement.prototype.focus;
+    const focused: Array<[string | null, FocusOptions | undefined]> = [];
+    const spy = vi.spyOn(HTMLElement.prototype, 'focus').mockImplementation(function (
+      this: HTMLElement,
+      options?: FocusOptions,
+    ) {
+      if (this.classList.contains('segment'))
+        focused.push([this.getAttribute('tabindex'), options]);
+      focus.call(this, options);
+    });
+    return { focused, restore: () => spy.mockRestore() };
+  }
+
+  it.each(['wheel', 'touchmove'])(
+    'keeps the line being read in view until the reader scrolls away (%s)',
+    async (scrolling) => {
+      const story = await storeStory(frame);
+      const { scrolls } = await reading(story);
+      try {
+        playingAt(story.partId, 2);
+        await until(() => indexes(scrolls).includes(2), 'the page to follow');
+
+        window.dispatchEvent(new Event(scrolling));
+        playingAt(story.partId, 3);
+        await settle();
+        expect(indexes(scrolls)).toEqual([1, 2]);
+      } finally {
+        scrolls.restore();
+      }
+    },
+  );
+
+  it('offers a way back to the line being read once it is off the screen', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    const focus = watchFocus();
+    try {
+      window.dispatchEvent(new WheelEvent('wheel'));
+      playingAt(story.partId, 3);
+      layOut(host, () => 'on');
+      await settle();
+      expect(backButton(host)).toBeUndefined();
+
+      layOut(host, (index) => (index >= 3 ? 'below' : 'on'));
+      const back = await until(() => backButton(host), 'the way back');
+      expect(back.textContent).toContain('↓');
+      back.focus();
+      back.click();
+      await until(() => indexes(scrolls).includes(3), 'the line being read');
+      expect(scrolls.scrolled.at(-1)).toEqual([3, 'smooth']);
+      await until(() => !backButton(host), 'the way back gone');
+      // The line takes the focus the button had, which went with it, without cutting the scroll
+      // short; it alone can take it.
+      await until(() => focus.focused.length, 'the line to take the focus');
+      expect(focus.focused).toEqual([['-1', { preventScroll: true }]]);
+      expect(document.activeElement).toBe(lines(host)[3]);
+      expect(host.querySelectorAll('.segment[tabindex]')).toHaveLength(1);
+
+      // The page follows again.
+      playingAt(story.partId, 4);
+      await until(() => indexes(scrolls).includes(4), 'the next line');
+    } finally {
+      focus.restore();
+      scrolls.restore();
+    }
+  });
+
+  /** Stops the clock the reader reads (performance.now); `wait` moves it on. */
+  function stopClock() {
+    let now = 100_000;
+    const spy = vi.spyOn(performance, 'now').mockImplementation(() => now);
+    return { wait: (ms: number) => void (now += ms), restore: () => spy.mockRestore() };
+  }
+
+  it('takes no second tap of a double tap on the way back for a tap on a line', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    const clock = stopClock();
+    try {
+      window.dispatchEvent(new WheelEvent('wheel'));
+      playingAt(story.partId, 3);
+      layOut(host, (index) => (index >= 3 ? 'below' : 'on'));
+      (await until(() => backButton(host), 'the way back')).click();
+      // The second tap of a double tap comes up to 300 ms later, on the line the button uncovered.
+      clock.wait(300);
+      lines(host)[5]!.click();
+      clock.wait(199);
+      lines(host)[5]!.click();
+      await settle();
+      expect(played).not.toHaveBeenCalled();
+
+      // Half a second on, a tap plays from the line.
+      clock.wait(1);
+      lines(host)[5]!.click();
+      await until(() => played.mock.calls.length, 'playback from the line');
+      expect(played).toHaveBeenCalledExactlyOnceWith({ partId: story.partId, segmentIndex: 5 });
+    } finally {
+      clock.restore();
+      scrolls.restore();
+    }
+  });
+
+  it('takes no second tap of a double tap on the way back to another part', async () => {
+    const story = await storeStory(frame);
+    const second = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(second.id, 1);
+    const clock = stopClock();
+    try {
+      const host = await mountRouted(ReaderView, {
+        name: 'reader',
+        params: { id: story.storyId, partId: story.partId },
+      });
+      (await until(() => backButton(host), 'the way back')).click();
+      await until(() => lines(host).length === 2, 'the playing part');
+      clock.wait(300);
+      lines(host)[0]!.click();
+      await settle();
+      expect(played).not.toHaveBeenCalled();
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it.each<[string, () => PointerEventInit, () => Element]>([
+    ['the middle button', () => ({ button: 1 }), () => document.body],
+    ['the page’s scrollbar', () => ({ clientX: 365 }), () => document.documentElement],
+  ])('stops reading along at a press with %s, which scrolls the page', async (_, init, on) => {
+    const story = await storeStory(frame);
+    const { scrolls } = await reading(story);
+    const width = vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(360);
+    try {
+      on().dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, ...init() }));
+      playingAt(story.partId, 2);
+      await settle();
+      expect(indexes(scrolls)).toEqual([1]);
+    } finally {
+      width.mockRestore();
+      scrolls.restore();
+    }
+  });
+
+  it.each<[string, (host: HTMLElement) => Element, PointerEventInit]>([
+    // Beside the text, where the page shows nothing.
+    ['on the page itself', () => document.documentElement, { button: 0, clientX: 300 }],
+    // To copy it, say.
+    ['with the right button on a line', (host) => lines(host)[4]!, { button: 2 }],
+    // Which opens it in another tab.
+    [
+      'with the middle button on a link',
+      (host) => [...host.querySelectorAll('a')].find((a) => a.textContent === 'Cast')!,
+      { button: 1 },
+    ],
+  ])('reads along on through a press %s', async (_, on, init) => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    const width = vi.spyOn(document.documentElement, 'clientWidth', 'get').mockReturnValue(360);
+    try {
+      on(host).dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, ...init }));
+      playingAt(story.partId, 2);
+      await until(() => indexes(scrolls).includes(2), 'the page to follow');
+    } finally {
+      width.mockRestore();
+      scrolls.restore();
+    }
+  });
+
+  it('points up to the line being read once the reader has scrolled past it', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'End' }));
+      layOut(host, () => 'on');
+      await settle();
+      expect(backButton(host)).toBeUndefined();
+
+      layOut(host, (index) => (index <= 1 ? 'above' : 'on'));
+      const back = await until(() => backButton(host), 'the way back');
+      expect(back.textContent).toContain('↑');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('measures the line against the header above it and the player below it', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      window.dispatchEvent(new WheelEvent('wheel'));
+      const height = window.innerHeight;
+      vi.spyOn(host.querySelector('.reader-head')!, 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(0, 0, 300, 60),
+      );
+      vi.spyOn(host.querySelector('.player-bar')!, 'getBoundingClientRect').mockReturnValue(
+        new DOMRect(0, height - 68, 300, 68),
+      );
+      const line = vi.spyOn(lines(host)[1]!, 'getBoundingClientRect');
+      /** The way back once line 1 is `top` from the top of the screen and `event` measured it. */
+      const wayBackAt = async (top: number, event = 'scroll') => {
+        line.mockReturnValue(new DOMRect(0, top, 300, 30));
+        window.dispatchEvent(new Event(event));
+        await settle();
+        return backButton(host);
+      };
+
+      // Under the header, and the way back just above the player.
+      const back = await wayBackAt(20);
+      expect(back?.textContent).toContain('↑');
+      expect(back?.style.bottom).toBe('80px');
+      // Under the player.
+      expect((await wayBackAt(height - 40))?.textContent).toContain('↓');
+      // Partly in sight, under the header's edge or the player's.
+      expect(await wayBackAt(40)).toBeUndefined();
+      expect(await wayBackAt(height - 80)).toBeUndefined();
+      // A turned phone measures again.
+      expect((await wayBackAt(20, 'resize'))?.textContent).toContain('↑');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it.each<[string, Partial<PlayerSnapshot>]>([
+    ['the story ends', { state: 'idle', ended: true }],
+    ['the player cannot go on', { state: 'blocked', message: '“Two” has not been analysed yet.' }],
+  ])('keeps the way back to a place moved while paused, until %s', async (_, end) => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    const at = (segmentIndex: number) => ({ partId: story.partId, segmentIndex });
+    try {
+      window.dispatchEvent(new WheelEvent('wheel'));
+      playerSnapshot.value = { state: 'paused', speed: 1, position: at(5) };
+      layOut(host, (index) => (index >= 3 ? 'below' : 'on'));
+      await until(() => backButton(host), 'the way back');
+
+      // ◀ while paused: the player waits, idle, on the line before, which ▶ plays.
+      playerSnapshot.value = { state: 'idle', speed: 1, position: at(4) };
+      await settle();
+      expect(backButton(host)?.textContent).toContain('↓');
+
+      // Nothing is left to go back to.
+      playerSnapshot.value = { state: 'idle', speed: 1, position: at(7), ...end };
+      await until(() => !backButton(host), 'the way back gone');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('follows again from a line tapped to play', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown' }));
+      playingAt(story.partId, 2);
+      await settle();
+      expect(indexes(scrolls)).toEqual([1]);
+
+      lines(host)[5]!.click();
+      await until(() => played.mock.calls.length, 'playback from the line');
+      expect(played).toHaveBeenCalledWith({ partId: story.partId, segmentIndex: 5 });
+      playingAt(story.partId, 6);
+      await until(() => indexes(scrolls).includes(6), 'the page to follow');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('is not stopped by keys a control takes, or keys that do not scroll', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      const select = host.querySelector<HTMLSelectElement>('.part-picker select')!;
+      select.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      // Space presses the button.
+      const pause = host.querySelector<HTMLElement>('.player-bar [aria-label="Pause"]')!;
+      pause.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+      window.dispatchEvent(new KeyboardEvent('keydown', { key: 'f' }));
+      playingAt(story.partId, 2);
+      await until(() => indexes(scrolls).includes(2), 'the page to follow');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  /** Whether `key` pressed on what `on` finds (the page itself if nothing) stops reading along. */
+  async function stopsAt(key: string, on?: (host: HTMLElement) => HTMLElement) {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      const target = on?.(host) ?? document.body;
+      target.focus();
+      target.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+      playingAt(story.partId, 2);
+      await settle();
+      return indexes(scrolls).length === 1;
+    } finally {
+      scrolls.restore();
+    }
+  }
+
+  it.each([' ', 'ArrowDown', 'ArrowUp', 'PageDown', 'PageUp', 'Home', 'End'])(
+    'stops reading along at %j, which scrolls the page',
+    async (key) => {
+      expect(await stopsAt(key)).toBe(true);
+    },
+  );
+
+  it.each(['ArrowDown', 'PageDown', 'End'])(
+    'stops reading along at %j on a button, which leaves it to the page',
+    async (key) => {
+      const nextLine = (host: HTMLElement) =>
+        host.querySelector<HTMLElement>('.player-bar [aria-label="Next line"]')!;
+      expect(await stopsAt(key, nextLine)).toBe(true);
+    },
+  );
+
+  it('stops reading along at Space on a link, which leaves it to the page', async () => {
+    const cast = (host: HTMLElement) =>
+      [...host.querySelectorAll<HTMLElement>('a')].find((a) => a.textContent === 'Cast')!;
+    expect(await stopsAt(' ', cast)).toBe(true);
+  });
+
+  it('reads along again after Done when keys only scrolled the speaker picker', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      button(host, 'Fix speakers')!.click();
+      await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+      const sheet = await tap(host, 1);
+      sheet.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
+      button(sheet, 'Cancel')!.click();
+      await until(() => !host.querySelector('.sheet'), 'the picker to close');
+      button(host, 'Done')!.click();
+      await until(() => playerSnapshot.value.state === 'playing', 'playback to carry on');
+      playingAt(story.partId, 2);
+      await until(() => indexes(scrolls).includes(2), 'the page to follow');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it.each<[string, () => Event]>([
+    ['wheel', () => new WheelEvent('wheel', { bubbles: true })],
+    ['touchmove', () => new Event('touchmove', { bubbles: true })],
+    ['middle-button press', () => new PointerEvent('pointerdown', { bubbles: true, button: 1 })],
+  ])(
+    'reads along again after Done when a %s only scrolled the speaker picker',
+    async (_, gesture) => {
+      const story = await storeStory(frame);
+      playingAt(story.partId, 1);
+      const scrolls = watchScrolls();
+      try {
+        let router: Router | undefined;
+        // As Continue opens it: the part shown is the one playing, not one the route names.
+        const host = await mountRouted(
+          ReaderView,
+          { name: 'reader', params: { id: story.storyId } },
+          (r) => (router = r),
+        );
+        await until(() => scrolls.scrolled.length, 'the page to open on the line');
+        button(host, 'Fix speakers')!.click();
+        await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+        const sheet = await tap(host, 1);
+        sheet.dispatchEvent(gesture());
+        button(sheet, 'Cancel')!.click();
+        await until(() => !host.querySelector('.sheet'), 'the picker to close');
+        button(host, 'Done')!.click();
+        await until(() => playerSnapshot.value.state === 'playing', 'playback to carry on');
+        playingAt(story.partId, 4);
+        await until(() => indexes(scrolls).includes(4), 'the page to follow');
+        expect(router!.currentRoute.value.params.partId).toBeUndefined();
+      } finally {
+        scrolls.restore();
+      }
+    },
+  );
+
+  it('lets go of the page once it is closed', async () => {
+    const story = await storeStory(frame);
+    playingAt(story.partId, 1);
+    let router: Router | undefined;
+    const host = await mountRouted(
+      ReaderView,
+      { name: 'reader', params: { id: story.storyId } },
+      (r) => (router = r),
+    );
+    await until(() => lines(host).length === frame.length, 'the lines');
+    await router!.push({ name: 'story', params: { id: story.storyId } });
+    await until(() => !lines(host).length, 'the reader to close');
+    window.dispatchEvent(new WheelEvent('wheel'));
+    window.dispatchEvent(new Event('touchmove'));
+    window.dispatchEvent(new PointerEvent('pointerdown', { button: 1 }));
+    window.dispatchEvent(new KeyboardEvent('keydown', { key: 'End' }));
+    await settle();
+    expect(router!.currentRoute.value.name).toBe('story');
+  });
+
+  it('goes on into the next part with the player while reading along', async () => {
+    const story = await storeStory(frame);
+    const next = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(story.partId, 6);
+    const scrolls = watchScrolls();
+    try {
+      let router: Router | undefined;
+      const host = await mountRouted(
+        ReaderView,
+        { name: 'reader', params: { id: story.storyId, partId: story.partId } },
+        (r) => (router = r),
+      );
+      await until(() => scrolls.scrolled.length, 'the page to open on the line');
+      playingAt(next.id, 0);
+      await until(() => router!.currentRoute.value.params.partId === next.id, 'the next part');
+      await until(() => lines(host).length === 2, 'its lines');
+      await until(() => indexes(scrolls).at(-1) === 0, 'its line being read');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('stays on a part opened while another plays, offering the way to it', async () => {
+    const story = await storeStory(frame);
+    const second = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    const third = await addNarratedPart(story, ['The end.'], 'Three');
+    // Left where it was: nothing is being read.
+    playerSnapshot.value = {
+      state: 'idle',
+      speed: 1,
+      position: { partId: story.partId, segmentIndex: 6 },
+    };
+    let router: Router | undefined;
+    const host = await mountRouted(
+      ReaderView,
+      { name: 'reader', params: { id: story.storyId, partId: third.id } },
+      (r) => (router = r),
+    );
+    await until(() => lines(host).length === 1, 'the part');
+    await settle();
+    expect(backButton(host)).toBeUndefined();
+
+    playerSnapshot.value = { ...playerSnapshot.value, state: 'paused' };
+    const back = await until(() => backButton(host), 'the way back');
+    expect(back.textContent).toContain('↑');
+    // The player moves on into the second part: the page stays on the third.
+    playingAt(second.id, 0);
+    await settle();
+    expect(router!.currentRoute.value.params.partId).toBe(third.id);
+    expect(lines(host)).toHaveLength(1);
+
+    backButton(host)!.click();
+    await until(() => router!.currentRoute.value.params.partId === second.id, 'the playing part');
+    await until(() => lines(host).length === 2, 'its lines');
+    await until(() => !backButton(host), 'the way back gone');
+  });
+
+  it('offers the way back at once on a part opened while another is paused', async () => {
+    const story = await storeStory(frame);
+    // Not analysed yet: it has no lines to show.
+    const second = await addPart(db, story.storyId, {
+      title: 'Two',
+      source: { kind: 'paste' },
+      text: 'Years later.',
+    });
+    playerSnapshot.value = {
+      state: 'paused',
+      speed: 1,
+      position: { partId: story.partId, segmentIndex: 6 },
+    };
+    const host = await mountRouted(ReaderView, {
+      name: 'reader',
+      params: { id: story.storyId, partId: second.id },
+    });
+    const back = await until(() => backButton(host), 'the way back');
+    expect(back.textContent).toContain('↑');
+
+    // ◀ while paused: the player waits, idle, on the line before; the way back stays.
+    playerSnapshot.value = {
+      state: 'idle',
+      speed: 1,
+      position: { partId: story.partId, segmentIndex: 5 },
+    };
+    await settle();
+    expect(backButton(host)?.textContent).toContain('↑');
+  });
+
+  it('follows again once the reader goes to another part', async () => {
+    const story = await storeStory(frame);
+    await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(story.partId, 1);
+    const scrolls = watchScrolls();
+    try {
+      const host = await mountRouted(ReaderView, {
+        name: 'reader',
+        params: { id: story.storyId, partId: story.partId },
+      });
+      await until(() => scrolls.scrolled.length, 'the page to open on the line');
+      window.dispatchEvent(new WheelEvent('wheel'));
+
+      host.querySelector<HTMLElement>('[aria-label="Next part"]')!.click();
+      await until(() => lines(host).length === 2, 'the next part');
+      // The player waits at its first line, which the page goes to.
+      await until(() => indexes(scrolls).length === 2, 'the next part’s line');
+      expect(scrolls.scrolled.at(-1)).toEqual([0, 'auto']);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  /** The ways the player holds its place in the second part, each then gone to one way. */
+  const holds: Array<[string, string, Array<'playing' | 'paused' | 'idle'>]> = [
+    ['playing there', 'Next part', ['playing']],
+    ['paused there', 'the part picker', ['paused']],
+    ['moved while paused there', 'Next part', ['paused', 'idle']],
+  ];
+  it.each(holds)(
+    'keeps the place of the part being read, %s, when %s goes to it',
+    async (_, how, states) => {
+      const story = await storeStory(frame);
+      const next = await addNarratedPart(story, ['Years later. ', 'It rained. ', 'The end.']);
+      playingAt(story.partId, 6);
+      const scrolls = watchScrolls();
+      try {
+        let router: Router | undefined;
+        const host = await mountRouted(
+          ReaderView,
+          { name: 'reader', params: { id: story.storyId } },
+          (r) => (router = r),
+        );
+        await until(() => scrolls.scrolled.length, 'the page to open on the line');
+        // The reader reads on in the first part while the player goes on into the second.
+        window.dispatchEvent(new WheelEvent('wheel'));
+        await until(
+          () => router!.currentRoute.value.params.partId === story.partId,
+          'the part kept in the route',
+        );
+        for (const state of states) {
+          playerSnapshot.value = {
+            state,
+            speed: 1,
+            position: { partId: next.id, segmentIndex: state === 'idle' ? 1 : 2 },
+          };
+          await settle();
+        }
+        const place = playerSnapshot.value.position!;
+        await until(() => backButton(host), 'the way back');
+
+        if (how === 'Next part') {
+          host.querySelector<HTMLElement>('[aria-label="Next part"]')!.click();
+        } else {
+          const select = host.querySelector<HTMLSelectElement>('.part-picker select')!;
+          select.value = next.id;
+          select.dispatchEvent(new Event('change'));
+        }
+        await until(() => lines(host).length === 3, 'the part being read');
+        await until(() => indexes(scrolls).at(-1) === place.segmentIndex, 'its line');
+        expect(scrolls.scrolled.at(-1)).toEqual([place.segmentIndex, 'auto']);
+        expect(jumped).not.toHaveBeenCalled();
+        expect(playerSnapshot.value.position).toEqual(place);
+      } finally {
+        scrolls.restore();
+      }
+    },
+  );
+
+  it('starts a part at its first line when nothing is being read', async () => {
+    const story = await storeStory(frame);
+    const next = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    // Left there earlier: nothing is being read.
+    playerSnapshot.value = {
+      state: 'idle',
+      speed: 1,
+      position: { partId: next.id, segmentIndex: 1 },
+    };
+    const host = await mountRouted(ReaderView, {
+      name: 'reader',
+      params: { id: story.storyId, partId: story.partId },
+    });
+    await until(() => lines(host).length === frame.length, 'the lines');
+    host.querySelector<HTMLElement>('[aria-label="Next part"]')!.click();
+    await until(() => jumped.mock.calls.length, 'the place to move');
+    expect(jumped).toHaveBeenCalledExactlyOnceWith({ partId: next.id, segmentIndex: 0 });
+  });
+
+  it('offers no way back to the first line of a part gone to while paused', async () => {
+    const story = await storeStory(frame);
+    await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playerSnapshot.value = {
+      state: 'paused',
+      speed: 1,
+      position: { partId: story.partId, segmentIndex: 1 },
+    };
+    const host = await mountRouted(ReaderView, {
+      name: 'reader',
+      params: { id: story.storyId, partId: story.partId },
+    });
+    await until(() => lines(host).length === frame.length, 'the lines');
+    host.querySelector<HTMLElement>('[aria-label="Next part"]')!.click();
+    await until(() => lines(host).length === 2, 'the next part');
+    // The player waits at the part's first line, and the reader reads on past it.
+    expect(playerSnapshot.value.state).toBe('idle');
+    window.dispatchEvent(new WheelEvent('wheel'));
+    layOut(host, (index) => (index === 0 ? 'above' : 'on'));
+    await settle();
+    expect(backButton(host)).toBeUndefined();
+  });
+
+  it('offers no way back on a part opened while another is paused, once fixing', async () => {
+    const story = await storeStory(frame);
+    await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    const third = await addNarratedPart(story, ['The end.'], 'Three');
+    playerSnapshot.value = {
+      state: 'paused',
+      speed: 1,
+      position: { partId: story.partId, segmentIndex: 6 },
+    };
+    const host = await mountRouted(ReaderView, {
+      name: 'reader',
+      params: { id: story.storyId, partId: third.id },
+    });
+    await until(() => backButton(host), 'the way back');
+    // Already paused: Fix speakers leaves the player as it is.
+    button(host, 'Fix speakers')!.click();
+    await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+    await settle();
+    expect(backButton(host)).toBeUndefined();
+  });
+
+  it('offers no way back while fixing speakers', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      window.dispatchEvent(new WheelEvent('wheel'));
+      button(host, 'Fix speakers')!.click();
+      await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+      layOut(host, (index) => (index <= 1 ? 'above' : 'on'));
+      await settle();
+      expect(backButton(host)).toBeUndefined();
+
+      button(host, 'Done')!.click();
+      await until(() => backButton(host), 'the way back once done');
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('reads a line linked from the cast without being pulled to the line being read', async () => {
+    const story = await storeStory(frame);
+    playingAt(story.partId, 1);
+    const scrolls = watchScrolls();
+    try {
+      const host = await mountView(ReaderView, {
+        id: story.storyId,
+        partId: story.partId,
+        line: 4,
+      });
+      await until(() => scrolls.scrolled.length, 'the linked line');
+      playingAt(story.partId, 2);
+      await settle();
+      expect(indexes(scrolls)).toEqual([4]);
+
+      layOut(host, (index) => (index < 3 ? 'above' : 'on'));
+      const back = await until(() => backButton(host), 'the way back');
+      expect(back.textContent).toContain('↑');
+
+      // Back there, the page follows the lines read after it smoothly.
+      back.click();
+      await until(() => indexes(scrolls).length === 2, 'the line being read');
+      expect(scrolls.scrolled.at(-1)).toEqual([2, 'smooth']);
+      playingAt(story.partId, 3);
+      await until(() => indexes(scrolls).length === 3, 'the next line');
+      expect(scrolls.scrolled.at(-1)).toEqual([3, 'smooth']);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('keeps the way back to a place being listened to when the reader is opened again', async () => {
+    const story = await storeStory(frame);
+    const next = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(story.partId, 5);
+    const scrolls = watchScrolls();
+    try {
+      let router: Router | undefined;
+      const host = await mountRouted(
+        ReaderView,
+        { name: 'reader', params: { id: story.storyId, partId: next.id } },
+        (r) => (router = r),
+      );
+      await until(() => backButton(host), 'the way back');
+      // On the cast page a voice preview stops the story, where it was.
+      await router!.push({ name: 'cast', params: { id: story.storyId } });
+      await until(() => !lines(host).length, 'the reader to close');
+      playerSnapshot.value = { ...playerSnapshot.value, state: 'idle' };
+      router!.back();
+      await until(() => lines(host).length === 2, 'the reader again');
+
+      const back = await until(() => backButton(host), 'the way back again');
+      expect(back.textContent).toContain('↑');
+      // The part being listened to keeps its place.
+      host.querySelector<HTMLElement>('[aria-label="Previous part"]')!.click();
+      await until(() => lines(host).length === frame.length, 'the part being listened to');
+      await until(() => indexes(scrolls).at(-1) === 5, 'its line');
+      expect(jumped).not.toHaveBeenCalled();
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it.each(['paused', 'playing'] as const)(
+    'goes to the place in a part gone to while fixing speakers once Done (%s)',
+    async (state) => {
+      const story = await storeStory(frame);
+      const next = await addNarratedPart(story, ['A. ', 'B. ', 'C. ', 'D. ', 'E.']);
+      playerSnapshot.value = { state, speed: 1, position: { partId: next.id, segmentIndex: 3 } };
+      const scrolls = watchScrolls();
+      try {
+        const host = await mountRouted(ReaderView, {
+          name: 'reader',
+          params: { id: story.storyId, partId: story.partId },
+        });
+        await until(() => backButton(host), 'the way back');
+        button(host, 'Fix speakers')!.click();
+        await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+        host.querySelector<HTMLElement>('[aria-label="Next part"]')!.click();
+        await until(() => lines(host).length === 5, 'the part being listened to');
+        // While fixing, the page stays at the top of the part.
+        await settle();
+        expect(scrolls.scrolled).toEqual([]);
+
+        button(host, 'Done')!.click();
+        await until(() => scrolls.scrolled.length, 'the place');
+        expect(scrolls.scrolled).toEqual([[3, 'auto']]);
+        expect(jumped).not.toHaveBeenCalled();
+      } finally {
+        scrolls.restore();
+      }
+    },
+  );
+
+  it('carries on after Done once fixing went to the part being listened to', async () => {
+    const story = await storeStory(frame);
+    const second = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(story.partId, 3);
+    // Opened from the second part's row while the first plays.
+    const host = await mountRouted(ReaderView, {
+      name: 'reader',
+      params: { id: story.storyId, partId: second.id },
+    });
+    await until(() => lines(host).length === 2, 'the part');
+    button(host, 'Fix speakers')!.click();
+    await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+    await until(() => playerSnapshot.value.state === 'paused', 'the pause');
+    host.querySelector<HTMLElement>('[aria-label="Previous part"]')!.click();
+    await until(() => lines(host).length === frame.length, 'the part being listened to');
+    button(host, 'Done')!.click();
+    await until(() => resumed.mock.calls.length, 'playback to carry on');
+    expect(jumped).not.toHaveBeenCalled();
+    expect(played).not.toHaveBeenCalled();
+  });
+
+  it('leaves the page where fixing speakers left it once Done', async () => {
+    const story = await storeStory(frame);
+    const { host, scrolls } = await reading(story);
+    try {
+      button(host, 'Fix speakers')!.click();
+      await until(() => host.querySelector('.text.editing'), 'Fix speakers');
+      button(host, 'Done')!.click();
+      await until(() => resumed.mock.calls.length, 'playback to carry on');
+      await settle();
+      expect(scrolls.scrolled).toEqual([[1, 'auto']]);
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('gives the line no focus once Next part overtakes the way back', async () => {
+    const story = await storeStory(frame);
+    const second = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(second.id, 1);
+    const scrolls = watchScrolls();
+    try {
+      const host = await mountRouted(ReaderView, {
+        name: 'reader',
+        params: { id: story.storyId, partId: story.partId },
+      });
+      const back = await until(() => backButton(host), 'the way back');
+      const next = host.querySelector<HTMLElement>('[aria-label="Next part"]')!;
+      back.click();
+      // Before the playing part's lines show, Next part goes there too.
+      next.focus();
+      next.click();
+      await until(() => lines(host).length === 2, 'the playing part');
+      await until(() => indexes(scrolls).at(-1) === 1, 'its line');
+      await settle();
+      expect(document.activeElement).toBe(next);
+      expect(host.querySelector('.segment[tabindex]')).toBeNull();
+    } finally {
+      scrolls.restore();
+    }
+  });
+
+  it('gives no line the focus later once the way back was scrolled away from', async () => {
+    const story = await storeStory(frame);
+    const second = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(second.id, 1);
+    const clock = stopClock();
+    try {
+      let router: Router | undefined;
+      const host = await mountRouted(
+        ReaderView,
+        { name: 'reader', params: { id: story.storyId, partId: story.partId } },
+        (r) => (router = r),
+      );
+      await until(() => lines(host).length === frame.length, 'the lines');
+      (await until(() => backButton(host), 'the way back')).click();
+      // A finger moves before the playing part's lines show.
+      window.dispatchEvent(new Event('touchmove'));
+      await until(() => router!.currentRoute.value.params.partId === second.id, 'the playing part');
+      await until(() => lines(host).length === 2, 'its lines');
+
+      // A while later the reader taps a line there, and the page follows again.
+      clock.wait(1000);
+      lines(host)[0]!.click();
+      await until(() => played.mock.calls.length, 'playback from the line');
+      await settle();
+      expect(host.querySelector('.segment[tabindex]')).toBeNull();
+    } finally {
+      clock.restore();
+    }
+  });
+
+  it.each(['paused', 'playing'] as const)(
+    'offers no way back while the player is still on its way to the part gone to (%s)',
+    async (state) => {
+      const story = await storeStory(frame);
+      const next = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+      playerSnapshot.value = {
+        state,
+        speed: 1,
+        position: { partId: story.partId, segmentIndex: 1 },
+      };
+      // As on Android: the player moves once its engine has stopped, after the page has.
+      const release = holdJumps();
+      const host = await mountRouted(ReaderView, {
+        name: 'reader',
+        params: { id: story.storyId, partId: story.partId },
+      });
+      await until(() => lines(host).length === frame.length, 'the lines');
+      host.querySelector<HTMLElement>('[aria-label="Next part"]')!.click();
+      await until(() => lines(host).length === 2, 'the next part');
+      await settle();
+      expect(backButton(host)).toBeUndefined();
+
+      release();
+      await until(() => playerSnapshot.value.position?.partId === next.id, 'the player there');
+      await settle();
+      expect(backButton(host)).toBeUndefined();
+    },
+  );
+
+  it('keeps its part while the player moves on, and goes to the playing part when asked', async () => {
+    const story = await storeStory(frame);
+    const next = await addNarratedPart(story, ['Years later. ', 'It rained.']);
+    playingAt(story.partId, 6);
+    const scrolls = watchScrolls();
+    const focus = watchFocus();
+    try {
+      let router: Router | undefined;
+      // Opened as Continue opens it: on the part being read, not one the route names.
+      const host = await mountRouted(
+        ReaderView,
+        { name: 'reader', params: { id: story.storyId } },
+        (r) => (router = r),
+      );
+      await until(() => scrolls.scrolled.length, 'the page to open on the line');
+
+      window.dispatchEvent(new WheelEvent('wheel'));
+      await until(
+        () => router!.currentRoute.value.params.partId === story.partId,
+        'the part kept in the route',
+      );
+      playingAt(next.id, 0);
+      await settle();
+      expect(router!.currentRoute.value.params.partId).toBe(story.partId);
+      expect(lines(host)).toHaveLength(frame.length);
+
+      const back = await until(() => backButton(host), 'the way back');
+      expect(back.textContent).toContain('↓');
+      back.focus();
+      back.click();
+      await until(() => router!.currentRoute.value.params.partId === next.id, 'the playing part');
+      await until(() => lines(host).length === 2, 'its lines');
+      await until(() => indexes(scrolls).at(-1) === 0, 'the line being read');
+      // At once, as when the page opens on a part.
+      expect(scrolls.scrolled.at(-1)).toEqual([0, 'auto']);
+      await until(() => focus.focused.length, 'the line to take the focus');
+      expect(focus.focused).toEqual([['-1', { preventScroll: true }]]);
+      expect(document.activeElement).toBe(lines(host)[0]);
+
+      // The focus stays there while the page follows the lines read after it.
+      playingAt(next.id, 1);
+      await until(() => indexes(scrolls).at(-1) === 1, 'the next line');
+      await settle();
+      expect(document.activeElement).toBe(lines(host)[0]);
+      expect(focus.focused).toHaveLength(1);
+    } finally {
+      focus.restore();
       scrolls.restore();
     }
   });

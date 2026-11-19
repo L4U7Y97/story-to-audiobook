@@ -1,18 +1,28 @@
-import { shallowRef, type Ref } from 'vue';
+import { ref, shallowRef, type Ref } from 'vue';
 import { Capacitor } from '@capacitor/core';
 import type { SpeechEngine } from '@/playback/engine';
 import { NativeSpeechEngine } from '@/playback/nativeEngine';
 import { newerEnginePosition } from '@/playback/resume';
 import { WebSpeechEngine } from '@/playback/webEngine';
-import { Player, type PlayerSnapshot } from '@/playback/player';
+import { Player, stillListening, type PlayerSnapshot } from '@/playback/player';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis } from '@/storage/analyses';
 import { getPart } from '@/storage/parts';
 import { getStory, updateStory } from '@/storage/stories';
 import { getSetting } from '@/storage/settings';
 
+/**
+ * A story's player, its latest snapshot, and whether its place is one being listened to
+ * (stillListening), which the reader clears when it moves the place to a part's start.
+ */
+export interface StoryPlayer {
+  player: Player;
+  snapshot: Ref<PlayerSnapshot>;
+  listening: Ref<boolean>;
+}
+
 let engine: SpeechEngine | undefined;
-let current: { storyId: string; player: Player; snapshot: Ref<PlayerSnapshot> } | undefined;
+let current: (StoryPlayer & { storyId: string }) | undefined;
 
 /** The native Android engine in the app, Web Speech in a browser. */
 export function getEngine(): SpeechEngine {
@@ -42,7 +52,7 @@ export async function restorePlace(storyId: string): Promise<void> {
  * The app-wide player for a story. Switching to another story stops the previous one; views of
  * the same story share one player, so playback continues across the reader and the cast view.
  */
-export function usePlayer(storyId: string): { player: Player; snapshot: Ref<PlayerSnapshot> } {
+export function usePlayer(storyId: string): StoryPlayer {
   if (current?.storyId === storyId) return current;
   void current?.player.stop();
 
@@ -64,7 +74,11 @@ export function usePlayer(storyId: string): { player: Player; snapshot: Ref<Play
       updateStory(db, storyId, { position, ended: ended || undefined }),
   });
   const snapshot = shallowRef<PlayerSnapshot>(player.state);
-  player.subscribe((s) => (snapshot.value = s));
+  const listening = ref(false);
+  player.subscribe((s) => {
+    snapshot.value = s;
+    listening.value = stillListening(listening.value, s);
+  });
   // A play right after this (the story page's Continue) waits for the speed: started at 1×, it
   // would start again at once.
   ready = Promise.all([
@@ -73,6 +87,6 @@ export function usePlayer(storyId: string): { player: Player; snapshot: Ref<Play
       .then((speed) => player.setSpeed(speed))
       .catch(() => undefined),
   ]);
-  current = { storyId, player, snapshot };
+  current = { storyId, player, snapshot, listening };
   return current;
 }

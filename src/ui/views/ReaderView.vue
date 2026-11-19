@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, shallowRef, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import type { Character, Mode, Segment } from '@/format/types';
 import { modeForAnyone, reassignSegments, tellerOf, type ReassignScope } from '@/analysis/reassign';
@@ -26,7 +26,7 @@ import SpeakerPicker, { type PickScope } from '../components/SpeakerPicker.vue';
 const props = defineProps<{ id: string; partId?: string; line?: number }>();
 const db = getAppDb();
 const router = useRouter();
-const { player, snapshot } = usePlayer(props.id);
+const { player, snapshot, listening } = usePlayer(props.id);
 
 const { data: story } = useLiveQuery(() => getStory(db, props.id), [() => props.id]);
 const { data: parts } = useLiveQuery(() => listParts(db, props.id), [() => props.id]);
@@ -119,6 +119,60 @@ function scrollToLine(index: number, jump = false) {
     ?.scrollIntoView({ block: 'center', behavior: still ? 'auto' : 'smooth' });
 }
 
+/**
+ * Whether the page keeps the spoken line in view. Scrolling away to read stops that, so the page
+ * is not pulled back at every line; "Back to the playing line" starts it again. A line linked
+ * from the cast is read where it is.
+ */
+const following = ref(props.line === undefined);
+
+/** Stops following playback: the page, and the part it shows, stay where the reader went. */
+function stopFollowing() {
+  if (!following.value) return;
+  following.value = false;
+  // A way back still on its way to another part gives no line the focus.
+  focusOnLanding = false;
+  // A part shown because it plays stays shown when the player moves on to the next one.
+  if (!props.partId && partId.value) {
+    void router.replace({ name: 'reader', params: { id: props.id, partId: partId.value } });
+  }
+}
+
+/** A wheel or a finger scrolls the page, unless it scrolls the speaker picker. */
+function onScrollGesture(event: Event) {
+  if (event.target instanceof Element && event.target.closest('[role="dialog"]')) return;
+  stopFollowing();
+}
+
+/**
+ * A press on the page's scrollbar, or with the middle button (which scrolls what is under it on
+ * Windows), scrolls the page too: not in the speaker picker, which scrolls itself, nor the middle
+ * button on a link, which opens it elsewhere. Find in page, and a screen reader's own scrolling,
+ * are not seen.
+ */
+function onPointerDown(event: PointerEvent) {
+  const target = event.target instanceof Element ? event.target : undefined;
+  if (target?.closest('[role="dialog"]')) return;
+  const page = document.documentElement;
+  const onScrollbar = target === page && event.clientX >= page.clientWidth;
+  const autoscroll = event.button === 1 && !target?.closest('a');
+  if (onScrollbar || autoscroll) stopFollowing();
+}
+
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+/** What keeps every scroll key: a field, and the speaker picker, which scrolls itself. */
+const KEEPS_KEYS = 'input, select, textarea, [role="dialog"]';
+/**
+ * Keys that scroll the page. A button or a summary keeps Space, which presses it, and lets the
+ * other keys scroll; a link lets them all scroll.
+ */
+function onKeyDown(event: KeyboardEvent) {
+  if (!SCROLL_KEYS.has(event.key)) return;
+  const target = event.target instanceof Element ? event.target : undefined;
+  if (target?.closest(event.key === ' ' ? `${KEEPS_KEYS}, button, summary` : KEEPS_KEYS)) return;
+  stopFollowing();
+}
+
 /** The line a link asked for, marked while the route asks for it (changing part drops it). */
 const targetIndex = computed(() =>
   props.line !== undefined && Number.isInteger(props.line) && props.partId === partId.value
@@ -136,18 +190,22 @@ watch(
   { immediate: true },
 );
 
-// Follow playback into the next part.
+// Follow playback into the next part when the page was on the part it left, reading along. A
+// part opened while another one plays stays: "Back to the playing line" goes to the other.
 watch(
   () => snapshot.value.position?.partId,
-  (playingPart) => {
-    if (playingPart && props.partId && playingPart !== props.partId) {
+  (playingPart, left) => {
+    if (!playingPart || !left || playingPart === left) return;
+    if (props.partId === left && following.value) {
       void router.replace({ name: 'reader', params: { id: props.id, partId: playingPart } });
     }
   },
 );
 
+/** Plays from a tapped line, on the screen: the page follows playback again. */
 function playFrom(index: number) {
   if (!partId.value) return;
+  following.value = true;
   // The page is on the part already: the line tapped is scrolled to smoothly.
   landedIn = partId.value;
   void player.play({ partId: partId.value, segmentIndex: index });
@@ -156,25 +214,129 @@ function playFrom(index: number) {
 // "Fix speakers" mode: tapping a line opens the speaker picker instead of playing it.
 const editing = ref(false);
 
-/** The part whose spoken line the page has gone to since its lines showed. */
+/** The part the page has been on with a line being read in it (gone to, or tapped). */
 let landedIn: string | undefined;
-// Keep the spoken line in view from the moment its part's lines show (the reader often opens on
-// a part already playing), the first time at once. Not while fixing speakers: a fix can renumber
-// the lines, and the page must not move away from the line being fixed. A line linked from the
-// cast is where the page opens; it goes to the spoken line when the next one starts. An analysis
-// saved again with other lines does not move the page.
+// While following, keep the spoken line in view from the moment its part's lines show (the reader
+// often opens on a part already playing), the first time at once. Not while fixing speakers: a
+// fix can renumber the lines, and the page must not move away from the line being fixed; Done
+// goes to the line only in a part gone to while fixing. An analysis saved again with other lines
+// does not move the page.
 watch(
-  [currentIndex, () => paragraphs.value.length > 0],
-  async ([index, shown]) => {
-    if (index < 0 || !shown || editing.value) return;
+  [currentIndex, () => paragraphs.value.length > 0, editing],
+  async ([index, shown, fixing], before) => {
+    if (index < 0 || !shown || fixing || !following.value) return;
     const first = landedIn !== partId.value;
+    if (before?.[2] && !first) return;
     landedIn = partId.value;
-    if (first && targetIndex.value >= 0) return;
     await nextTick();
     scrollToLine(index, first);
+    if (focusOnLanding) {
+      focusOnLanding = false;
+      focusLine(index);
+    }
   },
   { immediate: true },
 );
+
+/** The line the way back went to: it has the focus the button had (tabindex -1). */
+const focusedLine = ref(-1);
+/** Set while the way back goes to another part: its line takes the focus once it shows. */
+let focusOnLanding = false;
+function focusLine(index: number) {
+  focusedLine.value = index;
+  void nextTick(() =>
+    textEl.value
+      ?.querySelector<HTMLElement>(`[data-index="${index}"]`)
+      ?.focus({ preventScroll: true }),
+  );
+}
+
+const mainEl = ref<HTMLElement>();
+const headEl = ref<HTMLElement>();
+/**
+ * Where the line being read (or paused on) is when the page does not show it: in another part,
+ * or off the screen while the page does not follow it. Only a place being listened to (the
+ * player's `listening`), which going to another part's start ends at once, before the player has
+ * moved there.
+ */
+const lineAway = ref<'above' | 'below'>();
+/** How far "Back to the playing line" sits from the bottom: just above the player. */
+const awayBottom = ref(0);
+function measure() {
+  const at = snapshot.value.position;
+  if (!at || !listening.value || editing.value || (following.value && at.partId === partId.value)) {
+    lineAway.value = undefined;
+    return;
+  }
+  const bar = mainEl.value?.querySelector('.player-bar')?.getBoundingClientRect();
+  const floor = bar?.height ? bar.top : window.innerHeight;
+  awayBottom.value = window.innerHeight - floor + 12;
+  if (at.partId !== partId.value) {
+    const playing = orderedParts.value.findIndex((p) => p.id === at.partId);
+    lineAway.value = playing < 0 ? undefined : playing < partPosition.value ? 'above' : 'below';
+    return;
+  }
+  const line = textEl.value?.querySelector(`[data-index="${at.segmentIndex}"]`);
+  if (!line) {
+    lineAway.value = undefined;
+    return;
+  }
+  const { top, bottom } = line.getBoundingClientRect();
+  const ceiling = headEl.value?.getBoundingClientRect().bottom ?? 0;
+  lineAway.value = bottom <= ceiling ? 'above' : top >= floor ? 'below' : undefined;
+}
+let measuring = 0;
+function measureSoon() {
+  measuring ||= requestAnimationFrame(() => {
+    measuring = 0;
+    measure();
+  });
+}
+watch(
+  [following, editing, snapshot, partId, () => paragraphs.value.length > 0],
+  () => nextTick(measure),
+  { immediate: true },
+);
+
+onMounted(() => {
+  window.addEventListener('wheel', onScrollGesture, { passive: true });
+  window.addEventListener('touchmove', onScrollGesture, { passive: true });
+  window.addEventListener('pointerdown', onPointerDown, { passive: true });
+  window.addEventListener('keydown', onKeyDown);
+  window.addEventListener('scroll', measureSoon, { passive: true });
+  window.addEventListener('resize', measureSoon, { passive: true });
+});
+onBeforeUnmount(() => {
+  window.removeEventListener('wheel', onScrollGesture);
+  window.removeEventListener('touchmove', onScrollGesture);
+  window.removeEventListener('pointerdown', onPointerDown);
+  window.removeEventListener('keydown', onKeyDown);
+  window.removeEventListener('scroll', measureSoon);
+  window.removeEventListener('resize', measureSoon);
+  cancelAnimationFrame(measuring);
+});
+
+/** When "Back to the playing line" was last tapped (performance.now()). */
+let backTappedAt = -Infinity;
+/** How soon after it a tap is the second of a double tap. */
+const DOUBLE_TAP_MS = 500;
+
+/** Back to the spoken line, in its part: the page follows playback again. */
+function backToLine() {
+  backTappedAt = performance.now();
+  const at = snapshot.value.position;
+  following.value = true;
+  if (!at) return;
+  // Another part's lines show first; the page goes to the line once they do.
+  if (at.partId !== partId.value) {
+    focusOnLanding = true;
+    void router.replace({ name: 'reader', params: { id: props.id, partId: at.partId } });
+  } else {
+    landedIn = partId.value;
+    scrollToLine(at.segmentIndex);
+    focusLine(at.segmentIndex);
+  }
+}
 /**
  * A line as it was tapped. An analysis saved again meanwhile (one finishing in the background)
  * can put another line at its index, so the line is found again by its offsets and speaker.
@@ -329,6 +491,8 @@ function openPicker(index: number, teller: boolean) {
 }
 
 function onSegmentClick(index: number) {
+  // The second tap of a double tap on "Back to the playing line" lands on the line it uncovers.
+  if (performance.now() - backTappedAt < DOUBLE_TAP_MS) return;
   if (range.value) void endRange(index);
   else if (editing.value) openPicker(index, false);
   else playFrom(index);
@@ -430,10 +594,16 @@ const nextPart = computed(() =>
   partPosition.value >= 0 ? orderedParts.value[partPosition.value + 1] : undefined,
 );
 
+/** Shows part `id`. The part being listened to keeps its place; another starts at its first line. */
 function goToPart(id: string) {
-  // The place moves: Done no longer carries on where Fix speakers paused.
-  carryOn = undefined;
-  void player.jump({ partId: id, segmentIndex: 0 });
+  following.value = true;
+  focusOnLanding = false;
+  if (!listening.value || snapshot.value.position?.partId !== id) {
+    // The place moves: Done no longer carries on where Fix speakers paused.
+    carryOn = undefined;
+    listening.value = false;
+    void player.jump({ partId: id, segmentIndex: 0 });
+  }
   void router.replace({ name: 'reader', params: { id: props.id, partId: id } });
   window.scrollTo({ top: 0 });
 }
@@ -444,8 +614,8 @@ function selectPart(event: Event) {
 </script>
 
 <template>
-  <main class="page reader">
-    <header class="reader-head">
+  <main ref="mainEl" class="page reader">
+    <header ref="headEl" class="reader-head">
       <nav class="top">
         <!-- On a phone only the arrow shows; the title is still read out. -->
         <RouterLink :to="backTo" class="back" :title="backTitle"
@@ -558,12 +728,23 @@ function selectPart(event: Event) {
           ]"
           :style="lineTint(s.segment)"
           :title="names.get(s.segment.speakerId)"
+          :tabindex="s.index === focusedLine ? -1 : undefined"
           @click="onSegmentClick(s.index)"
           >{{ s.text }}</span
         >
       </p>
     </article>
 
+    <button
+      v-if="lineAway"
+      type="button"
+      class="back-to-line"
+      :style="{ bottom: `${awayBottom}px` }"
+      @click="backToLine"
+    >
+      <span aria-hidden="true">{{ lineAway === 'above' ? '↑' : '↓' }}</span>
+      Back to the playing line
+    </button>
     <PlayerBar v-if="!editing" :player="player" :snapshot="snapshot" />
     <SpeakerPicker
       v-if="picking && pickedSegment && part && story"
@@ -712,6 +893,21 @@ function selectPart(event: Event) {
 .segment.current {
   background: color-mix(in srgb, var(--tint, var(--accent)) 22%, transparent);
   outline: 2px solid color-mix(in srgb, var(--tint, var(--accent)) 40%, transparent);
+}
+
+/* Over the text, just above the player, while the reader reads away from the playing line. */
+.back-to-line {
+  position: fixed;
+  left: 50%;
+  z-index: 11;
+  transform: translateX(-50%);
+  gap: 6px;
+  border-radius: 999px;
+  border-color: var(--accent);
+  color: var(--accent);
+  font-weight: 600;
+  white-space: nowrap;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 25%);
 }
 
 @media (prefers-reduced-motion: reduce) {

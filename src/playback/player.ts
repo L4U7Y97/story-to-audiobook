@@ -32,6 +32,17 @@ export interface PlayerSnapshot {
   ended?: boolean;
 }
 
+/**
+ * Whether the player's place is still one being listened to once it is at `snapshot`, given
+ * whether it was (`listening`). Playing or pausing makes it one; a move or a stop while not
+ * playing leaves the player idle there and keeps it one (a move while paused is ◀ or ⏮); the end
+ * of the story, or a part the player cannot play, makes it none.
+ */
+export function stillListening(listening: boolean, snapshot: PlayerSnapshot): boolean {
+  if (snapshot.state === 'playing' || snapshot.state === 'paused') return true;
+  return listening && !snapshot.ended && snapshot.state !== 'blocked';
+}
+
 export interface PlayerOptions {
   /** Minimum time between position saves while playing. */
   saveIntervalMs?: number;

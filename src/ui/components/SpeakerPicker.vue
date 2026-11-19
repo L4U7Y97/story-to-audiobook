@@ -261,6 +261,8 @@ function create(name = newName.value.trim()) {
   max-width: 720px;
   max-height: 85vh;
   overflow-y: auto;
+  /* Scrolling to the end of the sheet does not go on to scroll the page behind it. */
+  overscroll-behavior: contain;
   border-radius: var(--radius) var(--radius) 0 0;
   padding: var(--gutter);
   padding-bottom: calc(var(--gutter) + env(safe-area-inset-bottom));

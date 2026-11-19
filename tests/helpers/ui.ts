@@ -2,11 +2,28 @@
 // `import 'fake-indexeddb/auto'` and mocks '@/ui/composables/usePlayer' with playerStub(): the
 // real player needs a speech engine.
 import { vi } from 'vitest';
-import { createApp, defineComponent, h, shallowRef, type App, type Component } from 'vue';
-import { createMemoryHistory, createRouter, type Router } from 'vue-router';
+import {
+  createApp,
+  defineComponent,
+  h,
+  ref,
+  shallowRef,
+  watch,
+  type App,
+  type Component,
+} from 'vue';
+import {
+  createMemoryHistory,
+  createRouter,
+  RouterView,
+  type RouteLocationNamedRaw,
+  type RouteLocationRaw,
+  type RouteRecordRaw,
+  type Router,
+} from 'vue-router';
 import type { Character, Mode, Segment, Traits, VoiceSettings } from '@/format/types';
 import type { DeviceVoice } from '@/playback/engine';
-import type { PlayerPosition, PlayerSnapshot } from '@/playback/player';
+import { stillListening, type PlayerPosition, type PlayerSnapshot } from '@/playback/player';
 import { getAppDb } from '@/storage/db';
 import { getAnalysis, saveAnalysis } from '@/storage/analyses';
 import { addPart } from '@/storage/parts';
@@ -58,6 +75,11 @@ const IDLE: PlayerSnapshot = { state: 'idle', speed: 1 };
  * does, without speaking. unmountView puts the player back to idle and forgets the calls.
  */
 export const playerSnapshot = shallowRef<PlayerSnapshot>(IDLE);
+/** Whether the stubbed player's place is one being listened to, kept as usePlayer keeps it. */
+export const playerListening = ref(false);
+watch(playerSnapshot, (s) => (playerListening.value = stillListening(playerListening.value, s)), {
+  flush: 'sync',
+});
 const moveTo = (changes: Partial<PlayerSnapshot>) => {
   playerSnapshot.value = { ...playerSnapshot.value, ...changes };
 };
@@ -70,13 +92,31 @@ export const paused = vi.fn<() => Promise<void>>(async () => {
 export const resumed = vi.fn<() => Promise<void>>(async () => {
   if (playerSnapshot.value.state === 'paused') moveTo({ state: 'playing' });
 });
-export const jumped = vi.fn<(to: PlayerPosition) => Promise<void>>(async (to) =>
+
+/** Settles when the stubbed player may move where it jumps; unset, it moves at once. */
+let jumpsHeld: Promise<void> | undefined;
+
+/**
+ * Makes the stubbed player slow to move where it jumps, as the real one is while its engine stops
+ * (a bridge call on Android): its snapshot stays put until the function this returns is called.
+ * unmountView ends the hold.
+ */
+export function holdJumps(): () => void {
+  let release: () => void = () => undefined;
+  jumpsHeld = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  return () => release();
+}
+
+export const jumped = vi.fn<(to: PlayerPosition) => Promise<void>>(async (to) => {
+  if (jumpsHeld) await jumpsHeld;
   moveTo({
     position: to,
     state: playerSnapshot.value.state === 'playing' ? 'playing' : 'idle',
     ended: undefined,
-  }),
-);
+  });
+});
 export const stopped = vi.fn<() => Promise<void>>(async () => moveTo({ state: 'idle' }));
 /** The stubbed player's partsChanged, which a view calls once it changed parts. */
 export const partsChanged = vi.fn<() => Promise<void>>(async () => undefined);
@@ -118,7 +158,7 @@ export function playerStub() {
     if (voicesHeld) await voicesHeld;
     return [...stubVoices];
   };
-  const made = { player, snapshot: playerSnapshot };
+  const made = { player, snapshot: playerSnapshot, listening: playerListening };
   return {
     getEngine: () => ({ listVoices }),
     existingPlayer: (storyId: string) => (playerStory === storyId ? made : undefined),
@@ -128,6 +168,7 @@ export function playerStub() {
       if (playerStory !== undefined && playerStory !== storyId) {
         void stopped();
         playerSnapshot.value = IDLE;
+        playerListening.value = false;
       }
       playerStory = storyId;
       return made;
@@ -193,31 +234,69 @@ export async function storeStory(
 const Blank = defineComponent({ render: () => h('div') });
 let app: App | undefined;
 
+/**
+ * The app's routes (src/ui/router.ts), every page blank but `shown`'s, which gets its route's
+ * props as the app gives them.
+ */
+function appRoutes(shown?: { name: string; view: Component }): RouteRecordRaw[] {
+  const page = (name: string) => (shown?.name === name ? shown.view : Blank);
+  return [
+    { path: '/', component: Blank },
+    { path: '/library', name: 'library', component: page('library') },
+    { path: '/story/:id', name: 'story', component: page('story'), props: true },
+    { path: '/story/:id/book/:bookId', name: 'book', component: page('book'), props: true },
+    {
+      path: '/story/:id/read/:partId?',
+      name: 'reader',
+      component: page('reader'),
+      props: (route) => ({
+        ...route.params,
+        line: typeof route.query.line === 'string' ? Number(route.query.line) : undefined,
+      }),
+    },
+    { path: '/story/:id/cast', name: 'cast', component: page('cast'), props: true },
+  ];
+}
+
+/** Mounts `root` with a router on `routes`, at `to`; returns the element it is mounted in. */
+async function mountWithRouter(
+  root: Component,
+  props: Record<string, unknown> | undefined,
+  routes: RouteRecordRaw[],
+  to: RouteLocationRaw,
+  onRouter?: (router: Router) => void,
+) {
+  const router = createRouter({ history: createMemoryHistory(), routes });
+  onRouter?.(router);
+  await router.push(to);
+  await router.isReady();
+  const host = document.createElement('div');
+  document.body.appendChild(host);
+  app = createApp(root, props).use(router);
+  app.mount(host);
+  return host;
+}
+
 /** Mounts `view` with `props`, with a router; returns the element it is mounted in. */
-export async function mountView(
+export function mountView(
   view: Component,
   props: Record<string, unknown>,
   onRouter?: (router: Router) => void,
 ) {
-  const router = createRouter({
-    history: createMemoryHistory(),
-    routes: [
-      { path: '/', component: Blank },
-      { path: '/library', name: 'library', component: Blank },
-      { path: '/story/:id', name: 'story', component: Blank },
-      { path: '/story/:id/book/:bookId', name: 'book', component: Blank },
-      { path: '/story/:id/read/:partId?', name: 'reader', component: Blank },
-      { path: '/story/:id/cast', name: 'cast', component: Blank },
-    ],
-  });
-  onRouter?.(router);
-  await router.push('/');
-  await router.isReady();
-  const host = document.createElement('div');
-  document.body.appendChild(host);
-  app = createApp(view, props).use(router);
-  app.mount(host);
-  return host;
+  return mountWithRouter(view, props, appRoutes(), '/', onRouter);
+}
+
+/**
+ * Mounts `view` as the app shows it at the route `to` names: under the router, so a new route
+ * (a router.replace, say) gives it new props. Returns the element it is mounted in.
+ */
+export function mountRouted(
+  view: Component,
+  to: RouteLocationNamedRaw & { name: string },
+  onRouter?: (router: Router) => void,
+) {
+  const root: Component = { render: () => h(RouterView) };
+  return mountWithRouter(root, undefined, appRoutes({ name: to.name, view }), to, onRouter);
 }
 
 /**
@@ -234,6 +313,8 @@ export function unmountView() {
   previewed.mockReset();
   previewed.mockImplementation(async () => undefined);
   playerSnapshot.value = IDLE;
+  playerListening.value = false;
+  jumpsHeld = undefined;
   playerStory = undefined;
   for (const spy of [played, paused, resumed, stopped, jumped, partsChanged, placeRestored]) {
     spy.mockClear();

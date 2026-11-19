@@ -2032,3 +2032,154 @@ describe('the back link', () => {
     });
   });
 });
+
+describe('name tags in “Fix speakers”', () => {
+  const tagEls = (host: HTMLElement) => [...host.querySelectorAll<HTMLElement>('.name-tag')];
+  const tags = (host: HTMLElement) => tagEls(host).map((tag) => tag.textContent?.trim());
+
+  it('names who reads where someone other than the teller starts reading', async () => {
+    const { host } = await fixSpeakers(frame, []);
+    expect(tags(host)).toEqual(['Narrator', 'Hindley']);
+    // Each sits just before its line, in its colour; screen readers have the line's title.
+    const hush = lines(host)[4]!;
+    const tag = hush.previousElementSibling as HTMLElement;
+    expect(tag.textContent).toBe('Hindley');
+    expect(tint(tag)).toBe(tint(hush));
+    expect(tag.getAttribute('aria-hidden')).toBe('true');
+    expect(hush.title).toBe('Hindley');
+  });
+
+  it('shows no names while reading along', async () => {
+    const story = await storeStory(frame);
+    const host = await mountView(ReaderView, { id: story.storyId, partId: story.partId });
+    await until(() => lines(host).length === frame.length, 'the lines');
+    expect(host.querySelector('.name-tag')).toBeNull();
+
+    button(host, 'Fix speakers')!.click();
+    await until(() => tagEls(host).length, 'the names');
+    button(host, 'Done')!.click();
+    await until(() => !tagEls(host).length, 'the names gone');
+  });
+
+  it('names a speaker once for lines in a row, and again after narration', async () => {
+    const { host } = await fixSpeakers(
+      [
+        ['“Go,”', 'Anne', 'speech'],
+        [' “now.”', 'Anne', 'speech'],
+        [' she said, and turned to the window. ', 'N', 'narration'],
+        ['“Please.”\n\n', 'Anne', 'speech'],
+        ['I told them how it began.\n\n', 'Nelly', 'narration'],
+        ['Then I said, as the fire went out, ', 'N', 'narration'],
+        ['“Go on.”', 'N', 'speech'],
+      ],
+      [],
+    );
+    expect(tags(host)).toEqual(['Anne', 'Anne', 'Nelly', 'Narrator']);
+  });
+
+  it('names someone once as they narrate and then speak', async () => {
+    const { host } = await fixSpeakers(
+      [
+        [
+          'The fire was low in the grate, and the house was quiet that night.\n\n',
+          'N',
+          'narration',
+        ],
+        ['The master came home late. ', 'Nelly', 'narration'],
+        ['“Hush,”', 'Nelly', 'speech'],
+        [' I told him.', 'Nelly', 'narration'],
+      ],
+      [],
+    );
+    expect(tags(host)).toEqual(['Nelly']);
+  });
+
+  it('names again whoever goes on reading in the next paragraph', async () => {
+    const { host } = await fixSpeakers(
+      [
+        ['She read the letter out to us by the fire.\n\n', 'N', 'narration'],
+        ['“My dear sister, the winter has been long.\n\n', 'Anne', 'written'],
+        ['We have had no news of you since the spring.”\n\n', 'Anne', 'written'],
+        ['She folded it away.', 'N', 'narration'],
+      ],
+      [],
+    );
+    expect(tags(host)).toEqual(['Anne', 'Anne']);
+  });
+
+  it('puts the space a line starts with before its name, so the name stays with its words', async () => {
+    const { host } = await fixSpeakers(
+      [
+        [
+          'The fire was low in the grate, and the house was quiet that night.\n\n',
+          'N',
+          'narration',
+        ],
+        ['“Hush,”', 'Hindley', 'speech'],
+        [' I told him, and he went quiet.', 'Nelly', 'narration'],
+      ],
+      [],
+    );
+    const told = lines(host)[2]!;
+    const tag = told.previousElementSibling as HTMLElement;
+    expect(tag.textContent).toBe('Nelly');
+    expect(tag.previousSibling?.textContent).toBe(' ');
+    expect(told.textContent).toBe('I told him, and he went quiet.');
+
+    // Read along, the line is as it was.
+    button(host, 'Done')!.click();
+    await until(() => !tagEls(host).length, 'the names gone');
+    expect(lines(host)[2]!.textContent).toBe(' I told him, and he went quiet.');
+  });
+
+  it('names no one where a character tells the part, but the narrator', async () => {
+    const { host } = await fixSpeakers(
+      [
+        ['I was the housekeeper then, and I saw the whole of it. ', 'Nelly', 'narration'],
+        ['“Hush,”', 'Hindley', 'speech'],
+        [' he said, and I went quiet.\n\n', 'Nelly', 'narration'],
+        ['We sat up late that winter.\n\n', 'Nelly', 'narration'],
+        ['So she said, and stopped.', 'N', 'narration'],
+      ],
+      [],
+    );
+    // “Told by” says who tells it; her lines keep her colour.
+    expect(host.querySelector('.told-by')?.textContent).toContain('Nelly');
+    expect(tags(host)).toEqual(['Hindley', 'Narrator']);
+    expect(tint(lines(host)[3])).toBe(tint(lines(host)[0]));
+    expect(tint(lines(host)[3])).not.toBe('');
+    // The narrator's name is in the narrator's colour, though their narration has none.
+    const narrator = lines(host)[4]!.previousElementSibling;
+    expect(narrator?.textContent).toBe('Narrator');
+    expect(tint(narrator)).toBe('var(--narrator)');
+  });
+
+  it('opens the picker on its line when tapped', async () => {
+    const { host } = await fixSpeakers(frame, []);
+    tagEls(host)[1]!.click();
+    const sheet = await until(() => host.querySelector('.sheet'), 'the picker');
+    expect(sheet.textContent).toContain('“Hush,”');
+  });
+
+  it('ends a passage at its line when tapped', async () => {
+    const { story, host } = await fixSpeakers(frame, [{ name: 'Nelly' }]);
+    const sheet = await tap(host, 3);
+    sheet.querySelector<HTMLInputElement>('input[value="range"]')!.click();
+    button(sheet, 'Nelly')!.click();
+    await until(() => host.querySelector('.banner'), 'the banner');
+    // Hindley's line, just after the narration the passage starts with.
+    tagEls(host)[1]!.click();
+    const segments = await savedCorrection(story.partId);
+    expect(stretch(story, segments, 'It was a long time ago')?.speakerId).toBe(story.ids.Nelly);
+    // It ended there: the narration after Hindley's line is still the narrator's.
+    expect(stretch(story, segments, 'said Hindley')?.speakerId).toBe(story.ids.N);
+    expect(host.querySelector('.sheet')).toBeNull();
+  });
+
+  it('shows the new name once a line is given to someone else', async () => {
+    const { host } = await fixSpeakers(frame, [{ name: 'Nelly' }]);
+    button(await tap(host, 4), 'Nelly')!.click();
+    await until(() => tags(host).includes('Nelly'), 'the new name');
+    expect(tags(host)).toEqual(['Narrator', 'Nelly']);
+  });
+});

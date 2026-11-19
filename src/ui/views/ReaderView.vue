@@ -69,11 +69,35 @@ function lineTint(segment: Segment) {
     : { '--tint': speakerTint(colors.value, segment.speakerId) };
 }
 
+/** Who tells the part: whoever narrates the most of it (tellerOf), the narrator if no one. */
+const tellerId = computed(() =>
+  narratorId.value ? tellerOf(analysis.value?.segments ?? [], narratorId.value) : undefined,
+);
+/** The part's teller telling it: the text as it goes, which "Fix speakers" does not name. */
+const told = (segment: Segment | undefined) =>
+  segment?.mode === 'narration' && segment.speakerId === tellerId.value;
+
+/**
+ * A line as the reader shows it. `named`: "Fix speakers" names who reads it, as someone starts
+ * reading there; `lead`: the space it starts with, which then goes before the name, so the name
+ * stays with the words it names.
+ */
+interface ShownLine {
+  index: number;
+  segment: Segment;
+  text: string;
+  named: boolean;
+  lead: string;
+}
+
 interface Paragraph {
   /** Someone other than the narrator who reads narration in this paragraph. */
   teller?: string;
-  segments: Array<{ index: number; segment: Segment; text: string }>;
+  segments: ShownLine[];
 }
+
+/** Whether "Fix speakers" shows the name of who reads `line`, just before it. */
+const nameShown = (line: ShownLine) => editing.value && line.named;
 
 const paragraphs = computed<Paragraph[]>(() => {
   const p = part.value;
@@ -84,7 +108,13 @@ const paragraphs = computed<Paragraph[]>(() => {
   a.segments.forEach((segment, index) => {
     if (starts[index]) out.push({ segments: [] });
     const paragraph = out.at(-1)!;
-    paragraph.segments.push({ index, segment, text: p.text.slice(segment.start, segment.end) });
+    // Named where someone other than the part's teller starts reading, in each paragraph.
+    const before = paragraph.segments.at(-1)?.segment;
+    const named =
+      !told(segment) && (!before || told(before) || before.speakerId !== segment.speakerId);
+    const text = p.text.slice(segment.start, segment.end);
+    const lead = /^\s*/u.exec(text)![0];
+    paragraph.segments.push({ index, segment, text, named, lead });
     if (segment.mode === 'narration' && segment.speakerId !== narratorId.value) {
       paragraph.teller ??= segment.speakerId;
     }
@@ -92,11 +122,11 @@ const paragraphs = computed<Paragraph[]>(() => {
   return out;
 });
 
-/** Who tells the part (tellerOf) and the first line they narrate, for the "Told by" chip. */
+/** Who tells the part and the first line they narrate, for the "Told by" chip. */
 const teller = computed(() => {
   const segments = analysis.value?.segments ?? [];
-  if (!paragraphs.value.length || !narratorId.value) return undefined;
-  const id = tellerOf(segments, narratorId.value);
+  const id = tellerId.value;
+  if (!paragraphs.value.length || !id) return undefined;
   const index = segments.findIndex((s) => s.speakerId === id && s.mode === 'narration');
   return index < 0 ? undefined : { id, index };
 });
@@ -713,25 +743,36 @@ function selectPart(event: Event) {
           paragraph.teller ? { '--teller': speakerTint(colors, paragraph.teller) } : undefined
         "
       >
-        <span
-          v-for="s in paragraph.segments"
-          :key="s.index"
-          :data-index="s.index"
-          :data-mode="s.segment.mode"
-          :class="[
-            'segment',
-            {
-              current: s.index === currentIndex,
-              target: s.index === targetIndex,
-              voiced: s.segment.mode !== 'narration',
-            },
-          ]"
-          :style="lineTint(s.segment)"
-          :title="names.get(s.segment.speakerId)"
-          :tabindex="s.index === focusedLine ? -1 : undefined"
-          @click="onSegmentClick(s.index)"
-          >{{ s.text }}</span
-        >
+        <template v-for="s in paragraph.segments" :key="s.index">
+          <!-- The line's own title says the name to screen readers. -->
+          <template v-if="nameShown(s)"
+            >{{ s.lead
+            }}<span
+              class="name-tag"
+              :style="{ '--tint': speakerTint(colors, s.segment.speakerId) }"
+              aria-hidden="true"
+              @click="onSegmentClick(s.index)"
+              >{{ names.get(s.segment.speakerId) }}</span
+            ></template
+          >
+          <span
+            :data-index="s.index"
+            :data-mode="s.segment.mode"
+            :class="[
+              'segment',
+              {
+                current: s.index === currentIndex,
+                target: s.index === targetIndex,
+                voiced: s.segment.mode !== 'narration',
+              },
+            ]"
+            :style="lineTint(s.segment)"
+            :title="names.get(s.segment.speakerId)"
+            :tabindex="s.index === focusedLine ? -1 : undefined"
+            @click="onSegmentClick(s.index)"
+            >{{ nameShown(s) ? s.text.slice(s.lead.length) : s.text }}</span
+          >
+        </template>
       </p>
     </article>
 
@@ -893,6 +934,21 @@ function selectPart(event: Event) {
 .segment.current {
   background: color-mix(in srgb, var(--tint, var(--accent)) 22%, transparent);
   outline: 2px solid color-mix(in srgb, var(--tint, var(--accent)) 40%, transparent);
+}
+
+/* "Fix speakers": who reads, where someone other than the part's teller starts reading. */
+.name-tag {
+  margin-inline-end: 0.3em;
+  padding: 0.05em 0.4em;
+  border: 1px solid color-mix(in srgb, var(--tint) 55%, transparent);
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--tint) 16%, var(--bg));
+  color: var(--fg);
+  font-size: 0.72em;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
 }
 
 /* Over the text, just above the player, while the reader reads away from the playing line. */
